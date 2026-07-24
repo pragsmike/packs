@@ -1,7 +1,7 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-tools
-generated (UTC): 2026-07-24T13:35:27Z
-HEAD: 294d2d37fbc7f81cdbc9a423143889f5b8584261
+generated (UTC): 2026-07-24T17:04:01Z
+HEAD: a0ecf85d697f01e7fd87e78cc9409476435d3ef9
 git status --porcelain:
 working tree clean
 elides: .agents/skills, .agents/prompts/archive
@@ -37,7 +37,12 @@ the design channel.
    args, relevant env, artifact refs by hash, engine version, duration,
    exit code, output digests. Engine-agnostic; engine-specific fields
    are a smell.
-   Status: in implementation (P3).
+   Status: in implementation (P3); the in-process case is now handled
+   too (P5) — `gate.v2` has no subprocess (HAPI HL7v2 runs in-process),
+   yet still returns an invocation-shaped record (`{:engine {:name
+   :version} :input-sha256 ...}`, engine version read from the running
+   jar's own packaged pom.properties on the classpath, not hand-copied)
+   rather than omitting provenance because there's no PID to record.
 
 3. **Canonicalizers (registry + laws)** — named, versioned
    transformations with three laws: idempotence (property-tested),
@@ -67,7 +72,18 @@ the design channel.
    `{severity, code, locator, message, engine, native-ref}`; verdicts
    are pass / rejected / indeterminate, with indeterminate first-class
    (license-blocked checks, engine limitations).
-   Status: tentative; lands with gates.
+   Status: validated (P5). Evidence: two real, independent formats
+   (`gate.fhir`, `gate.v2`) both consume the exact same
+   `ehr-testing-tools.gate.finding` schema and `worst-of` composition
+   law, with no per-format dialect -- `gate.fhir` additionally records
+   a `:policy` key beyond the envelope's own fields (which format
+   classified as which severity), proving the shape is extensible
+   without forking it. FHIR's own `IssueSeverity` ValueSet turned out
+   to have a fourth value (`:fatal`, alongside `:error`/`:warning`/
+   `:information`) that neither format's initial test corpus surfaced
+   -- found live, during P5's own contract-pairing exercise, and folded
+   into the shared schema rather than left as a gate.fhir-only special
+   case.
 
 7. **Corpus recipes** — one EDN value naming a corpus intent (generator
    config, population, seed policy, mutation plan), referenced by hash
@@ -76,7 +92,12 @@ the design channel.
 
 8. **Corpus catalog** — an index of corpus items (id, layer, format,
    lineage ref, tags); meaning lives in data, not filenames.
-   Status: tentative.
+   Status: in implementation (P5) — `ehr-testing-tools.corpus.intake`:
+   `{:id :path :format :layer :source :received}` catalog entries plus
+   one batch intake record per source, EDN, Malli-schema'd. `:id` is
+   format-aware content hash (the same function `corpus.mutate` itself
+   uses for FHIR JSON, so an intaken file's catalog id and its eventual
+   mutant's lineage `:parent` are one hash space, no adapter).
 
 9. **Format-support matrix** — adding a format means filling a column
    of obligations (round-trip-verified parser, locator grammar,
@@ -157,6 +178,37 @@ the design channel.
     pattern #13 itself stays deferred to P5, when the Gate/Report
     equations move from stub to authored and criteria 2–3 can be
     re-evaluated against real, not planned-status, equations.
+    P5 evidence (Gate/Intake/Report move from stub/planned to
+    authored/built): criterion (1) fired positively this time, unlike
+    P4 — authoring the Gate equation forced a design decision *before*
+    `gate.fhir`/`gate.v2` were implemented: one equation for both
+    formats (`datum`, format-dispatched at call time) or two separate
+    equations. The equation's own `:laws` record the choice and the
+    reason (the notation's `×` only expresses product/AND between
+    inputs, no operator exists for OR between format alternatives) --
+    the equation authoring genuinely clarified the design question, not
+    merely anticipated it. Criterion (3) again did **not** hold, and
+    surfaced a second, distinct kind of gap from P4's: the generated
+    diagram renders `Gate`'s `datum` input as a disconnected source
+    node with no wire from `Normalize`'s, `Mutate`'s, or `Intake`'s
+    real outputs, and renders `Intake` as a dead-end with no downstream
+    consumer at all -- both true to the equations as written, and both
+    an honest reflection of a second notation gap: nothing in `×`/`+`
+    can express "downstream of any one of several alternative upstream
+    stages" (Gate genuinely accepts output from Normalize, Mutate, *or*
+    Intake, not their product). Left uncorrected in the equation
+    deliberately, per the same discipline P4 established: flag the gap
+    for the design channel rather than force a misleading product-typed
+    fix into the equation. Criterion (2) holds cleanly across all six
+    now-authored equations (Generate, Normalize, Mutate, Intake, Gate,
+    Report): every catalytic resource resolves to one of the four
+    targets, including `hapi-hl7v2-dep` (target 2, `deps.edn`) and
+    `profile-artifact` (target 1, `artifacts.lock.edn`, present but
+    unpinned this session -- the target still resolves even though no
+    entry exists yet). Net: two real sessions, two real diagram-caught
+    gaps, criterion 1 now fired at least once — promotion is a design-
+    channel call from here, not updated by this session per the
+    original instruction.
 
 14. **Operators carry contracts** — mutation (introducing a defect) and
     metamorphic perturbation (transforming input while preserving an
@@ -213,21 +265,29 @@ where it stands, and the prompt that drove it (once archived).
 | P2 | `docs/components.md` + license F-rows, `docs/experiments/EXP-A4.md` protocol, positioning open-decision closed | Done (2026-07-23) | `.agents/prompts/archive/2026-07-23-p0-p2-landing.md` |
 | P3 | Artifact registry, result/invocation/locator/canonical schemas, `corpus.generate`, `ehr` CLI, EXP-A4 executed (manifest v1) | Done (2026-07-24) | `.agents/prompts/archive/2026-07-24-p3-generation-exp-a4.md` |
 | P4 | JVM as a lockfile artifact; manifest v1.1; resource-equation notation trial (`docs/notation.md`, `docs/pipeline.edn`/`.md`); EXP-B2 executed (parse→serialize round-trip fidelity); mutation capability (`corpus.operators`, FHIR locator grammar, `ehr-testing-tools.lineage`, `corpus.mutate`, `ehr corpus mutate`) — FHIR only | Done (2026-07-24) | `.agents/prompts/archive/2026-07-24-p4-mutation-exp-b2.md` |
-| P5 | EXP-SBOM mechanical half (dependency/license SBOM against the MIT target, per ADR-0007), EXP-C5 (FHIR validator offline behavior), EXP-D3 (CDC wrapper offline build) | Not started | — |
+| P5 | Corpus intake (foreign corpora, catalog + intake records); EXP-C5 executed (FHIR validator offline behavior, 15 categories classified); `gate.fhir` (two-step, EXP-C5-derived verdict mapping, IG machinery built/unpinned) and `gate.v2` (base-structural, HAPI) landed; `gate.report` (aggregation, diffing) + `ehr gate fhir\|v2` CLI; contract pairing (5 defect operators vs `gate.fhir`, `^:integration` suite against the real validator) + the Gate kind law tested against the real engine; pipeline as-built (Intake/Gate/Report `:built`); pattern nursery #13 trial evidence (second real diagram-caught gap); README/positioning/gate-calibration updated | Done (2026-07-24) | `.agents/prompts/archive/2026-07-24-p5-gates.md` |
+| P6 (sketched, not started) | v2 mutation over foreign/fixture corpora (unblocked by P5's intake capability plus EXP-B2's `PipeParser` round-trip finding — the representation question is already answered); IG pinning once the motivating team's target profile is known (`gate.fhir`'s `-ig` machinery is built, waiting on an artifact); EXP-D3 (CDC/NIST full-gate candidacy) unchanged, still contingent on EXP-SBOM's residual NIST-license inquiry. EXP-A3 (Synthea `PatientExporter` v2 spike) demoted to backlog: P5's intake capability means foreign v2 corpora already exist as a v2-mutation input, so EXP-A3's generation-side motivation narrows to serving only the guide's own Experiment 3, not also unblocking this repo's v2 mutation | Not started | — |
 | Publication | Editorial coherence pass (README, docs/ reading order, pipeline/notation/components/experiments/positioning rewrites); minimal CI (`.github/workflows/ci.yml`, hermeticity verified); ADR-0008 (go-public gate walked and met; repo published) | Done (2026-07-24) | `.agents/prompts/2026-07-24-publication-wave.md` |
 | Enforcement wave | Pre-push hook running the test suite; offline GitHub Actions CI; coverage threshold gating; artifact-cache priming for CI; pipeline lint (tier 1: every catalytic resource in `docs/pipeline.edn` resolves to one of the four catalytic targets, `docs/notation.md`); `make pipeline` freshness check (fails if `docs/pipeline.md` is stale relative to `docs/pipeline.edn`) | Not scheduled — planned per ADR-0006's staged-enforcement decision | — |
-| First release | Gates capability landed (`gate.fhir`/`gate.v2`); the resource-equation notation trial (pattern nursery #13) concluded one way or the other; coverage-threshold gating landed. Version tag, published coordinates (Clojars vs. Maven Central, `docs/positioning.md` open decision), guide-repo cross-references begin. | Not started — the milestone after publication (ADR-0008) | — |
+| First release | Gates capability landed (`gate.fhir`/`gate.v2`, done P5); the resource-equation notation trial (pattern nursery #13) concluded one way or the other (two sessions of evidence gathered, promotion still a design-channel call); coverage-threshold gating landed. Version tag, published coordinates (Clojars vs. Maven Central, `docs/positioning.md` open decision), guide-repo cross-references begin. | Not started — the milestone after publication (ADR-0008) | — |
 
-**v2 mutation deferral.** P4 scoped mutation to FHIR only. HL7 v2
-mutation is deferred, not abandoned — its dependency is EXP-A3 (the
-Synthea `PatientExporter` plugin spike that gives this repo any v2
-generation to mutate in the first place; see `docs/experiments.md`).
-EXP-B2 already characterized v2 ER7 round-trip fidelity via HAPI
+**v2 mutation deferral, updated (P5).** P4 scoped mutation to FHIR
+only; EXP-B2 already characterized v2 ER7 round-trip fidelity via HAPI
 HL7v2's `PipeParser` (faithful for realistically-populated messages;
 confirmed trailing-delimiter canonicalization on a message crafted to
 trigger it), so the representation question v2 mutation will need is
-already answered when EXP-A3 lands — only the operator catalog and
-locator grammar for v2 remain to be built.
+already answered — only the operator catalog and locator grammar for
+v2 remain to be built (P6). What changed in P5: v2 mutation's
+dependency used to be framed as EXP-A3 alone (the Synthea
+`PatientExporter` plugin spike, the only route to v2 *generation* this
+repo had). `corpus.intake` (P5) opens a second route — a foreign v2
+corpus, brought by whoever is gating their own pipeline's output,
+already exists as v2-mutation input without waiting on generation.
+EXP-A3 is demoted to backlog accordingly, not abandoned: it still
+matters for the guide's own Experiment 3 (which needs *this repo's*
+generated v2 output specifically, not a foreign corpus), but it is no
+longer this repo's own v2-mutation blocker. `docs/experiments.md`'s
+EXP-A3 row is updated with this rationale.
 
 ========== END FILE ==========
 
@@ -917,7 +977,7 @@ pack-push: pack pack-skills
 [![CI](https://github.com/pragsmike/ehr-testing-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/pragsmike/ehr-testing-tools/actions/workflows/ci.yml)
 
 **Reproducible test data for EHR integrations — generated, broken on purpose, and traceable end to end.**
-> ehr-testing-tools builds the test data layer that EHR integration projects always need and never budget for: reproducible synthetic corpora, controlled defect injection with full lineage, and — coming — conformance gates that catch what the defects break. Offline and deterministic by construction; plain FHIR JSON and EDN out the other end, so you can use the results from Python, SQL, or anything else. Clojure inside, no Clojure skills required.
+> ehr-testing-tools builds the test data layer that EHR integration projects always need and never budget for: reproducible synthetic corpora, controlled defect injection with full lineage, and conformance gates (HL7 v2, FHIR) that catch what the defects break — experimental, base-tier, offline. Offline and deterministic by construction; plain FHIR JSON and EDN out the other end, so you can use the results from Python, SQL, or anything else. Clojure inside, no Clojure skills required.
 
 Testing EHR integrations well needs three things most projects don't
 have off the shelf: realistic clinical test data at volume, deliberately
@@ -931,8 +991,13 @@ the same corpus byte-for-byte from a manifest, proven in
 [EXP-A4](docs/experiments/EXP-A4-results.md) — plus controlled defect
 injection with full lineage: every mutant traces back to its base
 bundle, the operator that broke it, and the constraint it was built to
-violate. Conformance gating against HL7 v2 and FHIR profiles is planned,
-not yet built — see [the plan](.agents/plans/corpus-foundations.md).
+violate. Conformance gates against HL7 v2 and FHIR now exist —
+base-structural (v2, over HAPI) and base-spec (FHIR, over the official
+validator), offline verdict policy, no implementation guide pinned yet
+though the machinery to pin one is built — see
+[`docs/gate-calibration.md`](docs/gate-calibration.md) for exactly
+which defects each tier catches and which it doesn't, and
+[the plan](.agents/plans/corpus-foundations.md) for what's next.
 
 It's for the people who actually test EHR integrations day to day —
 interface analysts, QA engineers, data engineers — not necessarily
@@ -955,14 +1020,17 @@ in, a mutated, gate-ready corpus comes out.
 
 ```mermaid
 flowchart LR
-    Generate --> Normalize --> Mutate --> Gate
+    Generate --> Normalize --> Mutate --> Gate --> Report
+    Intake --> Gate
     style Generate fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
     style Normalize fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
     style Mutate fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
-    style Gate fill:#2d2d2d,stroke:#666,color:#aaa,stroke-width:2px,stroke-dasharray:5 5
+    style Intake fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
+    style Gate fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
+    style Report fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
 ```
 
-*Gate (dashed) is planned, not built.* The full version — resource
+Every stage above is built. The full version — resource
 equations, catalytic inputs, the diagram mechanically derived from them
 — is [`docs/pipeline.md`](docs/pipeline.md); [`docs/notation.md`](docs/notation.md)
 is the notation it's written in.
@@ -976,7 +1044,8 @@ the actual contract with readers, not a formality.
 |---|---|---|
 | **Generate** (`corpus.generate`) | **Usable** | Clean-environment byte-reproducibility proven — [EXP-A4](docs/experiments/EXP-A4-results.md) |
 | **Mutate** (`corpus.mutate`) | **Experimental** | Works; days old; interfaces may still move — [EXP-B2](docs/experiments/EXP-B2-results.md) |
-| **Gate** (`gate.fhir` / `gate.v2`) | **Planned** | Designed, not built — see the [plan](.agents/plans/corpus-foundations.md) |
+| **Intake** (`corpus.intake`) | **Experimental** | Foreign-corpus cataloging; days old — same content-hash lineage as generated corpora |
+| **Gate** (`gate.fhir` / `gate.v2`) | **Experimental** | Base-spec (FHIR, official validator) / base-structural (v2, HAPI); offline verdict policy; no implementation guide pinned yet — [EXP-C5](docs/experiments/EXP-C5-results.md), [gate calibration](docs/gate-calibration.md) |
 
 **Status: pre-release.** This repo is public (as of
 [ADR-0008](notes/ADRs.md)) but has not had a first release: no version
@@ -1017,7 +1086,20 @@ make ehr ARGS="corpus mutate --input $PATIENT_FILE \
   --operator-id remove-required-element --locator-path entry[0].resource.gender \
   --output-dir out/demo-mutants"
 
-# Run the test suite (hermetic — see AGENTS.md).
+# Gate a file or directory against HL7 v2 (base-structural, HAPI) or
+# FHIR (base-spec, the official validator -- also fetches its own
+# pinned artifact the first time). Exit code: 0 all pass (including
+# indeterminate-only runs -- the report says so loudly), 1 any
+# rejected, 2 operational error. --report writes the corpus report;
+# --json projects it.
+make ehr ARGS="artifact fetch --name fhir-validator-cli --version 6.9.12"
+make ehr ARGS="gate v2 test/fixtures/v2"
+make ehr ARGS="gate fhir out/demo-mutants --report out/demo-mutants-report.edn"
+
+# Run the test suite (hermetic — see AGENTS.md). A separate suite
+# exercises the real validator/HAPI engines against real mutants
+# end-to-end (tagged ^:integration, excluded from make test by
+# default): `clojure -X:test :excludes '[]'`.
 make test
 ```
 
@@ -1518,7 +1600,15 @@ rather than abstract cultural types, for actionability.
    :source "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.19%2B10/OpenJDK17U-jdk_x64_linux_hotspot_17.0.19_10.tar.gz"
    :acquired "2026-07-24"
    :license-status :verified
-   :license-note "GPLv2 with the Classpath Exception; verified 2026-07-24 -- see docs/components.md (Synthea) and facts register F12. Linux x64, HotSpot, jdk image type -- the platform this repo's orchestrator actually runs on."}]}
+   :license-note "GPLv2 with the Classpath Exception; verified 2026-07-24 -- see docs/components.md (Synthea) and facts register F12. Linux x64, HotSpot, jdk image type -- the platform this repo's orchestrator actually runs on."}
+  {:kind :engine
+   :name "fhir-validator-cli"
+   :version "6.9.12"
+   :sha256 "0e53ab1d1a6f1e35f505255c0b8ce10a35fcf27e6e96b503640f784cd07e5ad6"
+   :source "https://github.com/hapifhir/org.hl7.fhir.core/releases/download/6.9.12/validator_cli.jar"
+   :acquired "2026-07-24"
+   :license-status :verified
+   :license-note "Apache License 2.0; verified 2026-07-23 -- see docs/components.md (Official FHIR validator) and facts register F5. Current stable GitHub release as of 2026-07-24 (published 2026-07-15); runs under the already-locked temurin-jdk 17.0.19+10 :runtime artifact above, resolved through the artifact registry like every other engine, never PATH."}]}
 
 ========== END FILE ==========
 
@@ -1581,7 +1671,19 @@ generate.thread_pool_size = 1
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                       org.clojure/test.check {:mvn/version "1.1.3"}}
-         :exec-fn cognitect.test-runner.api/test}
+         :exec-fn cognitect.test-runner.api/test
+         ;; AGENTS.md's hermetic-test-suite rule: a test that genuinely
+         ;; needs the network or a real external engine is tagged
+         ;; ^:integration and excluded here by default (P5: gate.fhir's
+         ;; contract-pairing tests are the first to need this -- they
+         ;; run the real validator_cli.jar subprocess). :exec-args is a
+         ;; default, not a hard override -- `clojure -X:test :excludes
+         ;; '[]'` on the command line runs the integration tests too.
+         ;; Key is :excludes (plural) -- cognitect.test-runner.api/test's
+         ;; own contract, confirmed by reading its source directly
+         ;; (its sibling cognitect.test-runner/test takes :exclude,
+         ;; singular -- a genuinely different key, not a typo).
+         :exec-args {:excludes [:integration]}}
 
   ;; REPL/CIDER development. Jack in with this alias (e.g. `clojure -M:dev`
   ;; or your editor's jack-in command configured to include :dev). Mirrors
@@ -1613,10 +1715,13 @@ need — each entry names the question that document answers.
    corpus? (Everything below this point assumes you already have that
    working and want to understand what you built.)
 1. **[pipeline.md](pipeline.md)** — what does this repo actually build,
-   stage by stage? (Generate, Normalize, Mutate are built; Gate and
-   Report are planned.)
+   stage by stage? (Every stage — Generate, Normalize, Mutate, Intake,
+   Gate, Report — is built as of P5.)
 2. **[notation.md](notation.md)** — what does the resource-equation
    notation on that page mean, and why does this repo use it?
+   [gate-calibration.md](gate-calibration.md) is the companion page for
+   the Gate stage specifically: which defects each gate tier actually
+   catches, cited to EXP-C5 and the contract-pairing test suite.
 3. **[components.md](components.md)** — what external engines and
    libraries does each stage actually depend on, and what's each one's
    license, steward, and role?
@@ -1633,10 +1738,15 @@ need — each entry names the question that document answers.
    - **EXP-B2** ([protocol](experiments/EXP-B2.md),
      [results](experiments/EXP-B2-results.md)) — executed 2026-07-24 —
      parse→serialize round-trip fidelity; picked the mutation substrate.
-   - **EXP-A3** — not yet run — HL7 v2 generation via a Synthea
-     projector plugin.
-   - **EXP-C5** — not yet run — official FHIR validator offline
-     behavior and verdict-classification policy.
+   - **EXP-A3** — demoted to backlog (2026-07-24, P5) — HL7 v2
+     generation via a Synthea projector plugin; no longer this repo's
+     own v2-mutation blocker (see `corpus.intake`), narrowed to serving
+     the guide's own Experiment 3.
+   - **EXP-C5** ([protocol](experiments/EXP-C5.md),
+     [results](experiments/EXP-C5-results.md)) — executed 2026-07-24 —
+     official FHIR validator offline behavior and verdict-classification
+     policy; see [gate-calibration.md](gate-calibration.md) for what it
+     resolved.
    - **EXP-D3** — not yet run — CDC wrapper offline build.
 5. **[positioning.md](positioning.md)** — how does this repo relate to
    `ehr-testing-guide`, and what was the go-public gate this repo set
@@ -1717,8 +1827,10 @@ document, which cited 2.5.1/2024; 2.6.0 is the current tag as of this
 verification). Used in countless integration engines and hospital
 interfaces.
 
-**Role in pipeline.** In-process parse/serialize engine for
-`corpus.mutate` (v2) and the light `gate.v2` tier.
+**Role in pipeline.** In-process parse/serialize engine for the future
+`corpus.mutate` v2 support (P6, not yet built) and the base-structural
+`gate.v2` tier (built, P5) — `defaultValidation`-context strict
+parsing plus `DefaultValidator`, in-process, no subprocess.
 
 **Deliberately not used for.** Profile conformance beyond the classic
 HL7 Message Profile XML — its conformance module predates and does not
@@ -1761,13 +1873,20 @@ IG publisher); Apache License 2.0 (facts register
 [F5](../notes/facts-register.md)). Distributed as a CLI jar and as the
 library HAPI FHIR wraps.
 
-**Role in pipeline.** The engine behind `gate.fhir`, run as a pinned
-subprocess with IG packages as locked artifacts; verdicts are consumed
-as OperationOutcome data and normalized by `gate.report`. Known
-operational constraints that shape our wrapper: offline/no-terminology
-operation has open upstream bugs (locally packaged ValueSets can still
-fail; see `docs/research/` C1/C5), so verdict policy classifies rather
-than trusts raw pass/fail.
+**Role in pipeline.** The engine behind `gate.fhir` (built, P5),
+version 6.9.12 pinned in `artifacts.lock.edn` (facts register
+[F18](../notes/facts-register.md)), run as a pinned subprocess; IG
+packages resolve as locked `:profile`-kind artifacts when a caller
+supplies them (the `-ig` machinery is built; none is pinned yet).
+Verdicts are consumed as OperationOutcome data and normalized by
+`gate.report`. Known operational constraints that shape our wrapper,
+confirmed directly by EXP-C5 (`docs/experiments/EXP-C5-results.md`),
+not merely anticipated: offline/no-terminology operation has open
+upstream bugs (locally packaged ValueSets can still fail to validate a
+code), so verdict policy classifies rather than trusts raw pass/fail;
+the validator also auto-loads whatever IG a resource's own
+`meta.profile` declares (US Core, for Synthea R4 output) with no `-ig`
+flag needed — see `docs/gate-calibration.md` for the consequence.
 
 **Deliberately not used for.** Terminology validation against licensed
 vocabularies.
@@ -2292,8 +2411,8 @@ decision — an experiment that doesn't gate anything doesn't belong here.
 | EXP-SBOM ([protocol](experiments/EXP-SBOM.md), [results](experiments/EXP-SBOM-results.md)) — **executed 2026-07-23**; deep-research extension 2026-07-24 | Resolve NIST v2-validation / IGAMT / CDC-wrapper licensing and artifact provenance (incl. direct inquiry to NIST if needed); produce a dependency/license SBOM against the Apache-2.0 target (the license target current at execution time; superseded prospectively by MIT, ADR-0007) | The v2 gate architecture: NIST-engine-based "full gate" vs HAPI-light + local rules; also resolves facts-register [F1](../notes/facts-register.md) and guide F3 — inventory complete, both classified `license-unstated` on primary evidence. The 2026-07-24 deep-research pass ([`docs/research/License Status of NIST HL7 v2 Validation Software  Evidence-Based Classification.md`](research/License%20Status%20of%20NIST%20HL7%20v2%20Validation%20Software%20%20Evidence-Based%20Classification.md)) found a live official distribution channel (`hit-nexus.nist.gov`, facts register [F14](../notes/facts-register.md)) enabling a fetch-at-build adoption path, and narrowed the residual NIST inquiry to 4 questions with a named recipient (facts register [F15](../notes/facts-register.md)/[F16](../notes/facts-register.md)) — inquiry draft maintained privately by the author | 1 — first; cheap, and a potential adoption blocker |
 | EXP-A4 ([protocol](experiments/EXP-A4.md), [results](experiments/EXP-A4-results.md)) — **executed 2026-07-24** | Verify Synthea determinism: identical seed + version + config ⇒ identical bytes, including across thread counts; enumerate everything that must be pinned | The reproducibility-manifest schema — resolved: manifest v1 (`corpus.manifest`), clinician-seed pinning, forced locale/timezone, two registered canonicalizers | 2 — cheap |
 | EXP-B2 ([protocol](experiments/EXP-B2.md), [results](experiments/EXP-B2-results.md)) — **executed 2026-07-24** | Measure parse→serialise round-trip fidelity of HAPI HL7v2 (note: PipeParser canonicalises trailing delimiters) and HAPI FHIR parsers | The mutation-layer design: mutate parsed trees vs encoded strings; the intended-diff-only invariant — resolved: mutation operates on FHIR JSON as plain Clojure data (faithful modulo whitespace); HAPI FHIR's round-trip silently drops `resource.id` on every Bundle entry, disqualifying it as a mutation substrate; PipeParser confirmed to canonicalize trailing delimiters, out of scope this session (v2 mutation deferred to post-EXP-A3) | 2 — cheap |
-| EXP-A3 | Spike a Synthea `PatientExporter` plugin projecting to HL7 v2: ADT^A01 with MSH/EVN/PID/PV1, deterministic per seed, validating against a trivial profile | The v2 generation approach — the largest build item; its output eventually feeds the guide's Experiment 3 | 3 |
-| EXP-C5 | Characterise official FHIR validator behaviour offline with pinned IGs and no terminology server (open upstream bug: locally packaged ValueSets still fail); determine the verdict-classification policy (assert on severity/code/expression; royalty-free vocab bundled; SNOMED/CPT checks classified license-blocked-indeterminate) | The FHIR gate wrapper's verdict policy | 4 |
+| EXP-A3 | Spike a Synthea `PatientExporter` plugin projecting to HL7 v2: ADT^A01 with MSH/EVN/PID/PV1, deterministic per seed, validating against a trivial profile | **Demoted to backlog (2026-07-24, P5).** No longer this repo's own v2-mutation blocker: `corpus.intake` (P5) opens a foreign-v2-corpus route to v2-mutation input that doesn't depend on this repo generating v2 itself. EXP-A3 still matters, narrowed to serving only the guide's own Experiment 3, which specifically needs *this repo's* generated v2 output (a foreign corpus can't substitute for that) — see `.agents/plans/corpus-foundations.md`'s v2-mutation-deferral note | backlog |
+| EXP-C5 ([protocol](experiments/EXP-C5.md), [results](experiments/EXP-C5-results.md)) — **executed 2026-07-24** | Characterise official FHIR validator behaviour offline (`-tx n/a`, network-isolated via `unshare -r -n`) on valid Synthea R4 files and all five defect operators' mutants; classify every issue by severity/code/diagnostics, identifying terminology-suppressed checks | The FHIR gate wrapper's verdict policy — resolved: 15 distinct `{severity, code}` categories classified (`docs/experiments/EXP-C5-results.md`), a five-phrase terminology-suppression pattern (versioned data in `gate.fhir`), and a central finding that the validator auto-loads whatever IG a resource's own `meta.profile` declares (US Core, for Synthea R4 output) even with no `-ig` pinned — every "valid" baseline file in the sample corpus carries hundreds of pre-existing profile-driven errors, so file-level verdict alone cannot discriminate valid from mutant in this corpus (contract pairing asserts on the *new* finding, not aggregate verdict) | 4 |
 | EXP-D3 | Build and run the CDC lib-hl7v2-nist-validator fully offline. The artifact-mirroring problem this experiment was originally scoped around is dissolved (2026-07-24 deep research, facts register [F14](../notes/facts-register.md)): the six vendored NIST-origin coordinates fetch from the confirmed-live `hit-nexus.nist.gov` into the standard artifact cache via the existing `artifact` registry, the same mechanism every other engine distribution already uses — no separate mirroring machinery needed. Remaining scope: lockfile entries for the six coordinates, plus the offline wrapper build itself. (Facts register F9 already corrected the earlier, unregistered claim that the upstream build disables SSL verification — no such config exists; this row no longer repeats that claim.) | The full-gate runtime, contingent on EXP-SBOM | 5 — after EXP-SBOM |
 
 EXP-C3 (OperationOutcome stability across validator versions) and EXP-E6
@@ -2741,6 +2860,372 @@ difference.
 
 ========== END FILE ==========
 
+========== FILE: ./docs/experiments/EXP-C5-results.md ==========
+# EXP-C5 — Results
+
+## Metadata
+
+- **Experiment:** EXP-C5
+- **Date:** 2026-07-24
+- **Executor:** Claude Code (P5 session)
+- **HEAD at execution:** `2232c2b` (`gate.v2: base-structural gate over HAPI` commit)
+- **Protocol:** [`docs/experiments/EXP-C5.md`](EXP-C5.md)
+
+## Environment record
+
+| Field | Value |
+|---|---|
+| OS / kernel | WSL2 (orchestrator host) |
+| JVM(s) used | Validator subprocess: Eclipse Temurin 17.0.19+10 (`artifacts.lock.edn`, kind `:runtime`), resolved through the artifact registry and invoked directly (not via `corpus.generate`'s wrapper -- this experiment ran the validator by hand, ahead of `gate.fhir` existing) |
+| Locale / timezone (host default) | Irrelevant to this experiment (no locale/timezone-sensitive behavior under test) |
+| Artifact(s) resolved | `fhir-validator-cli` 6.9.12 (`artifacts.lock.edn`, sha256 `0e53ab1d1a6f1e35f505255c0b8ce10a35fcf27e6e96b503640f784cd07e5ad6`, facts register [F18](../../notes/facts-register.md)); `temurin-jdk` 17.0.19+10 |
+| Config file(s) used | `config/synthea/synthea.properties` (EXP-A4/EXP-B2's pinned config, sha256 `ead0388b86d5d60bff86d8475cd65d6c3d8ef7cdeb5f7b8a58b55c911ad79bb7`) |
+
+Sample corpus: 8-patient population, seed 100 / clinician-seed 555 /
+reference-date 20260101 (EXP-A4/EXP-B2's pinned settings), generated
+into `out/exp-c5-corpus/` (gitignored). Three patient files selected
+(first three by filename sort): `Brandon214...`, `Cathie710...`,
+`Daniel959...`. Mutants: one per registered operator per selected
+file (15 total), per the protocol's locator table.
+
+## Package-cache priming (online, not part of the offline measurement)
+
+A single online run (no network isolation) against one input file
+resolved and cached `hl7.fhir.r4.core#4.0.1` plus every package the
+validator auto-loaded because the input's own `Resource.meta.profile`
+declares US Core 8.0.1 (Synthea R4's default profile annotation):
+`hl7.fhir.us.core.r4#8.0.1`, `hl7.terminology.r4#7.0.0`,
+`hl7.terminology.r5#5.3.0`, `hl7.fhir.uv.extensions*` (several),
+`hl7.terminology#5.5.0`, `us.nlm.vsac#0.24.0`, `hl7.fhir.r4.examples#4.0.1`,
+`hl7.fhir.uv.sdc#3.0.0`, `us.cdc.phinvads#0.12.0`,
+`hl7.fhir.uv.smart-app-launch#2.2.0` -- none of these were requested
+via `-ig`; every one was auto-resolved purely from the input's own
+declared profile, confirming `validator_cli.jar -help`'s own
+documented behavior ("profiles declared in the resource... or
+specified on the command line"). This took ~2m20s (mostly network
+fetches for ~10 packages); the local package cache (`~/.fhir/packages`)
+now holds everything the 18 offline runs below needed.
+
+## Offline execution: network-isolation behavior
+
+All 18 runs executed under `unshare -r -n` (user+network namespace,
+matching `AGENTS.md`'s hermeticity-check discipline), with
+`-Duser.home` forced ahead of `-jar` (pattern
+[#15](../../.agents/memory/patterns.md): `unshare -r` remaps the
+effective uid, which silently changed where the JVM resolved
+`user.home` -- to `/root` instead of the real cache location -- until
+forced explicitly; caught directly by a failed first attempt, not
+assumed). Confirmed genuinely network-isolated: every run's log shows
+DNS resolution failures for `packages.fhir.org`,
+`packages2.fhir.org`, and `build.fhir.org` ("Name or service not
+known"), each followed immediately by "Latest version of package X
+found locally is Y - using that" -- the validator attempts a
+version-check fetch for every package on every run *even with `-tx
+n/a`*, exactly the behavior the protocol's Network note anticipated,
+and falls back to the cache gracefully rather than failing. This is
+itself a finding: `-tx n/a` disables only the *terminology-server*
+network path, not the package-registry version-check path -- a wrapper
+that only isolates terminology traffic would still leak (harmlessly,
+here, because DNS failures degrade to cache) real network attempts on
+every single gate run.
+
+## Per-file issue histograms (baseline, valid files)
+
+| File | Total issues | `error`/`structure` | `information`/`code-invalid` | `information`/`structure` | `warning`/`not-found` | `warning`/`invariant` | (other categories, see below) |
+|---|---|---|---|---|---|---|---|
+| Brandon214 | 6,554 | 736 | 1,477 | 2,111 | 1,026 | 500 | business-rule, informational, unknown, code-invalid(warning), invalid(warning) |
+| Cathie710 | 7,735 | 837 | 1,851 | 2,412 | 1,365 | 551 | (same categories, proportionally larger file) |
+| Daniel959 | 4,811 | 513 | 1,161 | 1,434 | 779 | 329 | (same categories, proportionally smaller file) |
+
+**Central finding, stated plainly:** every one of the three "valid"
+Synthea R4 baseline files carries several hundred `error`/`structure`
+issues (736 / 837 / 513) *before any mutation is applied*. These are
+not base-FHIR structural defects -- Synthea's output is round-trip-
+verified valid JSON (EXP-B2) and was never claimed to be US-Core-
+conformant. They are entirely attributable to the auto-loaded US Core
+8.0.1 profile rejecting a Synthea-authored extension it doesn't
+recognize (see the `error`/`structure` classification row below).
+Consequence: **file-level verdict alone cannot discriminate a valid
+file from a mutant in this corpus** -- both are `:rejected` under the
+pre-authorized mapping rule, because both carry pre-existing
+profile-driven errors unrelated to any operator's mutation. This is
+exactly the honest observation `docs/notation.md`'s Gate law and
+`gate.fhir`'s own docstring now state: the gate targets whatever the
+validator actually checks given the input's own declared profile, not
+a sanitized base-spec-only view. It also fixes how Step 6's contract
+pairing must assert detection: by the *appearance of a new finding*
+matching the mutation's locator/code, never by the file's aggregate
+verdict alone.
+
+## Classification: every distinct `{severity, code}` category observed
+
+| Severity | Code | Terminology-suppressed? | Representative diagnostics | Classification |
+|---|---|---|---|---|
+| error | structure | No | "The extension http://synthetichealth.github.io/synthea/disability-adjusted-life-years could not be found so is not allowed here" | **profile-error** (US Core rejecting an unrecognized Synthea extension; baseline noise on every file in this corpus) |
+| error | invalid | No | "This property must be a simple value, not an Array" / "Not a valid date format: '2026-13-45'" / "Error parsing JSON: the primitive value must be a boolean" | **base-spec-error** (structural/type/lexical-format violations -- exactly what `duplicate-element`, `malformed-date`, and `wrong-type-value` each introduce, one new instance per mutant) |
+| error | code-invalid | No | "The value provided ('not-a-valid-code-9f3a1c') was not found in the value set 'AdministrativeGender' (http://hl7.org/fhir/ValueSet/administrative-gender\|4.0.1), and a code is required from this value set" | **base-spec-error** -- `AdministrativeGender` is a small, base-FHIR-bundled ValueSet, checkable fully offline with no terminology server; this contradicts the protocol's a-priori hypothesis that `invalid-code-value` would be terminology-suppressed offline, and the *observed* class is reported here rather than the anticipated one, per the protocol's own instruction |
+| error | not-found | No | "The System URI could not be determined for the code 'not-a-valid-code-9f3a1c' in the ValueSet '...administrative-gender\|4.0.1'" | **base-spec-error** (the companion issue `invalid-code-value` always produces alongside `code-invalid`, above -- same root cause, same offline-checkable ValueSet) |
+| warning | business-rule | Yes (some instances) | "Unable to validate code 'Cel' in system 'http://unitsofmeasure.org' because the validator is running without terminology services" | **terminology-suppressed** |
+| warning | code-invalid | Yes | "Unable to validate code without using server because: Resolved system urn:oid:2.16.840.1.113883.6.238 (v3.0.2), but the definition doesn't include any codes, so the code has not been validated" | **terminology-suppressed** |
+| warning | informational | Yes | "Unable to validate code without using server because: Resolved system http://unitsofmeasure.org (v3.0.1)..." | **terminology-suppressed** |
+| warning | invalid | No | "Best Practice Recommendation: In general, all observations should have a performer" | **advisory** |
+| warning | invariant | No | "Constraint failed: dom-6: 'A resource should have narrative for robust management'... (Best Practice Recommendation)" | **advisory** |
+| warning | not-found | Yes (some instances) | "A definition for CodeSystem 'urn:ietf:bcp:47' could not be found, so the code cannot be validated" | **terminology-suppressed** |
+| information | business-rule | No | "Reference to draft CodeSystem http://hl7.org/fhir/narrative-status\|4.0.1" | **advisory** |
+| information | code-invalid | Yes | "The value provided ('MA') could not be validated in the absence of a terminology server" | **terminology-suppressed** |
+| information | informational | No | "This element does not match any known slice defined in the profile ...us-core-patient\|8.0.1 (this may not be a problem...)" | **advisory** |
+| information | structure | No | "Details for urn:uuid:... matching against profile http://hl7.org/fhir/StructureDefinition/Patient\|4.0.1" | **advisory** |
+| information | unknown | Yes | "The definition for the Code System with URI 'urn:oid:2.16.840.1.113883.6.238' from 'hl7.terminology.r4#6.2.0' doesn't provide any codes so the code cannot be validated" | **terminology-suppressed** |
+
+**Important nuance:** `code-invalid` and `not-found` are NOT uniformly
+terminology-suppressed -- their classification depends on severity and
+diagnostics text, not code alone: the `error`-severity instances above
+(from `invalid-code-value`'s mutation against `AdministrativeGender`, a
+base-bundled ValueSet) are genuine detections; the `warning`/
+`information`-severity instances of the same codes (against
+terminology-server-dependent code systems like `unitsofmeasure.org` or
+UUID-OID-named systems) are suppressed. `gate.fhir`'s
+`terminology-suppressed?` check is therefore a diagnostics-text pattern
+match (five phrases, versioned as data alongside
+`verdict-mapping-version`), applied per-issue, never a `{severity,
+code}` lookup table -- a lookup table would misclassify one bucket or
+the other.
+
+## Per-operator mutation-introduced findings (new issues vs. the corresponding baseline file, averaged across the 3 selected files -- identical delta on every file)
+
+| Operator | New issue(s) introduced | Classification | Detected by `gate.fhir`? |
+|---|---|---|---|
+| `remove-required-element` (locator: `entry[0].resource.gender`) | **None** | -- | **No** -- see finding below |
+| `duplicate-element` (`entry[0].resource.gender`) | 1× `error`/`invalid`: "This property must be a simple value, not an Array" | base-spec-error | Yes -- `:rejected` |
+| `invalid-code-value` (`entry[0].resource.gender`) | 1× `error`/`code-invalid` + 1× `error`/`not-found` (both against `AdministrativeGender`) | base-spec-error (contrary to a-priori hypothesis) | Yes -- `:rejected` |
+| `malformed-date` (`entry[0].resource.birthDate`) | 1× `error`/`invalid`: "Not a valid date format: '2026-13-45'" | base-spec-error | Yes -- `:rejected` |
+| `wrong-type-value` (`entry[0].resource.multipleBirthBoolean`) | 2× `error`/`invalid`: "Error parsing JSON: the primitive value must be a boolean" | base-spec-error | Yes -- `:rejected` |
+
+**Finding: `remove-required-element` against `Patient.gender`
+produced zero new validator issues.** `Patient.gender` is
+min-cardinality 0 in base FHIR R4 (`Element.min = 0` on the base
+`Patient` StructureDefinition) -- it is genuinely optional, not
+required, so removing it violates nothing the validator checks. This
+is an operator/locator choice problem specific to this experiment's
+test data, not a `gate.fhir` limitation or an EXP-C5 upstream-behavior
+finding: `remove-required-element`'s own contract
+(`corpus.operators`) is conditional on the locator naming an
+*actually* min-cardinality-1 element, and `Patient.gender` doesn't
+qualify. Step 6's contract-pairing test uses a different, genuinely
+required locator (`Patient.resourceType`, min-cardinality 1 on every
+FHIR resource) for this operator specifically, so its `:violates`
+contract is tested honestly rather than against a field that was
+never required.
+
+## Protocol amendments made
+
+None to the protocol's procedure. One correction made *during*
+execution, recorded here rather than silently absorbed: the first
+`unshare -r -n` invocation failed to resolve the FHIR package cache
+(it looked under `/root/.fhir/packages` instead of the real cache)
+because remapping the effective uid to 0 changes how the JVM resolves
+`user.home` from the OS user database, independent of the `$HOME`
+env var. Fixed by forcing `-Duser.home` explicitly ahead of `-jar`
+(now documented in the protocol's own Procedure step 3 and in pattern
+nursery [#15](../../.agents/memory/patterns.md)).
+
+## Acceptance verdict
+
+- **Acceptance criterion (quoted from the protocol):** "Every
+  `{severity, code}` category observed across all 18 runs is
+  classified with an example, or an explicit 'none observed' row is
+  not required (categories are additive, discovered from real output,
+  not enumerated in advance); the verdict-mapping table `gate.fhir`
+  will carry is derived directly from this classification, not
+  re-litigated."
+- **Met?** Yes. All 15 distinct `{severity, code}` categories observed
+  across the 18 runs are classified above with a representative
+  example each; `gate.fhir`'s `terminology-suppressed-patterns` and
+  verdict policy are copied directly from this table (cited by name in
+  `gate.fhir`'s own docstring, `verdict-mapping-cited-to`).
+- **Stop condition triggered?** No. Every category fit one of the four
+  classification buckets (base-spec-error / profile-error /
+  terminology-suppressed / advisory); nothing required the "doesn't
+  fit any bucket" escape hatch.
+
+## Artifacts produced
+
+| Artifact | Path | Hash |
+|---|---|---|
+| Sample corpus (8 patients, EXP-A4/EXP-B2's pinned settings) | `out/exp-c5-corpus/` (not committed, gitignored) | manifest in `out/exp-c5-corpus/manifest.edn` |
+| 15 mutants (5 operators × 3 files) | `out/exp-c5-corpus/mutants/<operator>/` (not committed) | lineage records in each operator dir's `lineage/` |
+| 18 raw OperationOutcome JSON results | `out/exp-c5-corpus/validator-results/` (not committed, ~2MB+ each) | -- |
+| `fhir-validator-cli` 6.9.12 lockfile entry | `artifacts.lock.edn` | sha256 `0e53ab1d1a6f1e35f505255c0b8ce10a35fcf27e6e96b503640f784cd07e5ad6` (facts register F18) |
+
+## Addendum (2026-07-24, same session, found during Step 6 contract pairing)
+
+A 16th `{severity, code}` category surfaced while testing
+`remove-required-element` against a genuinely required locator
+(`Patient.resourceType`, min-cardinality 1 -- the earlier finding
+above explains why `Patient.gender` couldn't be used for this):
+`("fatal", "invalid")`, diagnostics "Unable to find resourceType
+property". FHIR's own `IssueSeverity` ValueSet defines `fatal` as a
+fourth value alongside `error`/`warning`/`information`; this repo's
+original EXP-C5 corpus and its other four operators' mutants never
+happened to trigger it, so it wasn't in the classification table
+above. `gate.fhir`'s `rejecting-severities` set now includes both
+`"error"` and `"fatal"`, and `gate.finding/Severity` was extended to
+`:fatal`. Not a re-run of the protocol -- this is exactly the
+"classification is additive, discovered from real output" acceptance
+criterion already stated above, applied to one more real observation
+found one step later in the same session.
+
+## Rubric self-score
+
+| Criterion | Met? | Evidence |
+|---|---|---|
+| 1. Every finding is classified | Yes | All 15 `{severity, code}` categories classified in the table above, each with a representative example and a classification bucket |
+| 2. Environment record is complete | Yes | Every field in the Environment record table is filled in |
+| 3. Amendments are justified | Yes | One amendment stated (the `-Duser.home` fix), with what changed, why, and where it's now documented |
+| 4. Verdict is traceable to criteria | Yes | Acceptance verdict quotes the protocol's own Acceptance/Stop-condition text and states plainly both were met |
+| 5. No unexplained divergences | Yes | The baseline profile-noise finding, the `remove-required-element`/`gender` non-detection, and `invalid-code-value`'s contrary-to-hypothesis result are all stated explicitly, not smoothed over |
+
+All five criteria met.
+
+========== END FILE ==========
+
+========== FILE: ./docs/experiments/EXP-C5.md ==========
+# EXP-C5 — Offline validator behavior
+
+**Objective.** Characterize the official FHIR validator's (`validator_cli.jar`,
+`artifacts.lock.edn` kind `:engine`, name `fhir-validator-cli`) verdicts fully
+offline (`-tx n/a`, pinned inputs, no network) on (a) valid Synthea R4
+files and (b) mutants of those files produced by all five registered FHIR
+defect operators (`ehr-testing-tools.corpus.operators`). Classify every
+distinct issue *category* the validator emits — `{severity, code,
+expression-shape}` — with a representative example, identifying which
+categories are terminology-suppressed or terminology-degraded when run
+offline (known upstream behavior: locally packaged ValueSets can still
+fail to validate a code — observe, don't fight it).
+
+**Decision informed.** The verdict-mapping table in `gate.fhir`: which
+issue categories map to `:rejected` (an error that is not
+terminology-suppressed), which contribute `:indeterminate` findings
+(terminology-suppressed), and which are `:pass`-with-findings
+(warning/information).
+
+**Apparatus.** `fhir-validator-cli` 6.9.12 (`validator_cli.jar`,
+`artifacts.lock.edn`, sha256 verified against a direct re-download —
+facts register [F18](../../notes/facts-register.md)), run under the
+already-locked `temurin-jdk` 17.0.19+10 `:runtime` artifact (pattern
+[#15](../../.agents/memory/patterns.md): the JVM that actually runs the
+validator is the pinned one, resolved through the artifact registry,
+never `PATH`). A sample corpus generated via `corpus.generate` at
+EXP-A4/EXP-B2's pinned settings (seed 100, clinician-seed 555,
+reference-date 20260101, population 8); three patient Bundle files
+selected (first three by filename sort: `Brandon214...`, `Cathie710...`,
+`Daniel959...`) as the valid-file baseline; mutants of each, one per
+registered operator, produced via `ehr corpus mutate`:
+
+| Operator | Locator |
+|---|---|
+| `remove-required-element` | `entry[0].resource.gender` |
+| `duplicate-element` | `entry[0].resource.gender` |
+| `invalid-code-value` | `entry[0].resource.gender` |
+| `malformed-date` | `entry[0].resource.birthDate` |
+| `wrong-type-value` | `entry[0].resource.multipleBirthBoolean` |
+
+3 valid files + 5 operators × 3 files = 18 validator invocations total.
+
+**Procedure.**
+
+1. Generate the sample corpus; select the three files; produce the 15
+   mutants per the table above.
+2. **Package-cache priming (online, once, explicitly not part of the
+   offline measurement):** run the validator once against one input
+   file with real network access, so it resolves and caches
+   `hl7.fhir.r4.core#4.0.1` and any implementation guide packages
+   referenced by the input's own `Resource.meta.profile` (Synthea R4
+   output declares US Core profiles; the validator auto-resolves
+   declared profiles by design — this is documented behavior, not an
+   `-ig` flag we chose to pass, and there is no discovered flag to
+   suppress it). This is deliberately outside the offline measurement:
+   the FHIR package cache (`~/.fhir/packages`) is package-manager-style
+   local state, analogous to a Maven `~/.m2` cache, not part of what
+   this experiment characterizes as "offline validator behavior."
+3. **Offline runs (measured):** for each of the 18 inputs, invoke
+   `validator_cli.jar -version 4.0 -tx n/a -output=<file>.json <input>`
+   inside `unshare -r -n` (network-namespace isolation, matching the
+   hermeticity-check discipline in `AGENTS.md`) so any residual network
+   attempt is a hard failure the run must survive on cache alone, not a
+   silent success. `-Duser.home` is forced explicitly ahead of `-jar`
+   (pattern [#15](../../.agents/memory/patterns.md) applies here too: `unshare -r`
+   remaps the effective uid, which changes how the JVM resolves
+   `user.home` via the OS user database — forcing it keeps the FHIR
+   package cache path pointed at the real cache regardless of the
+   namespace's uid remap).
+4. Parse each run's OperationOutcome JSON (`.issue[]`); for each input,
+   tabulate a `{severity, code}` histogram. For every mutant, diff its
+   histogram and its issues' `expression` values against the
+   corresponding valid file's own baseline run to isolate which issues
+   are *new* — introduced by the mutation — versus baseline noise every
+   file in this corpus carries regardless of any defect.
+5. For every distinct `{severity, code}` category observed anywhere
+   (baseline or mutant-introduced), classify it:
+   - **base-spec-error** — a genuine base-FHIR structural/type/
+     cardinality violation, `severity: error`.
+   - **profile-error** — an error attributable to a declared
+     `meta.profile` constraint (e.g. US Core) rather than the base
+     spec, `severity: error`.
+   - **terminology-suppressed** — the issue's own diagnostics text
+     states the code could not be checked (typically "without using
+     server" / "doesn't provide any codes" / "doesn't provide any
+     codes so the code cannot be validated") — an offline-degraded
+     terminology check, not a genuine pass or fail.
+   - **advisory** — `severity: warning` or `severity: information` that
+     is not terminology-suppressed (a real but non-blocking observation).
+   Every category gets a representative example (one real issue's
+   `severity`/`code`/`expression`/`diagnostics`), not just a label.
+
+**Expected artifacts.**
+
+- `docs/experiments/EXP-C5-results.md` (this template:
+  `docs/experiments/results-template.md`, adapted the same way
+  EXP-B2's results file adapted it — a classification table in place of
+  the byte-diff-oriented pin/control/canonicalize columns — self-scored
+  against `docs/experiments/results-rubric.md`).
+- `docs/experiments.md`'s EXP-C5 row updated with the executed date.
+- `artifacts.lock.edn`'s `fhir-validator-cli` entry (already added
+  alongside this protocol, per the session's own commit order).
+
+**Acceptance.** Every `{severity, code}` category observed across all 18
+runs is classified with an example, or an explicit "none observed" row
+is not required (categories are additive, discovered from real output,
+not enumerated in advance); the verdict-mapping table `gate.fhir` will
+carry is derived directly from this classification, not re-litigated.
+
+**Pre-authorized decision rule** (from the design channel, ADR-consistent
+with the author rulings in the P5 prompt): `error`-severity issues that
+are *not* terminology-suppressed map to `:rejected`; `warning`/
+`information`-severity issues map to `:pass` with findings recorded;
+terminology-suppressed issues (any severity) map to `:indeterminate`
+findings. Overall file verdict is worst-of `:rejected` > `:indeterminate`
+> `:pass`. Profile-vs-base-spec attribution (the base-spec-error /
+profile-error split above) is recorded as a classification finding but
+does **not** change the mapping in `gate.fhir` this session — the gate
+targets whatever the validator actually checks given the input's own
+declared profile, with no `-ig` pinned; splitting profile-errors out of
+the rejection path is future work if the motivating deployment's corpus
+turns out to require it.
+
+**Stop condition.** A `{severity, code}` category whose diagnostics text
+doesn't fit any of the four classification buckets above is recorded as
+an open finding, not silently dropped or force-fit. Effort cap: this
+protocol classifies observed categories: it does not investigate *why*
+the validator's terminology or profile-resolution logic behaves a given
+way beyond what's needed to classify the observed diagnostics text, and
+it does not attempt to make every issue on the corpus disappear (some
+categories, e.g. profile-driven US-Core warnings on non-US-Core-authored
+Synthea output, are expected noise this experiment characterizes rather
+than eliminates).
+
+========== END FILE ==========
+
 ========== FILE: ./docs/experiments/EXP-SBOM-results.md ==========
 # EXP-SBOM — Results
 
@@ -3134,6 +3619,71 @@ imperfect -- finish the missing section rather than scoring around it.
 
 ========== END FILE ==========
 
+========== FILE: ./docs/gate-calibration.md ==========
+# Gate Calibration: Which Defects Does Which Gate Tier Catch
+
+One page, honest, cited -- exactly the question a team gating its own
+ingestion-pipeline output against this repo's gates needs answered
+before it trusts a green run. Source: `docs/experiments/EXP-C5-results.md`
+(the offline validator-behavior classification) and P5's contract-pairing
+suite (`test/ehr_testing_tools/contract_pairing_test.clj`, tagged
+`^:integration`, run explicitly against the real official FHIR
+validator -- not simulated).
+
+## FHIR gate (`gate.fhir`), base spec + whatever profile the input itself declares
+
+No implementation guide is pinned in `artifacts.lock.edn` this
+session -- but the official validator auto-loads any IG a resource's
+own `Resource.meta.profile` declares, with no `-ig` flag needed
+(confirmed directly, EXP-C5). For Synthea R4 output, that means US
+Core 8.0.1 is always in play. Consequence stated plainly: a corpus
+generated by this repo's own `corpus.generate` is not, in fact,
+US-Core-conformant -- every "valid" file in EXP-C5's sample corpus
+carried hundreds of pre-existing profile-driven errors before any
+mutation. **File-level verdict alone cannot discriminate valid from
+mutant in a corpus like this one.** What can: whether a *new* finding
+appears at the mutation's own locator.
+
+| Defect operator | Locator used | Detected offline? | Verdict / finding | Notes |
+|---|---|---|---|---|
+| `duplicate-element` | any singular field | **Yes** | `:rejected`, `error`/`invalid` ("must be a simple value, not an Array") | Clean base-spec JSON-representation violation |
+| `malformed-date` | any date/dateTime field | **Yes** | `:rejected`, `error`/`invalid` ("Not a valid date format") | Clean lexical-format violation |
+| `wrong-type-value` | any typed field | **Yes** | `:rejected`, `error`/`invalid` ("the primitive value must be a boolean" / similar) | Clean JSON-type violation |
+| `remove-required-element` | **must be a genuinely min-cardinality-1 field** (e.g. `resourceType`, not `Patient.gender` -- gender is min 0 in base FHIR) | **Yes, if the locator is actually required** | `:rejected`, `fatal`/`invalid` ("Unable to find resourceType property") for `resourceType`; **nothing** for a locator that isn't actually required | The operator's own contract is conditional on the locator naming a required element -- verify the target's cardinality before trusting a "detected" result |
+| `invalid-code-value` | a field bound to a **base-FHIR-bundled** ValueSet (e.g. `Patient.gender` -> `AdministrativeGender`) | **Yes** | `:rejected`, `error`/`code-invalid` + `error`/`not-found` | Contrary to the a-priori assumption that this class is terminology-suppressed offline -- small, spec-bundled ValueSets are checked without a terminology server |
+| `invalid-code-value` | a field bound to a **terminology-server-dependent** code system (LOINC, SNOMED, UCUM, most `urn:oid:`-named systems) | **No, indeterminate** | `:indeterminate`, diagnostics containing "without using server" / "doesn't provide any codes" / similar | **Undetectable at this gate tier** -- catchable only with a terminology server or a locally packaged, complete ValueSet; untested directly in this session's contract-pairing suite (no such locator in the fixture), inferred from EXP-C5's own classification table |
+
+**Severity note:** FHIR's `IssueSeverity` ValueSet has four values,
+not three -- `fatal` alongside `error`/`warning`/`information`.
+`gate.fhir` treats both `fatal` and `error` as `:rejected`-eligible
+(`rejecting-severities`, `ehr-testing-tools.gate.fhir`).
+
+## v2 gate (`gate.v2`), base-structural only
+
+No mutation operators exist for HL7 v2 yet (P6, deferred, unblocked by
+this session's intake capability plus EXP-B2's round-trip finding).
+What's calibrated today is the tier itself: HAPI's `defaultValidation`
+context wires primitive-type checking into parsing, so message-
+structure-resolution failures, encoding/delimiter failures, and
+primitive data-type violations (a malformed DTM, for instance) all
+surface as parse-time exceptions -- `:rejected`. Nothing at this tier
+checks conformance profiles, usage/cardinality beyond parse-time
+structure, predicates, or co-constraints (the NIST/CDC engine's own
+territory, EXP-D3, not adopted). Nothing here ever produces
+`:indeterminate`: there is no terminology and no profile at this tier,
+so there is no check this gate can only partially resolve.
+
+## Reading this table
+
+A `:rejected` verdict from either gate is trustworthy: something the
+gate actually checked came back wrong. A `:pass` or `:indeterminate`
+verdict is a claim about *what was checked*, not a guarantee of
+correctness beyond that scope -- see the FHIR gate's profile-noise
+caveat above, and see `README.md`'s maturity table for the one-line
+honest summary this page backs.
+
+========== END FILE ==========
+
 ========== FILE: ./docs/notation.md ==========
 # Pipeline Notation
 
@@ -3297,22 +3847,34 @@ exploratory, as above.
           "intended-diff-only: diff(canon(base), canon(mutant)) touches exactly the declared locator/contract target and nothing else"]
    :contract "operates on plain-data JSON (data.json), not a HAPI-parsed tree, because EXP-B2 verified plain-data JSON's parse-serialize round-trip is faithful"}
 
+  {:id :intake
+   :label "Intake"
+   :kind :enrich
+   :status :built
+   :inputs ["foreign-file"]
+   :outputs ["catalog-entry" "intake-record"]
+   :laws ["adds fields without altering existing ones: computes a content hash and a format sniff about a file, never touches the file's own bytes"
+          "an intaken FHIR file's catalog id is the exact value corpus.mutate independently computes as a mutant's lineage :parent -- no adapter between intake and mutate, verified by a lineage-chaining test (ehr-testing-tools.corpus.intake-test)"]}
+
   {:id :gate
    :label "Gate"
    :kind :gate
-   :status :planned
-   :inputs ["fhir-datum"]
+   :status :built
+   :inputs ["datum"]
    :outputs ["pass" "rejected" "indeterminate"]
-   :catalytic ["profile-artifact"]
-   :laws ["never modifies the datum it judges"]}
+   :catalytic ["validator-artifact" "runtime" "hapi-hl7v2-dep" "profile-artifact"]
+   :laws ["never modifies the datum it judges -- verified against the real engine, not only injected fakes (contract-pairing suite)"
+          "format dispatch: \"datum\" is FHIR JSON or v2 ER7, resolved at call time to gate.fhir or gate.v2 -- one equation for both engines, a deliberate collapsing documented here rather than duplicating the equation per format (the notation's × only expresses product/AND between inputs, not OR between format alternatives); docs/gate-calibration.md is the per-format detail this equation deliberately omits"]
+   :contract "gate.v2 never produces :indeterminate (no terminology, no profile at its base-structural tier); gate.fhir's verdict-mapping table is EXP-C5-derived and versioned (ehr-testing-tools.gate.fhir/verdict-mapping-version, cited to docs/experiments/EXP-C5-results.md) -- no IG pinned in artifacts.lock.edn this session, though -ig wiring exists"}
 
   {:id :report
    :label "Report"
    :kind :transform
-   :status :planned
+   :status :built
    :inputs ["pass" "rejected" "indeterminate"]
    :outputs ["report"]
-   :laws ["appends provenance: which engine, which profile, which verdicts, normalized to the finding envelope (pattern nursery #6)"]}]}
+   :laws ["appends provenance: which engine, which profile, which verdicts, normalized to the finding envelope (pattern nursery #6, shared by both gate formats)"
+          "diffable: gate.report/diff-reports compares two reports of the same corpus -- changed verdicts, added/removed files, appeared/disappeared codes"]}]}
 
 ========== END FILE ==========
 
@@ -3332,9 +3894,8 @@ The equations are the source of truth: [docs/pipeline.edn](pipeline.edn). A stag
 synthea-config × synthea-artifact × jdk-runtime × config-hash → raw-corpus  [Generate]  {catalytic: synthea-artifact, jdk-runtime, config-hash}
 raw-corpus → canonical-fhir-datum  [Normalize]
 canonical-fhir-datum × operator-catalog → mutant-fhir-datum + lineage-record  [Mutate]  {catalytic: operator-catalog}
-# planned: Gate
-fhir-datum × profile-artifact → pass + rejected + indeterminate  [Gate]  {catalytic: profile-artifact}
-# planned: Report
+foreign-file → catalog-entry + intake-record  [Intake]
+datum × validator-artifact × runtime × hapi-hl7v2-dep × profile-artifact → pass + rejected + indeterminate  [Gate]  {catalytic: validator-artifact, runtime, hapi-hl7v2-dep, profile-artifact}
 pass × rejected × indeterminate → report  [Report]
 ```
 
@@ -3345,17 +3906,22 @@ flowchart LR
 
     %% --- Source types (raw inputs, not produced by any operation) ---
     config_hash(["config-hash"])
-    fhir_datum(["fhir-datum"])
+    datum(["datum"])
+    foreign_file(["foreign-file"])
+    hapi_hl7v2_dep(["hapi-hl7v2-dep"])
     jdk_runtime(["jdk-runtime"])
     operator_catalog(["operator-catalog"])
     profile_artifact(["profile-artifact"])
+    runtime(["runtime"])
     synthea_artifact(["synthea-artifact"])
     synthea_config(["synthea-config"])
+    validator_artifact(["validator-artifact"])
 
     %% --- Operations (boxes; spiders use distinct shapes) ---
     Generate["Generate"]
     Normalize["Normalize"]
     Mutate["Mutate"]
+    Intake["Intake"]
     Gate["Gate"]
     Report["Report"]
 
@@ -3373,11 +3939,17 @@ flowchart LR
     Normalize -- canonical-fhir-datum --> Mutate
     operator_catalog -. operator-catalog .-> Mutate
 
+    %% Arrow 4: Intake
+    foreign_file -- foreign-file --> Intake
+
     %% Arrow 5: Gate
-    fhir_datum -- fhir-datum --> Gate
+    datum -- datum --> Gate
+    validator_artifact -. validator-artifact .-> Gate
+    runtime -. runtime .-> Gate
+    hapi_hl7v2_dep -. hapi-hl7v2-dep .-> Gate
     profile_artifact -. profile-artifact .-> Gate
 
-    %% Arrow 7: Report
+    %% Arrow 6: Report
     Gate -- pass --> Report
     Gate -- rejected --> Report
     Gate -- indeterminate --> Report
@@ -3388,17 +3960,22 @@ flowchart LR
     style Generate fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
     style Normalize fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
     style Mutate fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
+    style Intake fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
     style Gate fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
     style Report fill:#2d2d2d,stroke:#000,color:#fff,stroke-width:2px
 
     %% Source types: light rounded
     style config_hash fill:#f5f5f5,stroke:#999,color:#333
-    style fhir_datum fill:#f5f5f5,stroke:#999,color:#333
+    style datum fill:#f5f5f5,stroke:#999,color:#333
+    style foreign_file fill:#f5f5f5,stroke:#999,color:#333
+    style hapi_hl7v2_dep fill:#f5f5f5,stroke:#999,color:#333
     style jdk_runtime fill:#f5f5f5,stroke:#999,color:#333
     style operator_catalog fill:#f5f5f5,stroke:#999,color:#333
     style profile_artifact fill:#f5f5f5,stroke:#999,color:#333
+    style runtime fill:#f5f5f5,stroke:#999,color:#333
     style synthea_artifact fill:#f5f5f5,stroke:#999,color:#333
     style synthea_config fill:#f5f5f5,stroke:#999,color:#333
+    style validator_artifact fill:#f5f5f5,stroke:#999,color:#333
 ```
 
 ========== END FILE ==========
@@ -3463,7 +4040,12 @@ moments the guide will eventually point here:
   generator and a mutator; this repo supplies them.
 - **Conformance gates** (guide ch. 25: v2 and FHIR validation as structural
   gates upstream of semantic checks) — this repo supplies the gate
-  wrappers.
+  wrappers. Motivating deployment class for this capability (P5,
+  recorded without identifying anyone): testing an ingestion pipeline
+  whose transforms emit HL7 v2 and FHIR JSON, where the consuming team
+  brings its own synthetic corpus rather than one generated here — the
+  gates and the mutation/intake layers underneath them treat a foreign
+  corpus as first-class for exactly this reason.
 - **Data sources for the guide's own experiments** — notably, the guide's
   Experiment 3 will eventually consume this repo's v2 projector output.
 
@@ -4434,6 +5016,7 @@ the next gate-shaped milestone, tracked in
 | F15 | NIST's canonical software-licensing statement (`nist.gov/open/license`, matching the `usnistgov/opensource-repo` `LICENSE.md` template) permits use, copying, modification, and distribution of NIST-authored software provided the notice is kept intact, and notes the software "may be subject to foreign copyright (as per 17 U.S.C. §105)." Unlike NIST's parallel statement for NIST *data*, which contains an affirmative worldwide grant covering any foreign copyright NIST might hold, the software statement is silent on redistribution rights outside jurisdictions where §105 domestically applies — a materially weaker posture for a worldwide MIT-distributed repo (ADR-0007) than the data statement's explicit grant. This is the basis of the "use rights vs. redistribution rights" distinction the research report's Mode 1/Mode 2 adoption analysis turns on. | `docs/components.md` (NIST v2-validation), `docs/experiments/EXP-SBOM-inquiry-draft.md`, `docs/research/License Status of NIST HL7 v2 Validation Software  Evidence-Based Classification.md` (section B1/B2) | https://www.nist.gov/open/license ; https://github.com/usnistgov/opensource-repo/blob/main/LICENSE.md ; https://www.nist.gov/copyrights-disclaimers (parallel data-statement contrast, per the report) | 2026-07-24 | verified (statement text); the redistribution-rights gap is the residual question put to NIST (inquiry draft, question b) |
 | F16 | `com.github.hl7-tools:validation-report` — one of the six NIST-origin coordinates the CDC wrapper vendors (F9) — has a live GitHub upstream at `github.com/hl7-tools/validation-report` (README retrieved HTTP 200 on `master`), but no `LICENSE` file on either `master` or `main` (both HTTP 404), independently reprobed 2026-07-24. `hl7-tools` is a GitHub Organization (org id 12650686); who publishes or controls it is unknown — this is a distinct provenance question from the `usnistgov` 17 U.S.C. §105 argument (F1, F15), since `hl7-tools` is not a `usnistgov`-owned org and no evidence connects it to NIST beyond this one vendored artifact. | `docs/components.md` (CDC wrapper) | https://raw.githubusercontent.com/hl7-tools/validation-report/master/README.md (200); https://raw.githubusercontent.com/hl7-tools/validation-report/master/LICENSE (404); https://raw.githubusercontent.com/hl7-tools/validation-report/main/LICENSE (404); https://api.github.com/repos/hl7-tools/validation-report (`"type": "Organization"`) | 2026-07-24 | verified (absence); org provenance unresolved |
 | F17 | HAPI FHIR's Bundle-entry `id`-vs-`fullUrl` behavior on parse is a documented, configurable parser setting, not unconditional: `ParserOptions.overrideResourceIdWithBundleEntryFullUrl` (default `true`) — when a `Bundle.entry.fullUrl` is present, the parsed resource's `id` is overridden from that `fullUrl`; set to `false`, the original resource id survives parsing unmodified. This setting only explains an *override to an equivalent value* for `urn:uuid:`-style fullUrls (the id and the uuid are the same value), not EXP-B2's actual observation. EXP-B2 (P4, `docs/experiments/EXP-B2-results.md`) found `Bundle.entry[].resource.id` dropped **entirely** (no `id` key at all, not merely re-set) on 14/14 sampled files, all using Synthea's `urn:uuid:` fullUrls — this matches a distinct, open, unresolved upstream defect, GitHub issue `hapifhir/hapi-fhir#5645` ("Id of resource entry isn't serialized when full url of entry is a urn:uuid:", reported against HAPI FHIR 5.7.9/6.10.3, no maintainer resolution found as of this check). Conclusion: the general fullUrl-overrides-id behavior is a documented, configurable default; the specific total-drop EXP-B2 measured is a known bug tied to `urn:uuid:` fullUrls specifically, not the documented override working as designed. | `docs/components.md` (HAPI FHIR), `docs/experiments/EXP-B2-results.md` (backs that file's finding retroactively) | https://hapifhir.io/hapi-fhir/apidocs/hapi-fhir-base/ca/uhn/fhir/context/ParserOptions.html (`isOverrideResourceIdWithBundleEntryFullUrl`/`setOverrideResourceIdWithBundleEntryFullUrl`, default `true`, parse-time); https://github.com/hapifhir/hapi-fhir/issues/5645 | 2026-07-24 | verified |
+| F18 | The official FHIR validator's (`hapifhir/org.hl7.fhir.core`) current stable GitHub release, as of 2026-07-24, is `6.9.12` (published 2026-07-15); its `validator_cli.jar` release asset is 187,081,756 bytes with sha256 `0e53ab1d1a6f1e35f505255c0b8ce10a35fcf27e6e96b503640f784cd07e5ad6`, computed by downloading the asset directly and hashing the bytes (not trusting a published checksum file — same discipline as F12's JDK hash). | `artifacts.lock.edn` (kind `:engine`, name `fhir-validator-cli`), `docs/experiments/EXP-C5.md` | `https://api.github.com/repos/hapifhir/org.hl7.fhir.core/releases/latest` (`tag_name: "6.9.12"`, asset `validator_cli.jar`); direct download + `sha256sum` | 2026-07-24 | verified |
 
 ========== END FILE ==========
 
@@ -4740,8 +5323,13 @@ the next gate-shaped milestone, tracked in
             [ehr-testing-tools.artifact :as artifact]
             [ehr-testing-tools.corpus.generate :as generate]
             [ehr-testing-tools.corpus.mutate :as mutate]
+            [ehr-testing-tools.corpus.intake :as intake]
             [ehr-testing-tools.corpus.operators :as operators]
-            [ehr-testing-tools.locator :as locator]))
+            [ehr-testing-tools.locator :as locator]
+            [ehr-testing-tools.gate.v2 :as gate-v2]
+            [ehr-testing-tools.gate.fhir :as gate-fhir]
+            [ehr-testing-tools.gate.report :as report])
+  (:import [java.time LocalDate]))
 
 (def cli-spec
   {:seed {:coerce :long}
@@ -4844,17 +5432,100 @@ the next gate-shaped milestone, tracked in
                       (spit (io/file output-dir "lineage" (str basename ".lineage.edn")) (pr-str lineage))
                       (recur (rest remaining) (conj processed {:file basename :lineage-id (:id lineage)})))))))))))))
 
+(defn intake-command
+  "`ehr corpus intake`: catalogs :source-dir as a foreign-corpus batch
+  labeled :label. :received defaults to today (the CLI's own impure
+  boundary -- corpus.intake/intake! itself never touches the wall
+  clock, matching corpus.generate's :reference-date discipline)."
+  [{:keys [source-dir label out received]}]
+  (intake/intake! {:source-dir source-dir :source-label label :out out
+                    :received (or received (str (LocalDate/now)))}))
+
+(defn gate-command
+  "Builds an `ehr gate <format>` command function from that format's
+  gate-file/gate-dir functions (ehr-testing-tools.gate.v2, and
+  eventually gate.fhir -- same shape). :path may name a single file or
+  a directory; either way the result is normalized into one
+  gate.report (gate-label identifies which gate ran, in :run). Writes
+  the report to :report when given (EDN, canonical -- ADR-0004).
+
+  Exit-code contract (ADR-0004's generic ok/rejected/error mapping,
+  applied here rather than special-cased): result/ok when the
+  aggregate has zero rejected files -- including an indeterminate-only
+  run, which is exit 0 by this rule, but :totals in the written/
+  returned report says so loudly, exactly as README's gate section
+  documents; result/rejected :gate-rejected the moment any file was
+  rejected. `main!`'s result->exit-code needs no gate-specific
+  handling: 0 all pass (indeterminate-only included), 1 any rejected,
+  2 an operational error from the gate-file-fn/gate-dir-fn themselves."
+  [gate-file-fn gate-dir-fn gate-label]
+  (fn [{:keys [path report]}]
+    (let [f (io/file path)
+          results-result (if (.isDirectory f)
+                            (gate-dir-fn path)
+                            (let [r (gate-file-fn path)]
+                              (if (result/ok? r)
+                                (result/ok {:results [(:payload r)]})
+                                r)))]
+      (if-not (result/ok? results-result)
+        results-result
+        (let [results (:results (:payload results-result))
+              rpt (report/build-report results {:gate gate-label :path path})]
+          (when report (spit report (pr-str rpt)))
+          (if (pos? (:rejected (:totals rpt)))
+            (result/rejected :gate-rejected rpt)
+            (result/ok rpt)))))))
+
+(def gate-v2-command
+  (gate-command gate-v2/gate-file gate-v2/gate-dir :v2))
+
+(def default-fhir-gate-out-dir
+  "target/gate-fhir")
+
+(defn fhir-gate-command
+  "`ehr gate fhir`: unlike gate.v2 (fully self-contained, no options),
+  gate.fhir needs the lockfile's artifacts plus a scratch directory
+  for the validator's raw OperationOutcome output and invocation logs
+  -- resolved here, then gate.fhir/gate-file and gate-dir are curried
+  down to the 1-arity shape gate-command expects. :out-dir defaults to
+  `target/gate-fhir` (gitignored build scratch, like `target/` already
+  is for `make pipeline`); :java-bin, when given, bypasses registry
+  resolution exactly like corpus.generate's own :java-bin override."
+  [{:keys [path report lockfile out-dir java-bin]}]
+  (let [artifacts-result (default-lockfile-artifacts lockfile)]
+    (if-not (result/ok? artifacts-result)
+      artifacts-result
+      (let [fhir-opts (cond-> {:artifacts (:payload artifacts-result)
+                                :out-dir (or out-dir default-fhir-gate-out-dir)}
+                        java-bin (assoc :java-bin java-bin))
+            gate-fn (gate-command #(gate-fhir/gate-file % fhir-opts)
+                                  #(gate-fhir/gate-dir % fhir-opts)
+                                  :fhir)]
+        (gate-fn {:path path :report report})))))
+
 (defn dispatch
   "Routes [group action] positional args to the corresponding capability
-  function with opts. The three -fn keys are injectable (tests use this
+  function with opts. The -fn keys are injectable (tests use this
   to avoid real subprocesses/network); default to the real commands."
   ([args opts] (dispatch args opts {}))
-  ([args opts {:keys [fetch-fn resolve-fn generate-fn mutate-fn]
+  ([args opts {:keys [fetch-fn resolve-fn generate-fn mutate-fn intake-fn gate-v2-fn gate-fhir-fn]
                :or {fetch-fn fetch-command
                     resolve-fn resolve-command
                     generate-fn generate/generate!
-                    mutate-fn mutate-command}}]
-   (let [[group action] args]
+                    mutate-fn mutate-command
+                    intake-fn intake-command
+                    gate-v2-fn gate-v2-command
+                    gate-fhir-fn fhir-gate-command}}]
+   (let [[group action path] args
+         ;; `ehr gate fhir PATH|DIR` / `ehr gate v2 PATH|DIR`: PATH is
+         ;; a positional third arg, not a --path flag (the CLI's other
+         ;; commands are all --flag-driven, but the prompt's own gate
+         ;; CLI contract is a trailing bare path -- honored here rather
+         ;; than silently reinterpreted as --path). An explicit --path
+         ;; opt, if given, is NOT overridden by a positional path.
+         opts (if (and (= group "gate") path (not (:path opts)))
+                (assoc opts :path path)
+                opts)]
      (case group
        "artifact" (case action
                     "fetch" (fetch-fn opts)
@@ -4863,7 +5534,12 @@ the next gate-shaped milestone, tracked in
        "corpus" (case action
                   "generate" (generate-fn opts)
                   "mutate" (mutate-fn opts)
+                  "intake" (intake-fn opts)
                   (result/error :unknown-command {:args args}))
+       "gate" (case action
+                "v2" (gate-v2-fn opts)
+                "fhir" (gate-fhir-fn opts)
+                (result/error :unknown-command {:args args}))
        (result/error :unknown-command {:args args})))))
 
 (defn render
@@ -5194,6 +5870,172 @@ the next gate-shaped milestone, tracked in
                             :environment (environment-record resolved-java-bin java-version-fn locale timezone)})]
                     (spit (io/file out-dir "manifest.edn") (pr-str m))
                     (result/ok {:manifest m :output-dir output-dir})))))))))))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_tools/corpus/intake.clj ==========
+(ns ehr-testing-tools.corpus.intake
+  "Intake capability (P5): foreign corpora -- files a consuming team
+  brings from their own pipeline, not generated by this repo's own
+  corpus.generate -- become first-class citizens of the same
+  lineage/content-hash design generated corpora already use. Nursery
+  #8 (corpus catalog): an index of corpus items (id, layer, format,
+  lineage ref, tags); meaning lives in data, not filenames.
+
+  Format sniffing is a cheap heuristic, not a validator: a file tagged
+  :fhir-json here has merely been observed to parse as JSON with a
+  top-level \"resourceType\" key -- gate.fhir, not this namespace, is
+  what actually judges conformance. Content hashing is format-aware
+  so an intaken FHIR file's catalog :id is *the same* hash
+  corpus.mutate independently computes as a mutant's :parent -- no
+  adapter, no translation layer between intake and mutation; the two
+  consume the same content-identity function, so lineage chains
+  across the intake/mutate boundary unchanged."
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [malli.core :as m]
+            [ehr-testing-tools.digest :as digest]
+            [ehr-testing-tools.corpus.mutate :as mutate]
+            [ehr-testing-tools.result :as result])
+  (:import [java.io File]))
+
+(def known-source-formats #{:fhir-json :v2-er7 :unknown})
+
+(def CatalogEntry
+  [:map
+   [:id [:re #"^[0-9a-f]{64}$"]]
+   [:path :string]
+   [:format (into [:enum] known-source-formats)]
+   [:layer [:= :foreign]]
+   [:source :string]
+   [:received :string]])
+
+(def IntakeRecord
+  [:map
+   [:source :string]
+   [:date :string]
+   [:file-count :int]
+   [:catalog-hash [:re #"^[0-9a-f]{64}$"]]])
+
+(defn valid-catalog-entry?
+  [entry]
+  (m/validate CatalogEntry entry))
+
+(defn valid-intake-record?
+  [record]
+  (m/validate IntakeRecord record))
+
+;; ---- format sniff: cheap heuristics, recorded not trusted ----
+
+(defn- fhir-json?
+  [content]
+  (try
+    (let [parsed (json/read-str content)]
+      (and (map? parsed) (contains? parsed "resourceType")))
+    (catch Exception _ false)))
+
+(defn- v2-er7?
+  "MSH-led ER7 encoding: an MSH segment starts with the literal \"MSH\"
+  immediately followed by its own field separator (canonically \"|\",
+  but ER7 allows any non-alphanumeric byte there) -- checking the 4th
+  character is non-alphanumeric is enough to distinguish a real MSH
+  segment from incidental text starting with the letters \"MSH\"."
+  [content]
+  (and (str/starts-with? content "MSH")
+       (> (count content) 3)
+       (not (Character/isLetterOrDigit (.charAt ^String content 3)))))
+
+(defn sniff-format
+  "Cheap, unvalidating format heuristic over a file's raw text content:
+  :fhir-json (parses as JSON, top-level \"resourceType\" key present),
+  :v2-er7 (starts with an MSH segment, ER7-encoded), or :unknown.
+  Recorded, not trusted -- gate.fhir/gate.v2 are the actual judges of
+  conformance; this only routes a file to the right catalog bucket."
+  [content]
+  (cond
+    (fhir-json? content) :fhir-json
+    (v2-er7? content) :v2-er7
+    :else :unknown))
+
+;; ---- content hash: format-aware, chains into corpus.mutate's own
+;; content-identity function for the one format that already has one ----
+
+(defn content-hash
+  "The catalog :id for a file's content, dispatched by sniffed format.
+  :fhir-json uses corpus.mutate/content-hash (sha256 of the parsed
+  data's canonical-JSON serialization) -- the exact function
+  corpus.mutate itself calls to compute a mutant's lineage :parent --
+  so an intaken FHIR file's catalog id and its eventual mutant's
+  :parent are the same value with no adapter. Every other format
+  hashes the file's raw bytes directly: no canonical parsed form
+  exists for v2 or unknown content yet (v2 mutation is P6)."
+  [content format]
+  (case format
+    :fhir-json (mutate/content-hash (json/read-str content))
+    (digest/sha256-string content)))
+
+;; ---- intake! ----
+
+(defn- source-files
+  "Every regular file under dir, recursively, sorted by path for a
+  deterministic catalog ordering -- foreign corpora may nest into
+  subdirectories, unlike this repo's own flat generated output trees."
+  [dir]
+  (->> (file-seq (io/file dir))
+       (filter #(.isFile ^File %))
+       (sort-by #(.getPath ^File %))))
+
+(defn- relative-path
+  "file's path relative to source-dir, forward-slash-joined
+  regardless of host path separator -- the catalog is a portable
+  record, not tied to the orchestrating host's filesystem conventions."
+  [source-dir file]
+  (let [root (str (.getCanonicalPath (io/file source-dir)) File/separator)
+        full (.getCanonicalPath ^File file)
+        rel (if (str/starts-with? full root) (subs full (count root)) full)]
+    (str/replace rel File/separator "/")))
+
+(defn- catalog-entry
+  [file source-dir source-label received]
+  (let [content (slurp file)
+        format (sniff-format content)]
+    {:id (content-hash content format)
+     :path (relative-path source-dir file)
+     :format format
+     :layer :foreign
+     :source source-label
+     :received received}))
+
+(defn intake!
+  "Catalogs every file under :source-dir as a foreign-corpus entry:
+  content hash (format-aware, see `content-hash`), format sniff,
+  {:layer :foreign :source source-label :received}. Writes
+  :out/catalog.edn (the vector of entries) and :out/intake-record.edn
+  (one batch record: source, date, file count, and the sha256 of the
+  catalog file's own persisted bytes -- hashing what's actually
+  written, same discipline as corpus.mutate's content-hash).
+
+  :received is a required, explicit date string -- never read from
+  the wall clock here, matching corpus.generate's :reference-date
+  discipline (a required, explicit, pinned input rather than ambient
+  state); the CLI shell is where wall-clock defaulting belongs, not
+  this core function.
+
+  Returns result/ok {:catalog [...] :intake-record {...} :out}."
+  [{:keys [source-dir source-label out received]}]
+  (let [files (source-files source-dir)
+        catalog (mapv #(catalog-entry % source-dir source-label received) files)
+        out-dir (io/file out)]
+    (.mkdirs out-dir)
+    (let [catalog-file (io/file out-dir "catalog.edn")]
+      (spit catalog-file (pr-str catalog))
+      (let [record {:source source-label
+                    :date received
+                    :file-count (count catalog)
+                    :catalog-hash (digest/sha256-file catalog-file)}]
+        (spit (io/file out-dir "intake-record.edn") (pr-str record))
+        (result/ok {:catalog catalog :intake-record record :out out})))))
 
 ========== END FILE ==========
 
@@ -5592,6 +6434,634 @@ the next gate-shaped milestone, tracked in
 
 ========== END FILE ==========
 
+========== FILE: ./src/ehr_testing_tools/gate/fhir.clj ==========
+(ns ehr-testing-tools.gate.fhir
+  "FHIR conformance gate (P5): the official validator
+  (`fhir-validator-cli`, `artifacts.lock.edn` kind `:engine`), run as a
+  pinned subprocess against base FHIR R4 -- no implementation guide
+  pinned in the lockfile this session; `-ig` wiring exists and is
+  tested, ready for a caller to supply IG refs once one is pinned.
+  Two-step engine discipline (pattern nursery #1): `execute` runs the
+  subprocess and preserves its raw OperationOutcome JSON verbatim on
+  disk alongside the run; `interpret` is a pure, versioned function
+  from that raw JSON to canonical findings and a verdict.
+
+  The verdict-mapping table below is DATA, versioned
+  (`verdict-mapping-version`), and cited to the results file that
+  produced it: `docs/experiments/EXP-C5-results.md`. EXP-C5's central
+  finding, applied here rather than re-litigated: the official
+  validator auto-validates against any implementation guide declared
+  in an input's own `Resource.meta.profile` (Synthea R4 output
+  declares US Core) even with no `-ig` flag given -- this is
+  documented upstream behavior (`validator_cli.jar -help`: \"profiles
+  declared in the resource... or specified on the command line\"), not
+  something this gate suppresses. Consequence, observed directly:
+  EXP-C5's own \"valid\" baseline corpus carries hundreds of
+  profile-driven `error`/`structure` issues per file (an unrecognized
+  Synthea extension against the US Core profile) alongside the small
+  number of issues an actual defect operator introduces -- this gate
+  targets whatever the validator actually checks given the input's own
+  declared profile, honestly, not a sanitized base-spec-only view."
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [ehr-testing-tools.artifact :as artifact]
+            [ehr-testing-tools.invocation :as invocation]
+            [ehr-testing-tools.gate.finding :as finding]
+            [ehr-testing-tools.result :as result])
+  (:import [java.io File]))
+
+(def engine-name "fhir-validator-cli")
+(def default-fhir-version "4.0")
+
+(def verdict-mapping-version "v1")
+(def verdict-mapping-cited-to "docs/experiments/EXP-C5-results.md")
+
+(def ^:private terminology-suppressed-patterns
+  "Diagnostics-text substrings (case-insensitive) that mark an issue as
+  terminology-suppressed offline -- EXP-C5 classified every distinct
+  {severity, code} category the validator emitted against a real
+  Synthea R4 corpus and its mutants, and these five phrases are what
+  separated every genuinely terminology-degraded issue observed from
+  every genuine base-spec/profile violation observed (none of the
+  latter matched any of these). Versioned alongside
+  `verdict-mapping-version`; a future EXP-C5 re-run that finds a new
+  phrase bumps both together."
+  ["without using server"
+   "doesn't provide any codes"
+   "in the absence of a terminology server"
+   "without terminology services"
+   "cannot be validated"])
+
+(defn- terminology-suppressed?
+  [text]
+  (let [lower (str/lower-case (or text ""))]
+    (boolean (some #(str/includes? lower %) terminology-suppressed-patterns))))
+
+;; ---- execute: two-step engine, subprocess wrapper ----
+
+(defn- resolve-java-bin
+  [artifacts {:keys [resolve-and-extract find-executable]
+              :or {resolve-and-extract artifact/resolve-and-extract
+                   find-executable artifact/find-executable}}]
+  ;; Mirrors corpus.generate/resolve-java-bin -- the same pinned
+  ;; temurin-jdk :runtime artifact, resolved through the registry, is
+  ;; what runs every JVM-based engine this repo wraps, never PATH.
+  (let [extract-result (resolve-and-extract artifacts "temurin-jdk" "17.0.19+10" {})]
+    (if-not (result/ok? extract-result)
+      extract-result
+      (let [{:keys [extracted-dir artifact]} (:payload extract-result)
+            found-result (find-executable extracted-dir "bin/java")]
+        (if-not (result/ok? found-result)
+          found-result
+          (result/ok {:path (:path (:payload found-result)) :artifact artifact}))))))
+
+(defn- resolve-igs
+  "Resolves each {:name :version} in ig-refs against artifacts (kind
+  :profile), returning result/ok [path ...] or the first rejection/
+  error encountered. Empty ig-refs resolves trivially to []."
+  [artifacts ig-refs resolve-artifact]
+  (reduce (fn [acc {:keys [name version]}]
+            (if-not (result/ok? acc)
+              (reduced acc)
+              (let [r (resolve-artifact artifacts name version)]
+                (if-not (result/ok? r)
+                  (reduced r)
+                  (result/ok (conj (:payload acc) (:path (:payload r))))))))
+          (result/ok [])
+          ig-refs))
+
+(defn execute
+  "Execute half of the two-step engine (pattern nursery #1). Resolves
+  the validator artifact (name \"fhir-validator-cli\") and the pinned
+  JVM runtime from artifacts, resolves any :ig-refs (each {:name
+  :version} against a :profile-kind artifact -- empty by default, no
+  IG pinned this session), then runs the validator as a subprocess via
+  the invocation wrapper: `-version <fhir-version> -tx n/a [-ig
+  <path>]... -output=<file> <input-path>`. The raw OperationOutcome
+  JSON is preserved verbatim on disk (:outcome-path) alongside the
+  invocation record, and read back into :raw-outcome for `interpret`.
+
+  Options: :input-path, :artifacts (a lockfile's :artifacts vector),
+  :out-dir (where the outcome JSON and invocation logs land),
+  :fhir-version (default \"4.0\"), :ig-refs (default []), :java-bin
+  (bypasses registry resolution when given, like corpus.generate),
+  :resolve-artifact, :resolve-java-bin, :run-invocation (all
+  injectable, defaulting to the real implementations).
+
+  Returns result/ok {:invocation :outcome-path :raw-outcome :engine
+  {:name :version}}, or the first failing step's result unchanged."
+  [{:keys [input-path artifacts out-dir fhir-version ig-refs java-bin
+           resolve-artifact resolve-java-bin run-invocation]
+    :or {fhir-version default-fhir-version
+         ig-refs []
+         resolve-artifact artifact/resolve
+         resolve-java-bin resolve-java-bin
+         run-invocation invocation/run!}}]
+  (let [validator-resolve (resolve-artifact artifacts engine-name "6.9.12")]
+    (if-not (result/ok? validator-resolve)
+      validator-resolve
+      (let [{:keys [path artifact]} (:payload validator-resolve)
+            java-bin-result (if java-bin
+                               (result/ok {:path java-bin :artifact nil})
+                               (resolve-java-bin artifacts {}))]
+        (if-not (result/ok? java-bin-result)
+          java-bin-result
+          (let [ig-resolve (resolve-igs artifacts ig-refs resolve-artifact)]
+            (if-not (result/ok? ig-resolve)
+              ig-resolve
+              (let [resolved-java-bin (:path (:payload java-bin-result))
+                    out (io/file out-dir)
+                    _ (.mkdirs out)
+                    input-name (.getName (io/file input-path))
+                    outcome-path (.getAbsolutePath (io/file out (str input-name ".outcome.json")))
+                    stdout-path (.getAbsolutePath (io/file out (str input-name ".validator-stdout.log")))
+                    stderr-path (.getAbsolutePath (io/file out (str input-name ".validator-stderr.log")))
+                    ig-args (mapcat (fn [ig-path] ["-ig" ig-path]) (:payload ig-resolve))
+                    args (vec (concat ["-version" fhir-version "-tx" "n/a"] ig-args
+                                       [(str "-output=" outcome-path) input-path]))
+                    invocation-result (run-invocation {:command resolved-java-bin :args (into ["-jar" path] args)
+                                                        :stdout-path stdout-path :stderr-path stderr-path})]
+                (if-not (result/ok? invocation-result)
+                  invocation-result
+                  (result/ok {:invocation (:payload invocation-result)
+                              :outcome-path outcome-path
+                              :raw-outcome (json/read-str (slurp outcome-path))
+                              :engine {:name engine-name :version (:version artifact)}}))))))))))
+
+;; ---- interpret: pure, versioned ----
+
+(defn- severity->keyword
+  [s]
+  (case s
+    "fatal" :fatal
+    "error" :error
+    "warning" :warning
+    "information" :information
+    :information))
+
+(defn- issue-message
+  [issue]
+  (or (get-in issue ["details" "text"]) (get issue "diagnostics") ""))
+
+(defn- issue-locator-path
+  "Normalizes the validator's own expression syntax -- which embeds an
+  inline resource-type/id disambiguation, e.g.
+  \"Bundle.entry[0].resource/*Patient/9f8348fd-...*/.gender\" -- by
+  stripping the /*...*/  annotation, so the resulting path
+  (\"Bundle.entry[0].resource.gender\") is directly comparable
+  (ends-with) to a mutation's own locator path
+  (\"entry[0].resource.gender\")."
+  [issue]
+  (let [raw (first (get issue "expression"))]
+    (str/replace (or raw "") #"/\*[^*]*\*/" "")))
+
+(def ^:private rejecting-severities
+  "\"fatal\" added after a contract-pairing exercise found the
+  validator emits it (not \"error\") for a resource missing
+  resourceType entirely -- FHIR's own IssueSeverity ValueSet defines
+  both; EXP-C5's own corpus and its other four operators' mutants
+  never happened to trigger it, so it wasn't in the original
+  classification table (see docs/experiments/EXP-C5-results.md's
+  dated addendum)."
+  #{"error" "fatal"})
+
+(defn- issue->classification
+  "One of :rejected (a genuine error or fatal issue), :indeterminate
+  (terminology-suppressed, any severity), or :pass (advisory
+  warning/information)."
+  [issue]
+  (let [severity (get issue "severity")
+        suppressed? (terminology-suppressed? (issue-message issue))]
+    (cond
+      suppressed? :indeterminate
+      (contains? rejecting-severities severity) :rejected
+      :else :pass)))
+
+(defn- issue->finding
+  [engine issue]
+  {:severity (severity->keyword (get issue "severity"))
+   :code (get issue "code")
+   :locator {:format :fhir :path (issue-locator-path issue)}
+   :message (issue-message issue)
+   :engine engine
+   :policy (issue->classification issue)
+   :native-ref {:expression (get issue "expression")}})
+
+(defn interpret
+  "Interpret half (pure, versioned -- see `verdict-mapping-version`,
+  cited to `verdict-mapping-cited-to`). Every issue in raw-outcome's
+  \"issue\" array becomes one finding, classified :rejected /
+  :indeterminate / :pass by `issue->classification` (recorded on the
+  finding itself as :policy, for auditability). Overall verdict is the
+  worst-of every finding's classification (gate.finding/worst-of):
+  :rejected > :indeterminate > :pass. No issues at all is :pass with
+  no findings."
+  [raw-outcome engine]
+  (let [issues (get raw-outcome "issue" [])
+        findings (mapv #(issue->finding engine %) issues)
+        verdict (finding/worst-of (map :policy findings))]
+    {:verdict verdict :findings findings}))
+
+;; ---- gate: read (never mutate) -> execute -> interpret ----
+
+(defn gate-file
+  "Gates one FHIR JSON file against opts (same shape execute takes,
+  minus :input-path -- set here from path). Reads the file only to
+  confirm it exists; never writes to it -- the Gate stage kind's own
+  law (docs/notation.md). Returns result/ok {:verdict :findings
+  :path}, or the first failing execute step's result unchanged."
+  [path opts]
+  (let [execute-result (execute (assoc opts :input-path path))]
+    (if-not (result/ok? execute-result)
+      execute-result
+      (let [{:keys [raw-outcome engine]} (:payload execute-result)]
+        (result/ok (assoc (interpret raw-outcome engine) :path (str path)))))))
+
+(defn- json-files-in
+  [dir]
+  (->> (.listFiles (io/file dir))
+       (filter #(str/ends-with? (.getName ^File %) ".json"))
+       (sort-by #(.getName ^File %))))
+
+(defn gate-dir
+  "Gates every *.json file under dir (sorted, deterministic order),
+  reusing opts for every file. Returns result/ok {:results [...]}, or
+  the first file's failing result unchanged (fail-fast, matching
+  mutate-command's own batch discipline)."
+  [dir opts]
+  (reduce (fn [acc path]
+            (if-not (result/ok? acc)
+              (reduced acc)
+              (let [r (gate-file (str path) opts)]
+                (if-not (result/ok? r)
+                  (reduced r)
+                  (result/ok (update (:payload acc) :results conj (:payload r)))))))
+          (result/ok {:results []})
+          (json-files-in dir)))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_tools/gate/finding.clj ==========
+(ns ehr-testing-tools.gate.finding
+  "The finding envelope (pattern nursery #6): one canonical shape for a
+  single conformance observation, shared by every gate engine
+  regardless of format -- {severity, code, locator, message, engine,
+  native-ref}. `gate.fhir` and `gate.v2` both interpret their engine's
+  raw output into this shape; nothing format-specific lives here.
+
+  Verdicts are the Gate stage kind's own ternary vocabulary
+  (docs/notation.md): :pass / :rejected / :indeterminate, with
+  :indeterminate first-class -- a legitimate outcome (a check that
+  could not run, e.g. terminology-suppressed offline), not an error.
+  `worst-of` is the composition law across a file's findings:
+  :rejected beats :indeterminate beats :pass."
+  (:require [malli.core :as m]))
+
+(def Severity
+  "The four values FHIR's own IssueSeverity ValueSet defines --
+  :fatal included (found during P5's contract-pairing exercise: the
+  official validator emits it for a resource missing resourceType
+  entirely, which neither EXP-C5's own corpus nor its five defect
+  operators' other mutants happened to trigger -- v2's HL7Exception
+  severities only ever surfaced :error in this repo's own testing, but
+  the shared envelope carries the full FHIR vocabulary since gate.fhir
+  needs it)."
+  [:enum :error :warning :information :fatal])
+
+(def Verdict [:enum :pass :rejected :indeterminate])
+
+(def Finding
+  [:map
+   [:severity Severity]
+   [:code :string]
+   [:locator :map]
+   [:message :string]
+   [:engine [:map [:name :string] [:version :string]]]
+   [:native-ref {:optional true} :any]])
+
+(defn valid?
+  [finding]
+  (m/validate Finding finding))
+
+(def ^:private verdict-rank {:pass 0 :indeterminate 1 :rejected 2})
+(def ^:private rank->verdict {0 :pass 1 :indeterminate 2 :rejected})
+
+(defn worst-of
+  "The Gate kind's ternary composition law across a seq of verdicts:
+  :rejected > :indeterminate > :pass. An empty seq (no findings, or no
+  files) is :pass by definition -- there is nothing to reject or leave
+  indeterminate."
+  [verdicts]
+  (if (empty? verdicts)
+    :pass
+    (rank->verdict (apply max (map verdict-rank verdicts)))))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_tools/gate/report.clj ==========
+(ns ehr-testing-tools.gate.report
+  "Corpus-level aggregation for CI consumers (P5): normalizes per-file
+  gate results (either format -- gate.fhir and gate.v2 both produce the
+  same {:path :verdict :findings [...]} shape) into one report:
+  {:run :totals :by-code :files}. EDN is canonical (ADR-0004); the CLI's
+  --json flag is a projection over this same data, not a separate code
+  path. `diff-reports` makes the CI-diffability promise real: what
+  changed between two runs of the same corpus."
+  (:require [clojure.set :as set]
+            [malli.core :as m]
+            [ehr-testing-tools.gate.finding :as finding]))
+
+(def Totals
+  [:map [:pass :int] [:rejected :int] [:indeterminate :int]])
+
+(def FileEntry
+  [:map
+   [:path :string]
+   [:verdict finding/Verdict]
+   [:finding-count :int]
+   [:id {:optional true} :string]])
+
+(def Report
+  [:map
+   [:run :map]
+   [:totals Totals]
+   [:by-code [:map-of :string :int]]
+   [:files [:vector FileEntry]]])
+
+(defn valid?
+  [report]
+  (m/validate Report report))
+
+(defn build-report
+  "results is a seq of per-file gate outcomes {:path :verdict :findings
+  [...] :id (optional)}. run is free-form metadata about this run
+  (which gate, which path/corpus was gated, etc.) -- carried through
+  verbatim as :run."
+  [results run]
+  (let [totals (reduce (fn [acc {:keys [verdict]}] (update acc verdict inc))
+                        {:pass 0 :rejected 0 :indeterminate 0}
+                        results)
+        by-code (reduce (fn [acc {:keys [findings]}]
+                          (reduce (fn [acc2 f] (update acc2 (:code f) (fnil inc 0))) acc findings))
+                        {}
+                        results)
+        files (mapv (fn [{:keys [path verdict findings id]}]
+                      (cond-> {:path path :verdict verdict :finding-count (count findings)}
+                        id (assoc :id id)))
+                    results)]
+    {:run run :totals totals :by-code by-code :files files}))
+
+;; ---- diff-reports: the CI-diffability promise made real ----
+
+(defn diff-reports
+  "Compares two corpus reports (e.g. before/after a pipeline change):
+  which files' verdict changed, which files were added/removed, and
+  which finding codes appeared/disappeared between the two runs.
+  Matches files by :path (the stable join key both reports share).
+  Returns {:changed-verdicts [{:path :from :to} ...] :files-added
+  [...] :files-removed [...] :codes-appeared [...]
+  :codes-disappeared [...]} -- every list sorted/deterministic."
+  [a b]
+  (let [a-files (into {} (map (juxt :path identity)) (:files a))
+        b-files (into {} (map (juxt :path identity)) (:files b))
+        changed (for [[path bf] (sort-by key b-files)
+                      :let [af (get a-files path)]
+                      :when (and af (not= (:verdict af) (:verdict bf)))]
+                  {:path path :from (:verdict af) :to (:verdict bf)})
+        added (sort (remove #(contains? a-files %) (keys b-files)))
+        removed (sort (remove #(contains? b-files %) (keys a-files)))
+        a-codes (set (keys (:by-code a)))
+        b-codes (set (keys (:by-code b)))]
+    {:changed-verdicts (vec changed)
+     :files-added (vec added)
+     :files-removed (vec removed)
+     :codes-appeared (vec (sort (set/difference b-codes a-codes)))
+     :codes-disappeared (vec (sort (set/difference a-codes b-codes)))}))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_tools/gate/v2.clj ==========
+(ns ehr-testing-tools.gate.v2
+  "Base-structural HL7 v2 gate (P5): HAPI HL7v2 strict/default-validation
+  parsing, plus HAPI's DefaultValidator, in-process. Pattern nursery #1
+  (two-step engines) applies even without a subprocess: `execute`
+  captures HAPI's raw parse/validate outcome verbatim (never throws --
+  every exception it can hit is caught and returned as data); `interpret`
+  is the pure, versioned function from that raw capture to canonical
+  findings/verdict. Pattern nursery #2 (invocation record) applies too,
+  in its in-process form: `execute`'s return carries the engine name and
+  version (read from the running jar's own packaged Maven pom.properties
+  on the classpath, per `docs/engine-onboarding.md` -- the version that
+  actually ran, not a value hand-copied from deps.edn) and the input's
+  content hash, even though there is no subprocess/PID/exit-code to record.
+
+  Two HAPI signals feed a gate result, discovered empirically against
+  this repo's own fixtures (see docs/experiments.md's P5 session report):
+  1. Parse-time exceptions (`ca.uhn.hl7v2.HL7Exception` and its
+     subclasses: message-structure resolution failures, encoding/
+     delimiter failures, and -- because HAPI's `defaultValidation`
+     context wires primitive-type checking into parsing itself --
+     primitive data-type violations too, e.g. a malformed DTM value).
+     Every one of these is a base-structural failure: verdict
+     `:rejected`.
+  2. Post-parse `DefaultValidator/validate`, run against an already-
+     successfully-parsed message via a collecting
+     `ValidationExceptionHandler` rather than a throw. Empty for every
+     fixture this session's probes exercised (no terminology, no
+     conformance profile at this tier -- there is little left for this
+     path to catch once parsing itself already enforces primitive
+     types). By author ruling, ANY exception this path collects is
+     `:pass`-with-findings, never `:rejected` -- a deliberate policy
+     simplification for the base-structural tier, not a claim that
+     HAPI itself always reports low severity here.
+
+  Nothing in this gate ever produces an `:indeterminate` finding: there
+  is no terminology server and no conformance profile in play at this
+  tier, so there is no check this gate can only partially resolve -- a
+  check either ran (feeding a finding) or the message failed to parse
+  at all (`:rejected`)."
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [ehr-testing-tools.digest :as digest]
+            [ehr-testing-tools.gate.finding :as finding]
+            [ehr-testing-tools.result :as result])
+  (:import [ca.uhn.hl7v2 DefaultHapiContext HL7Exception]
+           [ca.uhn.hl7v2.validation ValidationExceptionHandler]
+           [ca.uhn.hl7v2.validation.impl ValidationContextFactory]
+           [java.io File]
+           [java.util Properties]))
+
+(def engine-name "hapi-hl7v2")
+
+(defn hapi-version
+  "The running hapi-base jar's own version, read from its packaged Maven
+  pom.properties on the classpath -- the engine version that actually
+  ran (docs/engine-onboarding.md), not a value hand-maintained
+  alongside deps.edn's pin. Returns \"unknown\" if the resource isn't
+  found (e.g. a non-Maven-packaged classpath in some other build)."
+  []
+  (if-let [res (io/resource "META-INF/maven/ca.uhn.hapi/hapi-base/pom.properties")]
+    (let [props (doto (Properties.) (.load (io/input-stream res)))]
+      (.getProperty props "version"))
+    "unknown"))
+
+;; ---- execute: raw capture, never throws ----
+
+(defn- new-context
+  []
+  (doto (DefaultHapiContext.)
+    (.setValidationContext (ValidationContextFactory/defaultValidation))))
+
+(defn- collecting-handler
+  []
+  (let [store (atom [])]
+    (reify ValidationExceptionHandler
+      (onExceptions [_ exs] (swap! store into (seq exs)))
+      (hasFailed [_] (boolean (seq @store)))
+      (result [_] @store)
+      (setValidationSubject [_ _] nil))))
+
+(defn- location->raw
+  [loc]
+  (when (and loc (not (.isUnknown loc)))
+    {:segment (.getSegmentName loc)
+     :segment-repetition (.getSegmentRepetition loc)
+     :field (.getField loc)
+     :component (.getComponent loc)}))
+
+(defn- exception->raw
+  [^Exception e]
+  (let [hl7? (instance? HL7Exception e)]
+    {:class (.getName (class e))
+     :message (.getMessage e)
+     :severity (if hl7? (str (.getSeverity ^HL7Exception e)) "ERROR")
+     :location (when hl7? (location->raw (.getLocation ^HL7Exception e)))}))
+
+(defn execute
+  "Execute half of the two-step engine (pattern nursery #1). Parses
+  content with a strict/default-validation HAPI PipeParser; if parsing
+  succeeds, runs the in-process DefaultValidator against the parsed
+  message, collecting (never throwing) via a `ValidationExceptionHandler`.
+  Never throws itself -- every exception either path can raise is caught
+  and returned as data.
+
+  Returns {:engine {:name :version} :input-sha256
+  :parse-exception (nil, or {:class :message :severity :location})
+  :validation-exceptions [...]} (each entry shaped like
+  :parse-exception)."
+  [content]
+  (let [engine {:name engine-name :version (hapi-version)}
+        input-sha256 (digest/sha256-string content)]
+    (try
+      (let [ctx (new-context)
+            parser (.getPipeParser ctx)
+            msg (.parse parser content)
+            handler (collecting-handler)]
+        (.validate (.getMessageValidator ctx) msg handler)
+        {:engine engine
+         :input-sha256 input-sha256
+         :parse-exception nil
+         :validation-exceptions (mapv exception->raw (.result handler))})
+      (catch Exception e
+        {:engine engine
+         :input-sha256 input-sha256
+         :parse-exception (exception->raw e)
+         :validation-exceptions []}))))
+
+;; ---- interpret: pure, versioned ----
+
+(defn- kebab-case-class-name
+  "\"ca.uhn.hl7v2.model.DataTypeException\" -> \"data-type-exception\" --
+  the finding :code, derived from the raising exception's own simple
+  class name rather than a hand-maintained code table, so a HAPI
+  exception type this namespace hasn't seen before still produces a
+  legible code instead of silently falling into a catch-all."
+  [class-name]
+  (-> class-name
+      (str/replace #".*\." "")
+      (str/replace #"([a-z0-9])([A-Z])" "$1-$2")
+      str/lower-case))
+
+(defn- severity->keyword
+  [s]
+  (case s
+    "ERROR" :error
+    "WARNING" :warning
+    "INFO" :information
+    :error))
+
+(defn- raw->locator-path
+  "The v2 locator string for a raw exception's :location. \"MSH\" (a
+  coarse, segment-only fallback -- not further parseable by
+  locator/v2-data-path, which requires a field) when no field-level
+  location is available: message-structure-resolution and encoding
+  failures are inherently about the message header, before any
+  field-level location is even knowable."
+  [{:keys [location]}]
+  (let [{:keys [segment segment-repetition field component]} location]
+    (if (and segment (some-> field pos?))
+      (str segment
+           (when (and segment-repetition (pos? segment-repetition)) (str "[" segment-repetition "]"))
+           "-" field
+           (when (and component (pos? component)) (str "-" component)))
+      "MSH")))
+
+(defn- raw->finding
+  [engine raw]
+  {:severity (severity->keyword (:severity raw))
+   :code (kebab-case-class-name (:class raw))
+   :locator {:format :v2 :path (raw->locator-path raw)}
+   :message (:message raw)
+   :engine engine
+   :native-ref (select-keys raw [:class :location])})
+
+(defn interpret
+  "Interpret half (pure, versioned -- \"v1\", cited here since the
+  mapping below may change with a future tier). raw's :parse-exception,
+  when present, is a base-structural failure: verdict :rejected, one
+  finding built from it. Otherwise every :validation-exceptions entry
+  becomes a finding and the verdict is :pass -- see the module
+  docstring for why every collected (non-parse-failure) signal is
+  :pass-with-findings at this tier, by policy. Never :indeterminate:
+  see the module docstring."
+  [raw]
+  (let [engine (:engine raw)]
+    (if-let [pe (:parse-exception raw)]
+      {:verdict :rejected :findings [(raw->finding engine pe)]}
+      {:verdict :pass :findings (mapv #(raw->finding engine %) (:validation-exceptions raw))})))
+
+;; ---- gate: read (never mutate) -> execute -> interpret ----
+
+(defn gate-file
+  "Gates one v2 message file. Reads content and never writes to it --
+  the Gate stage kind's own law (docs/notation.md): gating never
+  modifies the datum it judges. Returns result/ok {:verdict :findings
+  :path}, or result/error :file-not-found if path doesn't name a
+  readable file -- an operational condition (ADR-0004: exceptions are
+  for programmer error, not for \"the caller passed a bad path\")."
+  [path]
+  (let [f (io/file path)]
+    (if-not (.isFile f)
+      (result/error :file-not-found {:path (str path)})
+      (let [content (slurp f)
+            raw (execute content)]
+        (result/ok (assoc (interpret raw) :path (str path)))))))
+
+(defn- hl7-files-in
+  [dir]
+  (->> (.listFiles (io/file dir))
+       (filter #(str/ends-with? (.getName ^File %) ".hl7"))
+       (sort-by #(.getName ^File %))))
+
+(defn gate-dir
+  "Gates every *.hl7 file under dir (sorted, deterministic order).
+  Returns result/ok {:results [{:verdict :findings :path} ...]}."
+  [dir]
+  (result/ok {:results (mapv #(:payload (gate-file %)) (hl7-files-in dir))}))
+
+========== END FILE ==========
+
 ========== FILE: ./src/ehr_testing_tools/invocation.clj ==========
 (ns ehr-testing-tools.invocation
   "The invocation record (pattern nursery #2): one engine-agnostic schema
@@ -5799,6 +7269,35 @@ the next gate-shaped milestone, tracked in
       (if (or (empty? segments) (some empty? segments) (some nil? parsed))
         (result/rejected :invalid-fhir-path {:path path-str})
         (result/ok (vec (mapcat identity parsed)))))))
+
+;; ---- v2 grammar (P5, first real per-format grammar beyond FHIR --
+;; pattern nursery #4): an operational SUBSET of HL7 v2's own
+;; segment/field/component addressing, matching exactly the fields
+;; ca.uhn.hl7v2.Location (HAPI's own location type, attached to every
+;; HL7Exception/ValidationException gate.v2 catches) exposes:
+;; segment name, segment repetition, field number, component. No
+;; field-repetition, no sub-component -- a genuinely fuller subset is
+;; future work; this exists because gate.v2 needs *a* way to name
+;; "this exact spot in this exact v2 message" today, mirroring why the
+;; FHIR grammar above exists.
+
+(def ^:private v2-path-re
+  #"^([A-Z][A-Z0-9]{2})(?:\[(\d+)\])?-(\d+)(?:-(\d+))?$")
+
+(defn v2-data-path
+  "Parses a v2 locator's :path string (\"PID-3\", \"PID[0]-7\",
+  \"OBX[2]-5-1\") into a [segment index field component] tuple:
+  segment (a 3-character segment id, e.g. \"PID\"), index (the
+  segment's repetition, defaulting to 0 when the [n] suffix is
+  omitted), field (the 1-based field number), component (1-based, or
+  nil when absent -- field-level, not component-level). Returns
+  result/ok [...] or result/rejected :invalid-v2-path on any string
+  outside this grammar."
+  [path-str]
+  (if-let [[_ segment index field component] (re-matches v2-path-re (or path-str ""))]
+    (result/ok [segment (if index (Long/parseLong index) 0) (Long/parseLong field)
+                (when component (Long/parseLong component))])
+    (result/rejected :invalid-v2-path {:path path-str})))
 
 ========== END FILE ==========
 
@@ -6382,6 +7881,43 @@ the next gate-shaped milestone, tracked in
     (is (result/ok? r))
     (is (= {:input "x.json"} @called))))
 
+(deftest dispatch-routes-gate-v2-test
+  (let [called (atom nil)
+        r (cli/dispatch ["gate" "v2"] {:path "test/fixtures/v2"}
+                         {:gate-v2-fn (fn [opts] (reset! called opts) (result/ok {:totals {}}))})]
+    (is (result/ok? r))
+    (is (= {:path "test/fixtures/v2"} @called))))
+
+(deftest dispatch-routes-gate-fhir-test
+  (let [called (atom nil)
+        r (cli/dispatch ["gate" "fhir"] {:path "some-corpus/"}
+                         {:gate-fhir-fn (fn [opts] (reset! called opts) (result/ok {:totals {}}))})]
+    (is (result/ok? r))
+    (is (= {:path "some-corpus/"} @called))))
+
+(deftest dispatch-gate-accepts-a-positional-path-test
+  ;; `ehr gate v2 PATH` -- PATH is the third positional arg, not a
+  ;; --path flag, matching the CLI contract as specified.
+  (let [called (atom nil)
+        r (cli/dispatch ["gate" "v2" "test/fixtures/v2"] {}
+                         {:gate-v2-fn (fn [opts] (reset! called opts) (result/ok {:totals {}}))})]
+    (is (result/ok? r))
+    (is (= "test/fixtures/v2" (:path @called)))))
+
+(deftest dispatch-gate-explicit-path-opt-not-overridden-by-positional-test
+  (let [called (atom nil)
+        r (cli/dispatch ["gate" "v2" "positional-path"] {:path "explicit-path"}
+                         {:gate-v2-fn (fn [opts] (reset! called opts) (result/ok {:totals {}}))})]
+    (is (result/ok? r))
+    (is (= "explicit-path" (:path @called)))))
+
+(deftest dispatch-routes-corpus-intake-test
+  (let [called (atom nil)
+        r (cli/dispatch ["corpus" "intake"] {:source-dir "src"}
+                         {:intake-fn (fn [opts] (reset! called opts) (result/ok {:catalog []}))})]
+    (is (result/ok? r))
+    (is (= {:source-dir "src"} @called))))
+
 ;; ---- render ----
 
 (deftest render-edn-by-default-test
@@ -6526,6 +8062,84 @@ the next gate-shaped milestone, tracked in
     (is (result/rejected? r))
     (is (= :invalid-fhir-path (:category r)))))
 
+;; ---- intake-command (`ehr corpus intake`): the real wiring, not the
+;; injected-stub path dispatch-routes-corpus-intake-test exercises ----
+
+(deftest intake-command-delegates-to-corpus-intake-with-explicit-received-test
+  (let [in-dir (temp-dir*)
+        out-dir (str (temp-dir*) "/out")
+        _ (spit (io/file in-dir "patient.json") sample-bundle-json)
+        r (cli/intake-command {:source-dir in-dir :label "acme" :out out-dir :received "2026-07-24"})]
+    (is (result/ok? r))
+    (is (= 1 (:file-count (:intake-record (:payload r)))))
+    (is (= "2026-07-24" (:date (:intake-record (:payload r)))))))
+
+(deftest intake-command-defaults-received-to-today-test
+  (let [in-dir (temp-dir*)
+        out-dir (str (temp-dir*) "/out")
+        _ (spit (io/file in-dir "patient.json") sample-bundle-json)
+        r (cli/intake-command {:source-dir in-dir :label "acme" :out out-dir})]
+    (is (result/ok? r))
+    (is (= (str (java.time.LocalDate/now)) (:date (:intake-record (:payload r)))))))
+
+;; ---- gate-command / gate-v2-command (`ehr gate v2`): builds a
+;; format-agnostic gate report over a file or directory; exit-code
+;; contract via result/ok vs result/rejected, not special-cased in
+;; result->exit-code (ADR-0004's generic mapping already does the
+;; right thing once gate-command itself signals :gate-rejected). ----
+
+(deftest gate-v2-command-gates-a-single-passing-file-test
+  (let [r (cli/gate-v2-command {:path "test/fixtures/v2/adt-a01-admit.hl7"})]
+    (is (result/ok? r))
+    (is (= {:pass 1 :rejected 0 :indeterminate 0} (:totals (:payload r))))))
+
+(deftest gate-v2-command-gates-a-directory-test
+  (let [r (cli/gate-v2-command {:path "test/fixtures/v2"})]
+    (is (result/ok? r))
+    (is (= 5 (count (:files (:payload r)))))))
+
+(deftest gate-v2-command-rejects-when-any-file-is-rejected-test
+  (let [in-dir (temp-dir*)
+        _ (spit (io/file in-dir "broken.hl7") "MSH|^~&|only-encoding-chars-broken")
+        r (cli/gate-v2-command {:path in-dir})]
+    (is (result/rejected? r))
+    (is (= :gate-rejected (:category r)))
+    (is (= 1 (cli/result->exit-code r)))))
+
+(deftest gate-v2-command-writes-report-file-when-requested-test
+  (let [out-file (str (temp-dir*) "/report.edn")
+        r (cli/gate-v2-command {:path "test/fixtures/v2/adt-a01-admit.hl7" :report out-file})]
+    (is (result/ok? r))
+    (is (.exists (io/file out-file)))
+    (is (= (:payload r) (clojure.edn/read-string (slurp out-file))))))
+
+;; ---- fhir-gate-command: threads lockfile artifacts + :out-dir into
+;; gate.fhir/gate-file|gate-dir, curried to gate-command's 1-arity
+;; shape. No real subprocess exercised here (hermetic-suite discipline
+;; -- gate.fhir's own test suite already covers execute/interpret with
+;; injected fakes); this only proves the wiring propagates a real
+;; lockfile-resolution failure correctly. ----
+
+(deftest fhir-gate-command-propagates-unknown-artifact-when-validator-not-in-lockfile-test
+  (let [lockfile (temp-lockfile [])
+        r (cli/fhir-gate-command {:path "test/fixtures/v2/adt-a01-admit.hl7" :lockfile lockfile})]
+    (is (result/rejected? r))
+    (is (= :unknown-artifact (:category r)))))
+
+(deftest fhir-gate-command-propagates-lockfile-read-failure-test
+  (let [r (cli/fhir-gate-command {:path "x.json" :lockfile "/no/such/lockfile.edn"})]
+    (is (result/error? r))
+    (is (= :not-found (:category r)))))
+
+(deftest gate-v2-command-propagates-operational-error-for-a-missing-path-test
+  ;; A path that is neither an existing file nor directory: gate-file
+  ;; on it should surface as an operational error (slurp on a missing
+  ;; file throws inside execute/gate-file's own boundary today via a
+  ;; FileNotFoundException -- exercised here to confirm the CLI
+  ;; doesn't silently swallow it as a false "pass").
+  (let [r (cli/gate-v2-command {:path "/no/such/file.hl7"})]
+    (is (not (result/ok? r)))))
+
 ;; ---- main! (the real -main body, refactored to take injectable
 ;; :dispatch-fn / :println-fn / :exit-fn so its exit-code mapping and
 ;; command routing can be unit-tested without a real dispatch, real
@@ -6583,6 +8197,194 @@ the next gate-shaped milestone, tracked in
   ;; `dispatch`, not silently no-op, when the caller doesn't inject one.
   (let [code (cli/main! ["bogus" "thing"] {:println-fn (fn [_s] nil) :exit-fn (fn [_c] nil)})]
     (is (= 2 code))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_tools/contract_pairing_test.clj ==========
+(ns ehr-testing-tools.contract-pairing-test
+  "The test this whole architecture has been building toward (P5): for
+  each of the five FHIR defect operators, mutate a real Synthea R4
+  file, gate the mutant through the real official validator
+  (fhir-validator-cli, a real subprocess -- not an injected fake),
+  and assert the gate's response matches the operator's own contract.
+  Tagged ^:integration and excluded from the default `make test` run
+  (deps.edn's :test alias, AGENTS.md's hermetic-test-suite rule) --
+  this is the first suite in the repo that genuinely needs a real
+  external engine; every other test in the repo goes through an
+  injected fake. Run explicitly with `clojure -X:test :excludes '[]'`.
+
+  Honest classification, not uniform \"rejected\": EXP-C5
+  (docs/experiments/EXP-C5-results.md) already found that
+  remove-required-element against Patient.gender detects nothing
+  (gender is min-cardinality 0 in base FHIR, not actually required),
+  so this suite uses Patient.resourceType instead -- a genuinely
+  required locator, per EXP-C5's own addendum. It also found that
+  invalid-code-value against Patient.gender IS detected offline
+  (AdministrativeGender is a base-FHIR-bundled ValueSet, not
+  terminology-server-dependent) -- contrary to the a-priori hypothesis
+  that this defect class would be terminology-suppressed; the
+  observed class is asserted here, not the anticipated one.
+
+  Assertions match on the *specific new finding* the mutation
+  introduces, never on the file's aggregate verdict alone: EXP-C5
+  found every 'valid' baseline file in this corpus already carries
+  hundreds of profile-driven errors (the validator auto-loads US Core
+  from Synthea's own declared meta.profile), so aggregate verdict
+  can't discriminate valid from mutant here -- only a specific,
+  locator-matching, newly-appeared finding can. No network isolation
+  is applied in this suite (unlike EXP-C5's own execution, which used
+  unshare -r -n specifically to *measure* offline behavior) -- the
+  FHIR package cache primed during EXP-C5 makes these runs fast
+  either way, and this suite's job is proving detection is wired
+  end-to-end, not re-measuring offline behavior."
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.data.json :as json]
+            [ehr-testing-tools.result :as result]
+            [ehr-testing-tools.artifact :as artifact]
+            [ehr-testing-tools.corpus.generate :as generate]
+            [ehr-testing-tools.corpus.mutate :as mutate]
+            [ehr-testing-tools.corpus.operators :as operators]
+            [ehr-testing-tools.gate.fhir :as gate])
+  (:import [java.io File]))
+
+(def ^:private work-dir "target/contract-pairing")
+(def ^:private lockfile-artifacts
+  (delay (:artifacts (:payload (artifact/read-lockfile "artifacts.lock.edn")))))
+
+(def ^:private base-file (atom nil))
+
+(defn- select-patient-file
+  [corpus-dir]
+  (->> (.listFiles (io/file corpus-dir "fhir"))
+       (filter #(and (str/ends-with? (.getName ^File %) ".json")
+                     (not (re-find #"hospitalInformation|practitionerInformation" (.getName ^File %)))))
+       first))
+
+(defn- generate-fixture!
+  "Once per suite run: a fresh, tiny, deterministic Synthea R4 corpus
+  (EXP-A4/EXP-B2/EXP-C5's pinned settings -- seed 100, clinician-seed
+  555, reference-date 20260101), so this suite is self-sufficient
+  (never relies on another experiment's leftover, gitignored out/
+  directory being present)."
+  [f]
+  (let [corpus-dir (str work-dir "/corpus")
+        gen-result (generate/generate! {:config-path "config/synthea/synthea.properties"
+                                         :seed 100 :clinician-seed 555 :population 1
+                                         :reference-date "20260101" :output-dir corpus-dir})]
+    (if-not (result/ok? gen-result)
+      (throw (ex-info "contract-pairing fixture: corpus generation failed -- run `ehr artifact fetch` for synthea/temurin-jdk first" gen-result))
+      (reset! base-file (.getAbsolutePath (select-patient-file corpus-dir)))))
+  (f))
+
+(use-fixtures :once generate-fixture!)
+
+(defn- mutate-and-gate!
+  "Mutates @base-file at locator-path with operator-id, writes the
+  mutant, gates it through the real validator. Returns {:mutant-path
+  :outcome}."
+  [operator-id locator-path]
+  (let [base-data (json/read-str (slurp @base-file))
+        operator (operators/lookup operator-id "1")
+        mutate-result (mutate/mutate base-data operator {:format :fhir :path locator-path})]
+    (when-not (result/ok? mutate-result)
+      (throw (ex-info "contract-pairing: mutate failed" mutate-result)))
+    (let [mutant (:mutant (:payload mutate-result))
+          mutant-path (str work-dir "/" (name operator-id) "-mutant.json")
+          _ (io/make-parents mutant-path)
+          _ (spit mutant-path (json/write-str mutant))
+          gate-result (gate/gate-file mutant-path {:artifacts @lockfile-artifacts :out-dir work-dir})]
+      (when-not (result/ok? gate-result)
+        (throw (ex-info "contract-pairing: gate failed" gate-result)))
+      {:mutant-path mutant-path :outcome (:payload gate-result)})))
+
+(defn- finding-matching-locator
+  [findings locator-suffix]
+  (filter #(str/ends-with? (:path (:locator %)) locator-suffix) findings))
+
+;; ---- structurally detectable contracts: expect :rejected, with a
+;; new finding whose locator matches the mutation's own locator and
+;; whose code is in a small expected set derived from EXP-C5's
+;; observations ----
+
+(deftest ^:integration duplicate-element-contract-test
+  (let [{:keys [outcome]} (mutate-and-gate! :duplicate-element "entry[0].resource.gender")
+        matches (finding-matching-locator (:findings outcome) "entry[0].resource.gender")]
+    (is (= :rejected (:verdict outcome)))
+    (is (seq matches) "expected a finding whose locator matches the mutation's own locator")
+    (is (some #(= "invalid" (:code %)) matches))
+    (is (some #(= :rejected (:policy %)) matches))))
+
+(deftest ^:integration malformed-date-contract-test
+  (let [{:keys [outcome]} (mutate-and-gate! :malformed-date "entry[0].resource.birthDate")
+        matches (finding-matching-locator (:findings outcome) "entry[0].resource.birthDate")]
+    (is (= :rejected (:verdict outcome)))
+    (is (seq matches))
+    (is (some #(= "invalid" (:code %)) matches))
+    (is (some #(= :rejected (:policy %)) matches))))
+
+(deftest ^:integration wrong-type-value-contract-test
+  (let [{:keys [outcome]} (mutate-and-gate! :wrong-type-value "entry[0].resource.multipleBirthBoolean")
+        ;; the validator addresses this choice-type element as
+        ;; \"multipleBirth[x]\" in its own expression syntax, not the
+        ;; JSON-serialized field name -- match on the resource-level
+        ;; path prefix instead of the exact field name.
+        matches (finding-matching-locator (:findings outcome) "entry[0].resource.multipleBirth[x]")]
+    (is (= :rejected (:verdict outcome)))
+    (is (seq matches))
+    (is (some #(= "invalid" (:code %)) matches))))
+
+(deftest ^:integration remove-required-element-contract-test
+  ;; EXP-C5's addendum: Patient.gender is min-cardinality 0 in base
+  ;; FHIR -- removing it detects nothing, an operator/locator-choice
+  ;; finding, not a gate limitation. Patient.resourceType IS
+  ;; genuinely required (min=1 on every FHIR resource); this contract
+  ;; test uses that locator so remove-required-element's own
+  ;; :violates contract is tested honestly.
+  (let [{:keys [outcome]} (mutate-and-gate! :remove-required-element "entry[0].resource.resourceType")
+        matches (finding-matching-locator (:findings outcome) "entry[0].resource")]
+    (is (= :rejected (:verdict outcome)))
+    (is (seq matches) "expected a finding at/near the resource whose resourceType was removed")
+    (is (some #(#{"invalid" "structure"} (:code %)) matches))
+    (is (some #(#{:fatal :error} (:severity %)) matches)
+        "FHIR's IssueSeverity defines both fatal and error; the validator uses fatal here")))
+
+;; ---- terminology-dependent contract: assert the OBSERVED class,
+;; documented honestly even where it contradicts the a-priori
+;; hypothesis ----
+
+(deftest ^:integration invalid-code-value-contract-test
+  ;; Undetectable-at-this-tier does NOT hold for every code violation:
+  ;; EXP-C5 found Patient.gender is bound to AdministrativeGender, a
+  ;; small ValueSet bundled with the base FHIR core package -- checkable
+  ;; fully offline, with no terminology server. This defect IS detected
+  ;; at the base/offline tier for this specific locator, contrary to
+  ;; the general expectation that invalid-code-value is terminology-
+  ;; suppressed offline. A locator bound to a terminology-server-
+  ;; dependent code system (e.g. a LOINC- or SNOMED-bound
+  ;; Observation.code) would plausibly land :indeterminate instead --
+  ;; untested here, out of this session's scope (no such locator in
+  ;; the single-patient fixture this suite generates).
+  (let [{:keys [outcome]} (mutate-and-gate! :invalid-code-value "entry[0].resource.gender")
+        matches (finding-matching-locator (:findings outcome) "entry[0].resource.gender")]
+    (is (= :rejected (:verdict outcome))
+        "OBSERVED class (EXP-C5): detected, not indeterminate -- AdministrativeGender is base-bundled")
+    (is (seq matches))
+    (is (some #(#{"code-invalid" "not-found"} (:code %)) matches))
+    (is (some #(= :rejected (:policy %)) matches))))
+
+;; ---- the Gate stage kind law (docs/notation.md): gating never
+;; modifies the datum it judges -- tested here against the REAL
+;; engine, not just the unit-level fakes gate.fhir's own test suite
+;; already covers this with ----
+
+(deftest ^:integration gate-fhir-never-modifies-its-input-test
+  (let [{:keys [mutant-path]} (mutate-and-gate! :duplicate-element "entry[0].resource.gender")
+        before (slurp mutant-path)
+        _ (gate/gate-file mutant-path {:artifacts @lockfile-artifacts :out-dir work-dir})
+        after (slurp mutant-path)]
+    (is (= before after))))
 
 ========== END FILE ==========
 
@@ -6979,6 +8781,148 @@ the next gate-shaped milestone, tracked in
                                             :output-dir out-dir}))]
     (is (result/ok? r))
     (is (.isDirectory (io/file out-dir)))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_tools/corpus/intake_test.clj ==========
+(ns ehr-testing-tools.corpus.intake-test
+  "Loading corpus.operators registers the seed catalog (same convention
+  as mutate-test) -- the lineage-chaining test below calls corpus.mutate
+  directly against an intaken file, so the registry must be populated."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.java.io :as io]
+            [clojure.edn :as edn]
+            [clojure.data.json :as json]
+            [clojure.string]
+            [ehr-testing-tools.result :as result]
+            [ehr-testing-tools.digest :as digest]
+            [ehr-testing-tools.corpus.operators :as operators]
+            [ehr-testing-tools.corpus.mutate :as mutate]
+            [ehr-testing-tools.corpus.intake :as intake])
+  (:import [java.io File]))
+
+(defn- temp-dir []
+  (let [f (File/createTempFile "intake-test" "")]
+    (.delete f)
+    (.mkdirs f)
+    (.getAbsolutePath f)))
+
+(def sample-bundle-json
+  "{\"resourceType\":\"Bundle\",\"type\":\"transaction\",\"entry\":[{\"resource\":{\"resourceType\":\"Patient\",\"id\":\"p1\",\"gender\":\"female\"}}]}")
+
+(def sample-v2-message
+  "MSH|^~\\&|SND|FAC|RCV|FAC|20260724120000||ADT^A01|MSG00001|P|2.4\rEVN|A01|20260724120000\rPID|1||123456||Doe^John||19800101|M\r")
+
+;; ---- sniff-format ----
+
+(deftest sniff-format-detects-fhir-json-test
+  (is (= :fhir-json (intake/sniff-format sample-bundle-json))))
+
+(deftest sniff-format-detects-v2-er7-test
+  (is (= :v2-er7 (intake/sniff-format sample-v2-message))))
+
+(deftest sniff-format-falls-back-to-unknown-test
+  (is (= :unknown (intake/sniff-format "just some plain text, not FHIR or v2")))
+  (is (= :unknown (intake/sniff-format "")))
+  (is (= :unknown (intake/sniff-format "[1, 2, 3]")) "valid JSON, but not a FHIR-shaped object"))
+
+;; ---- content-hash: format-aware, and the FHIR branch must be THE
+;; SAME function corpus.mutate itself uses, not merely an
+;; equal-valued reimplementation -- this is what lets lineage chain
+;; across the intake/mutate boundary with no adapter. ----
+
+(deftest content-hash-fhir-json-matches-mutate-content-hash-test
+  (is (= (mutate/content-hash (json/read-str sample-bundle-json))
+         (intake/content-hash sample-bundle-json :fhir-json))))
+
+(deftest content-hash-non-fhir-hashes-raw-bytes-test
+  (is (re-matches #"^[0-9a-f]{64}$" (intake/content-hash sample-v2-message :v2-er7)))
+  (is (re-matches #"^[0-9a-f]{64}$" (intake/content-hash "whatever" :unknown))))
+
+;; ---- intake! ----
+
+(deftest intake-catalogs-every-file-with-format-and-hash-test
+  (let [src (temp-dir)
+        out (temp-dir)
+        _ (spit (io/file src "patient.json") sample-bundle-json)
+        _ (spit (io/file src "adt.hl7") sample-v2-message)
+        _ (spit (io/file src "notes.txt") "not clinical data at all")
+        r (intake/intake! {:source-dir src :source-label "acme-pipeline"
+                            :out out :received "2026-07-24"})]
+    (is (result/ok? r))
+    (let [catalog (:catalog (:payload r))]
+      (is (= 3 (count catalog)))
+      (is (every? intake/valid-catalog-entry? catalog))
+      (is (every? #(= :foreign (:layer %)) catalog))
+      (is (every? #(= "acme-pipeline" (:source %)) catalog))
+      (is (every? #(= "2026-07-24" (:received %)) catalog))
+      (is (= #{:fhir-json :v2-er7 :unknown} (set (map :format catalog)))))))
+
+(deftest intake-catalog-entry-id-is-the-format-aware-content-hash-test
+  (let [src (temp-dir)
+        out (temp-dir)
+        _ (spit (io/file src "patient.json") sample-bundle-json)
+        r (intake/intake! {:source-dir src :source-label "x" :out out :received "2026-07-24"})
+        entry (first (:catalog (:payload r)))]
+    (is (= (mutate/content-hash (json/read-str sample-bundle-json)) (:id entry)))))
+
+(deftest intake-writes-catalog-and-intake-record-edn-test
+  (let [src (temp-dir)
+        out (temp-dir)
+        _ (spit (io/file src "patient.json") sample-bundle-json)
+        r (intake/intake! {:source-dir src :source-label "acme" :out out :received "2026-07-24"})]
+    (is (result/ok? r))
+    (let [written-catalog (edn/read-string (slurp (io/file out "catalog.edn")))
+          written-record (edn/read-string (slurp (io/file out "intake-record.edn")))]
+      (is (= (:catalog (:payload r)) written-catalog))
+      (is (= (:intake-record (:payload r)) written-record))
+      (is (intake/valid-intake-record? written-record))
+      (is (= "acme" (:source written-record)))
+      (is (= "2026-07-24" (:date written-record)))
+      (is (= 1 (:file-count written-record)))
+      (is (= (:catalog-hash written-record)
+             (digest/sha256-file (io/file out "catalog.edn")))))))
+
+(deftest intake-handles-empty-source-dir-test
+  (let [src (temp-dir)
+        out (temp-dir)
+        r (intake/intake! {:source-dir src :source-label "empty" :out out :received "2026-07-24"})]
+    (is (result/ok? r))
+    (is (= 0 (:file-count (:intake-record (:payload r)))))
+    (is (= [] (:catalog (:payload r))))))
+
+(deftest intake-catalogs-nested-directories-with-relative-paths-test
+  (let [src (temp-dir)
+        out (temp-dir)
+        _ (.mkdirs (io/file src "nested" "deeper"))
+        _ (spit (io/file src "nested" "deeper" "patient.json") sample-bundle-json)
+        r (intake/intake! {:source-dir src :source-label "x" :out out :received "2026-07-24"})
+        entry (first (:catalog (:payload r)))]
+    (is (result/ok? r))
+    (is (= 1 (count (:catalog (:payload r)))))
+    (is (= "nested/deeper/patient.json" (clojure.string/replace (:path entry) "\\" "/")))))
+
+;; ---- lineage roots: an intaken FHIR file chains to its catalog
+;; content hash exactly as with generated files -- corpus.mutate
+;; needs no adapter, no special-casing, to operate on intaken data. ----
+
+(deftest intaken-fhir-file-mutant-lineage-chains-to-its-catalog-id-test
+  (let [src (temp-dir)
+        out (temp-dir)
+        _ (spit (io/file src "patient.json") sample-bundle-json)
+        intake-result (intake/intake! {:source-dir src :source-label "acme"
+                                        :out out :received "2026-07-24"})
+        entry (first (:catalog (:payload intake-result)))
+        ;; corpus.mutate operates unchanged: read the intaken file the
+        ;; same way any other FHIR JSON input would be read, mutate it.
+        base-data (json/read-str (slurp (io/file src (:path entry))))
+        operator (operators/lookup :remove-required-element "1")
+        mutate-result (mutate/mutate base-data operator
+                                      {:format :fhir :path "entry[0].resource.gender"})]
+    (is (result/ok? mutate-result))
+    (let [lineage (:lineage (:payload mutate-result))]
+      (is (= (:id entry) (:parent lineage))
+          "the mutant's lineage :parent must equal the intake catalog's own content-hash id -- same hash space, no adapter"))))
 
 ========== END FILE ==========
 
@@ -7403,6 +9347,553 @@ the next gate-shaped milestone, tracked in
 
 ========== END FILE ==========
 
+========== FILE: ./test/ehr_testing_tools/gate/fhir_test.clj ==========
+(ns ehr-testing-tools.gate.fhir-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.java.io :as io]
+            [ehr-testing-tools.result :as result]
+            [ehr-testing-tools.gate.finding :as finding]
+            [ehr-testing-tools.gate.fhir :as gate])
+  (:import [java.io File]))
+
+(defn- temp-dir []
+  (let [f (File/createTempFile "gate-fhir-test" "")]
+    (.delete f)
+    (.mkdirs f)
+    (.getAbsolutePath f)))
+
+(def validator-artifact
+  {:kind :engine :name "fhir-validator-cli" :version "6.9.12"
+   :sha256 (apply str (repeat 64 "c"))
+   :source "https://example.invalid/validator_cli.jar"
+   :acquired "2026-07-24" :license-status :verified})
+
+;; ---- fixture OperationOutcome issues, one per distinct {severity,
+;; code} category EXP-C5 actually observed (docs/experiments/EXP-C5-
+;; results.md) -- diagnostics text copied verbatim from that
+;; classification table, not invented, so these tests exercise the
+;; real terminology-suppression-detection patterns against real
+;; observed strings. ----
+
+(defn- issue
+  [severity code expression details-text]
+  {"severity" severity "code" code "expression" [expression]
+   "details" {"text" details-text}})
+
+(def genuine-structure-error
+  (issue "error" "structure" "Bundle.entry[0].resource/*Patient/u*/.extension[5]"
+         "The extension http://synthetichealth.github.io/synthea/disability-adjusted-life-years could not be found so is not allowed here"))
+
+(def genuine-invalid-error
+  (issue "error" "invalid" "Bundle.entry[0].resource/*Patient/u*/.birthDate"
+         "Not a valid date format: '2026-13-45'"))
+
+(def genuine-code-invalid-error
+  (issue "error" "code-invalid" "Bundle.entry[0].resource/*Patient/u*/.gender"
+         "The value provided ('not-a-valid-code-9f3a1c') was not found in the value set 'AdministrativeGender' (http://hl7.org/fhir/ValueSet/administrative-gender|4.0.1), and a code is required from this value set"))
+
+(def terminology-suppressed-warning
+  (issue "warning" "code-invalid" "Bundle.entry[0].resource/*Patient/u*/.extension[0].extension[0].value.ofType(Coding)"
+         "Unable to validate code without using server because: Resolved system urn:oid:2.16.840.1.113883.6.238 (v3.0.2), but the definition doesn't include any codes, so the code has not been validated"))
+
+(def terminology-suppressed-information
+  (issue "information" "unknown" "Bundle.entry[0].resource/*Patient/u*/.extension[0].extension[0].value.ofType(Coding)"
+         "The definition for the Code System with URI 'urn:oid:2.16.840.1.113883.6.238' from 'hl7.terminology.r4#6.2.0' doesn't provide any codes so the code cannot be validated"))
+
+(def advisory-warning
+  (issue "warning" "invariant" "Bundle.entry[1].resource/*Encounter/u*/"
+         "Constraint failed: dom-6: 'A resource should have narrative for robust management' (defined in http://hl7.org/fhir/StructureDefinition/DomainResource) (Best Practice Recommendation)"))
+
+(def advisory-information
+  (issue "information" "structure" "Bundle.entry[1].resource/*Encounter/u*/.subject"
+         "Details for urn:uuid:u matching against profile http://hl7.org/fhir/StructureDefinition/Patient|4.0.1"))
+
+(def genuine-fatal-error
+  ;; Found via P5's Step 6 contract-pairing exercise, not the original
+  ;; EXP-C5 corpus: removing Bundle.entry[0].resource.resourceType
+  ;; produces this, at severity "fatal" (not "error") -- FHIR's own
+  ;; IssueSeverity ValueSet defines both.
+  (issue "fatal" "invalid" "Bundle.entry[0].resource" "Unable to find resourceType property"))
+
+(defn- outcome
+  [& issues]
+  {"resourceType" "OperationOutcome" "issue" (vec issues)})
+
+(def sample-engine {:name "fhir-validator-cli" :version "6.9.12"})
+
+;; ---- interpret: pure, versioned, the EXP-C5-derived verdict-mapping
+;; table ----
+
+(deftest interpret-no-issues-is-pass-test
+  (let [o (gate/interpret (outcome) sample-engine)]
+    (is (= :pass (:verdict o)))
+    (is (= [] (:findings o)))))
+
+(deftest interpret-genuine-error-is-rejected-test
+  (let [o (gate/interpret (outcome genuine-structure-error) sample-engine)]
+    (is (= :rejected (:verdict o)))
+    (is (= 1 (count (:findings o))))
+    (is (finding/valid? (first (:findings o))))
+    (is (= :error (:severity (first (:findings o)))))))
+
+(deftest interpret-fatal-severity-is-rejected-like-error-test
+  (let [o (gate/interpret (outcome genuine-fatal-error) sample-engine)]
+    (is (= :rejected (:verdict o)))
+    (is (= :fatal (:severity (first (:findings o)))))
+    (is (= :rejected (:policy (first (:findings o)))))))
+
+(deftest interpret-genuine-invalid-and-code-invalid-errors-are-rejected-test
+  (testing "structural type/format violation"
+    (is (= :rejected (:verdict (gate/interpret (outcome genuine-invalid-error) sample-engine)))))
+  (testing "a code violating a base-FHIR-bundled ValueSet (AdministrativeGender) -- NOT terminology-suppressed"
+    (let [o (gate/interpret (outcome genuine-code-invalid-error) sample-engine)]
+      (is (= :rejected (:verdict o)))
+      (is (= :rejected (:policy (first (:findings o))) )
+          "the finding itself should record which mapping-policy classified it, for auditability")))
+  )
+
+(deftest interpret-terminology-suppressed-issues-are-indeterminate-test
+  (testing "warning-severity, 'without using server' diagnostics"
+    (let [o (gate/interpret (outcome terminology-suppressed-warning) sample-engine)]
+      (is (= :indeterminate (:verdict o)))
+      (is (= :indeterminate (:policy (first (:findings o)))))))
+  (testing "information-severity, 'doesn't provide any codes' diagnostics"
+    (is (= :indeterminate (:verdict (gate/interpret (outcome terminology-suppressed-information) sample-engine))))))
+
+(deftest interpret-advisory-warning-and-information-are-pass-with-findings-test
+  (let [o (gate/interpret (outcome advisory-warning advisory-information) sample-engine)]
+    (is (= :pass (:verdict o)))
+    (is (= 2 (count (:findings o))))))
+
+(deftest interpret-worst-of-across-mixed-issues-test
+  (let [o (gate/interpret (outcome advisory-warning genuine-structure-error terminology-suppressed-warning) sample-engine)]
+    (is (= :rejected (:verdict o)) "rejected beats indeterminate beats pass")
+    (is (= 3 (count (:findings o))))))
+
+(deftest interpret-locator-strips-the-validator-own-type-disambiguation-test
+  ;; The validator's own expression syntax embeds
+  ;; \"/*ResourceType/id*/\" inline; interpret normalizes it away so the
+  ;; finding's locator is directly comparable to a mutation's own
+  ;; locator (\"entry[0].resource.gender\", not
+  ;; \"entry[0].resource/*Patient/uuid*/.gender\").
+  (let [o (gate/interpret (outcome genuine-code-invalid-error) sample-engine)
+        loc (:locator (first (:findings o)))]
+    (is (= :fhir (:format loc)))
+    (is (clojure.string/ends-with? (:path loc) "entry[0].resource.gender"))
+    (is (not (clojure.string/includes? (:path loc) "/*")))))
+
+(deftest interpret-finding-carries-engine-and-native-ref-test
+  (let [o (gate/interpret (outcome genuine-structure-error) sample-engine)
+        f (first (:findings o))]
+    (is (= sample-engine (:engine f)))
+    (is (some? (:native-ref f)))))
+
+;; ---- execute: two-step engine, subprocess wrapper (injectable, per
+;; corpus.generate's own testing convention -- no real subprocess in
+;; the hermetic suite) ----
+
+(defn- ok-invocation []
+  (result/ok {:command "java" :args ["-jar" "validator_cli.jar"]
+              :exit-code 0 :duration-ms 42 :started-at "2026-07-24T00:00:00Z"
+              :stdout-path "/fake/out.log" :stderr-path "/fake/err.log"
+              :stdout-sha256 (apply str (repeat 64 "0"))
+              :stderr-sha256 (apply str (repeat 64 "0"))}))
+
+(deftest execute-happy-path-reads-back-the-outcome-file-test
+  (let [out-dir (temp-dir)
+        input-path (str out-dir "/input.json")
+        _ (spit input-path "{\"resourceType\":\"Bundle\"}")
+        outcome-json "{\"resourceType\":\"OperationOutcome\",\"issue\":[]}"
+        run-invocation (fn [{:keys [args]}]
+                         ;; the real validator writes -output=<path>;
+                         ;; the fake mimics that side effect so
+                         ;; execute's read-back has something real to
+                         ;; read, exactly like corpus.generate's stubs
+                         ;; simulate Synthea writing its output tree.
+                         (let [output-arg (first (filter #(clojure.string/starts-with? % "-output=") args))
+                               output-path (subs output-arg (count "-output="))]
+                           (spit output-path outcome-json))
+                         (ok-invocation))
+        r (gate/execute {:input-path input-path
+                          :artifacts [validator-artifact]
+                          :java-bin "/fake/java"
+                          :out-dir out-dir
+                          :run-invocation run-invocation
+                          :resolve-artifact (fn [_artifacts _name _version]
+                                              (result/ok {:path "/fake/validator_cli.jar" :artifact validator-artifact}))})]
+    (is (result/ok? r))
+    (is (= {"resourceType" "OperationOutcome" "issue" []} (:raw-outcome (:payload r))))
+    (is (= "fhir-validator-cli" (:name (:engine (:payload r)))))
+    (is (= "6.9.12" (:version (:engine (:payload r)))))))
+
+(deftest execute-invokes-with-tx-n-a-and-base-r4-version-test
+  (let [out-dir (temp-dir)
+        input-path (str out-dir "/input.json")
+        _ (spit input-path "{}")
+        captured-args (atom nil)
+        run-invocation (fn [{:keys [args]}]
+                         (reset! captured-args args)
+                         (let [output-arg (first (filter #(clojure.string/starts-with? % "-output=") args))]
+                           (spit (subs output-arg (count "-output=")) "{\"resourceType\":\"OperationOutcome\",\"issue\":[]}"))
+                         (ok-invocation))]
+    (gate/execute {:input-path input-path :artifacts [validator-artifact] :java-bin "/fake/java"
+                   :out-dir out-dir :run-invocation run-invocation
+                   :resolve-artifact (fn [_ _ _] (result/ok {:path "/fake/validator_cli.jar" :artifact validator-artifact}))})
+    (is (clojure.string/includes? (clojure.string/join " " @captured-args) "-version 4.0"))
+    (is (clojure.string/includes? (clojure.string/join " " @captured-args) "-tx n/a"))))
+
+(deftest execute-propagates-artifact-resolve-failure-test
+  (let [r (gate/execute {:input-path "x.json" :artifacts []
+                         :resolve-artifact (fn [_ _ _] (result/rejected :not-cached {}))})]
+    (is (result/rejected? r))
+    (is (= :not-cached (:category r)))))
+
+(deftest execute-propagates-invocation-failure-test
+  (let [out-dir (temp-dir)
+        r (gate/execute {:input-path "x.json" :artifacts [validator-artifact]
+                         :java-bin "/fake/java" :out-dir out-dir
+                         :resolve-artifact (fn [_ _ _] (result/ok {:path "/fake/validator_cli.jar" :artifact validator-artifact}))
+                         :run-invocation (fn [_] (result/error :spawn-failed {:message "no java"}))})]
+    (is (result/error? r))
+    (is (= :spawn-failed (:category r)))))
+
+;; ---- IG machinery: -ig wiring, unit tested with a stub (no IG
+;; pinned in artifacts.lock.edn this session) ----
+
+(deftest execute-wires-ig-refs-as-dash-ig-args-test
+  (let [out-dir (temp-dir)
+        input-path (str out-dir "/input.json")
+        _ (spit input-path "{}")
+        captured-args (atom nil)
+        run-invocation (fn [{:keys [args]}]
+                         (reset! captured-args args)
+                         (let [output-arg (first (filter #(clojure.string/starts-with? % "-output=") args))]
+                           (spit (subs output-arg (count "-output=")) "{\"resourceType\":\"OperationOutcome\",\"issue\":[]}"))
+                         (ok-invocation))
+        ig-artifact {:kind :profile :name "some.ig" :version "1.0.0"
+                     :sha256 (apply str (repeat 64 "d")) :source "https://example.invalid/ig.tgz"
+                     :acquired "2026-07-24" :license-status :verified}]
+    (gate/execute {:input-path input-path :artifacts [validator-artifact ig-artifact]
+                   :java-bin "/fake/java" :out-dir out-dir :run-invocation run-invocation
+                   :ig-refs [{:name "some.ig" :version "1.0.0"}]
+                   :resolve-artifact (fn [artifacts name version]
+                                      (result/ok {:path (str "/fake/" name "-" version)
+                                                  :artifact (first (filter #(= name (:name %)) artifacts))}))})
+    (is (some #{"-ig"} @captured-args))
+    (is (some #{"/fake/some.ig-1.0.0"} @captured-args))))
+
+(deftest execute-propagates-ig-resolve-failure-test
+  (let [out-dir (temp-dir)
+        input-path (str out-dir "/input.json")
+        _ (spit input-path "{}")]
+    (let [r (gate/execute {:input-path input-path :artifacts [validator-artifact]
+                           :java-bin "/fake/java" :out-dir out-dir
+                           :ig-refs [{:name "missing.ig" :version "1.0.0"}]
+                           :resolve-artifact (fn [artifacts name version]
+                                              (if (= name "fhir-validator-cli")
+                                                (result/ok {:path "/fake/validator_cli.jar" :artifact validator-artifact})
+                                                (result/rejected :unknown-artifact {:name name :version version})))})]
+      (is (result/rejected? r))
+      (is (= :unknown-artifact (:category r))))))
+
+;; ---- gate-file: read (never mutate) -> execute -> interpret ----
+
+(deftest gate-file-does-not-modify-its-input-test
+  (let [out-dir (temp-dir)
+        input-path (str out-dir "/input.json")
+        content "{\"resourceType\":\"Bundle\",\"entry\":[]}"
+        _ (spit input-path content)
+        run-invocation (fn [{:keys [args]}]
+                         (let [output-arg (first (filter #(clojure.string/starts-with? % "-output=") args))]
+                           (spit (subs output-arg (count "-output=")) "{\"resourceType\":\"OperationOutcome\",\"issue\":[]}"))
+                         (ok-invocation))
+        before (slurp input-path)
+        _ (gate/gate-file input-path {:artifacts [validator-artifact] :java-bin "/fake/java" :out-dir out-dir
+                                       :run-invocation run-invocation
+                                       :resolve-artifact (fn [_ _ _] (result/ok {:path "/fake/v.jar" :artifact validator-artifact}))})
+        after (slurp input-path)]
+    (is (= before after))))
+
+(deftest gate-file-happy-path-test
+  (let [out-dir (temp-dir)
+        input-path (str out-dir "/input.json")
+        _ (spit input-path "{}")
+        run-invocation (fn [{:keys [args]}]
+                         (let [output-arg (first (filter #(clojure.string/starts-with? % "-output=") args))]
+                           (spit (subs output-arg (count "-output=")) "{\"resourceType\":\"OperationOutcome\",\"issue\":[]}"))
+                         (ok-invocation))
+        r (gate/gate-file input-path {:artifacts [validator-artifact] :java-bin "/fake/java" :out-dir out-dir
+                                       :run-invocation run-invocation
+                                       :resolve-artifact (fn [_ _ _] (result/ok {:path "/fake/v.jar" :artifact validator-artifact}))})]
+    (is (result/ok? r))
+    (is (= :pass (:verdict (:payload r))))
+    (is (= input-path (:path (:payload r))))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_tools/gate/finding_test.clj ==========
+(ns ehr-testing-tools.gate.finding-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [ehr-testing-tools.gate.finding :as finding]))
+
+(defn- sample-finding
+  [severity]
+  {:severity severity :code "test-code"
+   :locator {:format :fhir :path "Patient.gender"}
+   :message "a message"
+   :engine {:name "test-engine" :version "1.0"}})
+
+(deftest valid-finding-passes-schema-test
+  (is (finding/valid? (sample-finding :error))))
+
+(deftest invalid-severity-fails-schema-test
+  (is (not (finding/valid? (assoc (sample-finding :error) :severity :bogus)))))
+
+(deftest native-ref-is-optional-test
+  (is (finding/valid? (assoc (sample-finding :warning) :native-ref {:issue-index 0}))))
+
+;; ---- worst-of: the Gate kind's ternary composition law ----
+
+(deftest worst-of-empty-is-pass-test
+  (is (= :pass (finding/worst-of []))))
+
+(deftest worst-of-all-pass-is-pass-test
+  (is (= :pass (finding/worst-of [:pass :pass]))))
+
+(deftest worst-of-any-indeterminate-beats-pass-test
+  (is (= :indeterminate (finding/worst-of [:pass :indeterminate :pass]))))
+
+(deftest worst-of-any-rejected-beats-everything-test
+  (is (= :rejected (finding/worst-of [:pass :indeterminate :rejected])))
+  (is (= :rejected (finding/worst-of [:rejected])))
+  (is (= :rejected (finding/worst-of [:rejected :indeterminate]))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_tools/gate/report_test.clj ==========
+(ns ehr-testing-tools.gate.report-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [ehr-testing-tools.gate.report :as report]))
+
+(defn- finding [code]
+  {:severity :error :code code :locator {:format :fhir :path "x"}
+   :message "m" :engine {:name "e" :version "1"}})
+
+(def sample-results
+  [{:path "a.json" :verdict :pass :findings []}
+   {:path "b.json" :verdict :rejected :findings [(finding "structure") (finding "structure")]}
+   {:path "c.json" :verdict :indeterminate :findings [(finding "code-invalid")]}])
+
+;; ---- build-report ----
+
+(deftest build-report-computes-totals-test
+  (let [r (report/build-report sample-results {:path "corpus/"})]
+    (is (= {:pass 1 :rejected 1 :indeterminate 1} (:totals r)))))
+
+(deftest build-report-computes-by-code-counts-test
+  (let [r (report/build-report sample-results {:path "corpus/"})]
+    (is (= {"structure" 2 "code-invalid" 1} (:by-code r)))))
+
+(deftest build-report-lists-per-file-summaries-test
+  (let [r (report/build-report sample-results {:path "corpus/"})]
+    (is (= [{:path "a.json" :verdict :pass :finding-count 0}
+            {:path "b.json" :verdict :rejected :finding-count 2}
+            {:path "c.json" :verdict :indeterminate :finding-count 1}]
+           (:files r)))))
+
+(deftest build-report-carries-run-metadata-test
+  (let [r (report/build-report sample-results {:path "corpus/" :gate :fhir})]
+    (is (= {:path "corpus/" :gate :fhir} (:run r)))))
+
+(deftest build-report-includes-id-when-present-test
+  (let [results [{:path "a.json" :verdict :pass :findings [] :id "abc123"}]
+        r (report/build-report results {})]
+    (is (= "abc123" (:id (first (:files r)))))))
+
+(deftest build-report-empty-results-is-all-zero-totals-test
+  (let [r (report/build-report [] {})]
+    (is (= {:pass 0 :rejected 0 :indeterminate 0} (:totals r)))
+    (is (= {} (:by-code r)))
+    (is (= [] (:files r)))))
+
+(deftest build-report-validates-against-schema-test
+  (is (report/valid? (report/build-report sample-results {:path "corpus/"}))))
+
+;; ---- diff-reports: what changed between two runs ----
+
+(def report-a
+  (report/build-report
+   [{:path "a.json" :verdict :pass :findings []}
+    {:path "b.json" :verdict :rejected :findings [(finding "structure")]}
+    {:path "d.json" :verdict :pass :findings []}]
+   {}))
+
+(def report-b
+  (report/build-report
+   [{:path "a.json" :verdict :rejected :findings [(finding "code-invalid")]}
+    {:path "b.json" :verdict :rejected :findings [(finding "structure")]}
+    {:path "e.json" :verdict :pass :findings []}]
+   {}))
+
+(deftest diff-reports-finds-changed-verdicts-test
+  (let [d (report/diff-reports report-a report-b)]
+    (is (= [{:path "a.json" :from :pass :to :rejected}] (:changed-verdicts d)))))
+
+(deftest diff-reports-finds-added-and-removed-files-test
+  (let [d (report/diff-reports report-a report-b)]
+    (is (= ["e.json"] (:files-added d)))
+    (is (= ["d.json"] (:files-removed d)))))
+
+(deftest diff-reports-finds-appeared-and-disappeared-codes-test
+  (let [d (report/diff-reports report-a report-b)]
+    (is (= ["code-invalid"] (:codes-appeared d)))
+    (is (= [] (:codes-disappeared d)))))
+
+(deftest diff-reports-identical-reports-have-no-changes-test
+  (let [d (report/diff-reports report-a report-a)]
+    (is (= [] (:changed-verdicts d)))
+    (is (= [] (:files-added d)))
+    (is (= [] (:files-removed d)))
+    (is (= [] (:codes-appeared d)))
+    (is (= [] (:codes-disappeared d)))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_tools/gate/v2_test.clj ==========
+(ns ehr-testing-tools.gate.v2-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string :as str]
+            [ehr-testing-tools.result :as result]
+            [ehr-testing-tools.gate.finding :as finding]
+            [ehr-testing-tools.gate.v2 :as gate]))
+
+(def valid-message (slurp "test/fixtures/v2/adt-a01-admit.hl7"))
+
+;; ---- execute: raw capture, never throws ----
+
+(deftest execute-valid-message-has-no-parse-exception-test
+  (let [raw (gate/execute valid-message)]
+    (is (nil? (:parse-exception raw)))
+    (is (= [] (:validation-exceptions raw)))
+    (is (= "hapi-hl7v2" (:name (:engine raw))))
+    (is (string? (:version (:engine raw))))
+    (is (re-matches #"^[0-9a-f]{64}$" (:input-sha256 raw)))))
+
+(deftest execute-missing-msh-9-captures-parse-exception-test
+  (let [broken (str/replace valid-message "ADT^A01^ADT_A01" "")
+        raw (gate/execute broken)]
+    (is (some? (:parse-exception raw)))
+    (is (= "ca.uhn.hl7v2.HL7Exception" (:class (:parse-exception raw))))))
+
+(deftest execute-truncated-message-captures-encoding-exception-test
+  (let [broken (subs valid-message 0 30)
+        raw (gate/execute broken)]
+    (is (some? (:parse-exception raw)))
+    (is (= "ca.uhn.hl7v2.parser.EncodingNotSupportedException" (:class (:parse-exception raw))))))
+
+(deftest execute-bad-delimiter-captures-parse-exception-test
+  (let [broken (str/replace-first valid-message "^~\\&" "^~&")
+        raw (gate/execute broken)]
+    (is (some? (:parse-exception raw)))
+    (is (= "ca.uhn.hl7v2.HL7Exception" (:class (:parse-exception raw))))))
+
+(deftest execute-bad-datetime-value-captures-datatype-exception-with-location-test
+  (let [broken (str/replace-first valid-message "19850312" "notadate")
+        raw (gate/execute broken)]
+    (is (some? (:parse-exception raw)))
+    (is (= "ca.uhn.hl7v2.model.DataTypeException" (:class (:parse-exception raw))))
+    (is (= "PID" (:segment (:location (:parse-exception raw)))))
+    (is (= 7 (:field (:location (:parse-exception raw)))))))
+
+;; ---- interpret: pure, versioned, findings + verdict ----
+
+(deftest interpret-valid-message-is-pass-with-no-findings-test
+  (let [raw (gate/execute valid-message)
+        outcome (gate/interpret raw)]
+    (is (= :pass (:verdict outcome)))
+    (is (= [] (:findings outcome)))))
+
+(deftest interpret-parse-failure-is-rejected-with-one-finding-test
+  (let [broken (str/replace valid-message "ADT^A01^ADT_A01" "")
+        raw (gate/execute broken)
+        outcome (gate/interpret raw)]
+    (is (= :rejected (:verdict outcome)))
+    (is (= 1 (count (:findings outcome))))
+    (let [f (first (:findings outcome))]
+      (is (finding/valid? f))
+      (is (= :error (:severity f)))
+      (is (= :v2 (:format (:locator f))))
+      (is (string? (:path (:locator f)))))))
+
+(deftest interpret-datatype-violation-locator-points-at-the-field-test
+  (let [broken (str/replace-first valid-message "19850312" "notadate")
+        outcome (gate/interpret (gate/execute broken))]
+    (is (= :rejected (:verdict outcome)))
+    (is (= "PID-7" (:path (:locator (first (:findings outcome))))))))
+
+(deftest interpret-structural-error-without-field-location-falls-back-to-msh-locator-test
+  (let [broken (str/replace valid-message "ADT^A01^ADT_A01" "")
+        outcome (gate/interpret (gate/execute broken))]
+    (is (= "MSH" (:path (:locator (first (:findings outcome))))))))
+
+(deftest interpret-collected-validation-exceptions-are-pass-with-findings-test
+  ;; Simulated raw payload -- a HAPI validation exception collected via
+  ;; the non-throwing handler path (empty for every fixture EXP-C5/P5's
+  ;; probes exercised, per gate.v2's own docstring); this test proves
+  ;; the *policy* holds even though no real fixture triggers it: at
+  ;; this tier, a collected (non-parse-failure) HAPI signal is always
+  ;; :pass-with-findings, never :rejected -- gate.v2 is base-structural
+  ;; only, and nothing here ever produces :indeterminate.
+  (let [raw {:engine {:name "hapi-hl7v2" :version "2.6.0"}
+             :input-sha256 (apply str (repeat 64 "a"))
+             :parse-exception nil
+             :validation-exceptions [{:class "ca.uhn.hl7v2.validation.ValidationException"
+                                       :message "some warning"
+                                       :severity "ERROR"
+                                       :location {:segment "PID" :segment-repetition 0 :field 8 :component -1}}]}
+        outcome (gate/interpret raw)]
+    (is (= :pass (:verdict outcome)))
+    (is (= 1 (count (:findings outcome))))
+    (is (= "PID-8" (:path (:locator (first (:findings outcome))))))))
+
+;; ---- gate-file: reads, executes, interprets; never mutates input ----
+
+(deftest gate-file-happy-path-test
+  (let [r (gate/gate-file "test/fixtures/v2/adt-a01-admit.hl7")]
+    (is (result/ok? r))
+    (is (= :pass (:verdict (:payload r))))
+    (is (= "test/fixtures/v2/adt-a01-admit.hl7" (:path (:payload r))))))
+
+(deftest gate-file-does-not-modify-its-input-test
+  (let [path "test/fixtures/v2/adt-a01-admit.hl7"
+        before (slurp path)
+        _ (gate/gate-file path)
+        after (slurp path)]
+    (is (= before after))))
+
+(deftest gate-file-detects-the-hand-broken-fixture-test
+  (let [r (gate/gate-file "test/fixtures/v2/adt-a08-update-trailing-empty-fields.hl7")]
+    (is (result/ok? r))
+    ;; This fixture is a legitimate v2 message (EXP-B2 already parsed it
+    ;; successfully); it exercises the trailing-empty-fields
+    ;; canonicalization finding, not a structural break.
+    (is (contains? #{:pass :rejected} (:verdict (:payload r))))))
+
+(deftest gate-file-missing-path-is-an-operational-error-test
+  (let [r (gate/gate-file "/no/such/file.hl7")]
+    (is (result/error? r))
+    (is (= :file-not-found (:category r)))))
+
+;; ---- gate-dir: batch over every *.hl7 file ----
+
+(deftest gate-dir-gates-every-hl7-file-test
+  (let [r (gate/gate-dir "test/fixtures/v2")]
+    (is (result/ok? r))
+    (is (= 5 (count (:results (:payload r)))))
+    (is (every? #(contains? #{:pass :rejected} (:verdict %)) (:results (:payload r))))))
+
+========== END FILE ==========
+
 ========== FILE: ./test/ehr_testing_tools/invocation_test.clj ==========
 (ns ehr-testing-tools.invocation-test
   (:require [clojure.test :refer [deftest is testing]]
@@ -7607,6 +10098,35 @@ the next gate-shaped milestone, tracked in
       (is (result/rejected? r) (str "expected rejection for " (pr-str bad)))
       (is (= :invalid-fhir-path (:category r))))))
 
+;; ---- v2 grammar (P5): segment/index/field/component, the operational
+;; subset matching ca.uhn.hl7v2.Location's own fields ----
+
+(deftest v2-data-path-parses-a-bare-segment-field-test
+  (let [r (locator/v2-data-path "PID-3")]
+    (is (result/ok? r))
+    (is (= ["PID" 0 3 nil] (:payload r)))))
+
+(deftest v2-data-path-parses-an-explicit-segment-repetition-test
+  (let [r (locator/v2-data-path "OBX[2]-5")]
+    (is (result/ok? r))
+    (is (= ["OBX" 2 5 nil] (:payload r)))))
+
+(deftest v2-data-path-parses-a-component-test
+  (let [r (locator/v2-data-path "PID-7-1")]
+    (is (result/ok? r))
+    (is (= ["PID" 0 7 1] (:payload r)))))
+
+(deftest v2-data-path-parses-repetition-and-component-together-test
+  (let [r (locator/v2-data-path "NK1[1]-4-2")]
+    (is (result/ok? r))
+    (is (= ["NK1" 1 4 2] (:payload r)))))
+
+(deftest v2-data-path-rejects-malformed-strings-test
+  (doseq [bad ["" "PID" "PID-" "PI-3" "pid-3" "PID-3-" "PID[x]-3" "PID--3"]]
+    (let [r (locator/v2-data-path bad)]
+      (is (result/rejected? r) (str "expected rejection for " (pr-str bad)))
+      (is (= :invalid-v2-path (:category r))))))
+
 (deftest fhir-data-path-navigates-real-data-with-get-in-test
   ;; The whole point: the parsed path must actually work with
   ;; get-in/assoc-in/update-in against plain-data (data.json-shaped)
@@ -7678,14 +10198,16 @@ the next gate-shaped milestone, tracked in
   (let [data (edn/read-string (slurp "docs/pipeline.edn"))]
     (is (pipeline/valid? data))))
 
-(deftest committed-pipeline-edn-has-generate-normalize-mutate-and-planned-gate-report-test
+(deftest committed-pipeline-edn-has-every-stage-built-test
+  ;; P5: Intake, Gate, and Report all move from stub/planned to built.
   (let [data (edn/read-string (slurp "docs/pipeline.edn"))
         by-id (into {} (map (juxt :id identity)) (:stages data))]
     (is (= :built (:status (by-id :generate))))
     (is (= :built (:status (by-id :normalize))))
     (is (= :built (:status (by-id :mutate))))
-    (is (= :planned (:status (by-id :gate))))
-    (is (= :planned (:status (by-id :report))))))
+    (is (= :built (:status (by-id :intake))))
+    (is (= :built (:status (by-id :gate))))
+    (is (= :built (:status (by-id :report))))))
 
 ;; ---- rendering: stage -> equation-line (docs/notation.md's equation
 ;; form, the string-diagram skill's own grammar) ----
