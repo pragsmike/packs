@@ -1,7 +1,7 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-tools
-generated (UTC): 2026-07-24T13:04:35Z
-HEAD: 82cb3d38ff29484436f054cf134dd60fff3112e2
+generated (UTC): 2026-07-24T13:35:28Z
+HEAD: 294d2d37fbc7f81cdbc9a423143889f5b8584261
 git status --porcelain:
 working tree clean
 includes only: .agents/skills, .agents/prompts/archive
