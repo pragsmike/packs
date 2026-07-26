@@ -1,9 +1,9 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T19:37:45Z
-HEAD: 1117ce9c3704e69c9e1e69af81ce694837c38f69
+generated (UTC): 2026-07-26T19:58:14Z
+HEAD: 474aa5f330495cac79e5673923832e1cce012b3a
 git status --porcelain:
-?? docs/clinical-realities.md
+working tree clean
 elides: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
@@ -133,19 +133,63 @@ surge placement only when earlier ladder rungs are exhausted (unless
 `:forced true`). Plus the occupancy board's own consistency law as a
 property test: board ≡ fold over patient locations.
 
-## M2 — Churn family
+## M2a — Engine prep: identity, participants, and the time model
+
+Split out of the original single M2 milestone (this session) because
+its two decisions — [ADR-0010](../../notes/ADRs.md#adr-0010) (patient
+identity + the `:participants` event shape) and
+[ADR-0011](../../notes/ADRs.md#adr-0011) (seconds granularity, a
+pinned UTC offset, a seeded arrival process, a warm-up window) — are
+both **engine refactors that M2b's actual churn step types depend on**,
+not churn content themselves. Landing them first means M2b's merge and
+bed-swap steps are written directly against `:patient-id`/
+`:participants` and the new clock, rather than against `:mrn` and
+minutes with a mid-milestone migration. Both refactors are seam-able:
+each can land, be tested, and be reviewed independently of the other,
+and neither blocks on M2b existing yet.
+
+**Seed perturbation, expected twice over, both already covered by
+existing policy.** M1 already perturbed pinned-seed output once
+(ADR-0009, the allocation-ladder and provider-sampling draws). M2a's
+time-granularity change (ADR-0011 decision 1, minutes → seconds) shifts
+every timestamp-consuming draw again — a second, equally expected
+instance of exactly the pattern ADR-0009 already names and accepts:
+same config + seed stays byte-identical *within* a generator version,
+and each milestone that grows the engine's stochastic surface is
+expected to regenerate pinned fixtures, not treated as a regression to
+chase down. `:patient-id` generation (ADR-0010) is a further, third
+draw-order change from the same milestone; the same policy covers it.
+
+Co-landing invariants: the fold-key/queue-key rename (`:mrn` →
+`:patient-id`, `docs/patient-state-model.md`'s accumulator gaining
+`{:mrns :active-mrn}`) touches every existing `evolve`/`decide` method
+and test helper, so the determinism and invariant-catalog property
+tests must stay green across the rename, not just for new step types;
+`:participants` becomes a real field on every event (single-element
+vector for today's step types) with its own schema round-trip test.
+
+## M2b — Churn family
 
 Lands **InjectChurn** (currently `;; NEXT` in the theory, `:planned`):
 cancel-\*, \*-in-error, bed-swap, and merge step types, as the IR→IR
-transform the theory already names. Brings `churn-profile` in as real
-config rather than a named-but-unbuilt resource.
+transform the theory already names, built against M2a's
+`:patient-id`/`:participants` shape rather than the pre-M2a one. Brings
+`churn-profile` in as real config rather than a named-but-unbuilt
+resource. `docs/patient-state-model.md`'s conditional validity rows
+(status × event-class × attribute-conditions, added this session) name
+two further candidate step families for this milestone or immediately
+after, as **stretch/candidate steps, not core M2b scope**: leave-of-
+absence (A21/A22) and observation/inpatient class-flip (A06/A07), both
+from `docs/clinical-realities.md`'s stub catalog.
 
 Co-landing invariants: each new step type's own catalog entries
 (e.g. a cancelled event must reference an event it cancels; a merge
-must reference MRNs that both exist; a bed-swap preserves the
-occupancy invariants M1 established rather than bypassing them). The
-IR-endomorphism and clinical-steps-preserved laws already stated on
-`:churn` in the EDN become property tests here, not new claims.
+must reference patient-ids that both exist; a bed-swap preserves the
+occupancy invariants M1 established rather than bypassing them, and
+both invariants are now expressible as `:participants` cross-
+participant coherence checks per ADR-0010). The IR-endomorphism and
+clinical-steps-preserved laws already stated on `:churn` in the EDN
+become property tests here, not new claims.
 
 ## M3 — Order profiles + order/result steps
 
@@ -228,6 +272,69 @@ the milestone before it:
   demoting it to dormant, the way `ehr-testing-tools` did at its own
   ADR-0008, is recorded as its own ADR when that happens, not folded
   into this roadmap.
+- **Site profiles** (`docs/site-profiles.md`, this session) —
+  **proposed**, for author review rather than decided placement:
+  code-table overrides, naming idioms beyond `:surge-format`, and
+  Z-segment templates, as their own milestone landing **after M3**.
+  Reasoned there rather than earlier because Z-segment templates are
+  thin content without order/result data to bind them to — a
+  site-profile milestone landing before M3's `order-profiles` catalytic
+  exists would have little beyond code-table overrides to actually
+  exercise.
+
+## Consumer plan: sim doesn't validate itself in a vacuum
+
+This roadmap's milestones describe what this repo builds; two items
+describe how this repo's output gets exercised by consumers outside
+it, named here so they aren't lost between repos.
+
+- **Tools as first consumer.** An integration-tree item belongs **in
+  `ehr-testing-tools`**, not here (ADR-0001's dependency direction: sim
+  never depends on tools, but tools already may depend on sim): `ehr
+  gate` judging a sim-generated corpus end to end, as a real exercise
+  of tools' Gate machinery against this project's own traffic rather
+  than only hand-crafted fixtures. This can share its test harness with
+  the manifest contract test [`ADR-0001`](../../notes/ADRs.md#adr-0001)
+  already assigns to tools' integration tree (the binding
+  cross-repo contract tests live where both codebases share a
+  classpath). **Noted here, built there** — this roadmap does not
+  schedule tools' own work, only records the dependency so a future
+  session in either repo knows the item exists.
+- **Blaze as M6's ecological target.** `samply/blaze` (a Clojure FHIR
+  server) is named as the natural first real-world consumer for M6's
+  **EmitState** output (`docs/sim-theory.edn`) — a same-language FHIR
+  server this project's state-documents can be loaded into and queried
+  against, giving the emitter-coherence property test a genuine
+  external system to check against rather than only this repo's own
+  parsing round-trip. This is a target for M6's own validation work,
+  not a dependency this repo takes on; recorded here so M6 doesn't have
+  to rediscover the natural fit from scratch.
+
+## The adversarial-traffic exclusion
+
+**This simulator generates coherent truth; it deliberately never
+generates delivery incoherence.** Out-of-order arrival, dropped
+messages, malformed segments, and duplicate delivery are real
+phenomena a downstream interface must survive — but they are failures
+of a *transport* or *delivery* layer acting on a coherent stream, not
+facts about the hospital the stream describes. This project's own laws
+(ADR-0002's ground-truth-log primacy, the emitter-coherence law,
+`InjectChurn`'s own IR-endomorphism and clinical-steps-preserved laws)
+forbid the engine from ever emitting a stream that contradicts itself
+— which means this engine structurally **cannot** be the place
+out-of-order or dropped-message traffic comes from, on purpose, by the
+same laws that make its output trustworthy in the first place.
+
+That is exactly why this territory belongs to `ehr-testing-tools`'
+`corpus mutate` instead, operating on a sim-generated corpus **after**
+this project has produced it: sequence-reorder, segment-mangle, and
+duplicate-delivery operators, each with recorded lineage back to the
+coherent corpus it mutated. This isn't a gap sim leaves for tools to
+fill reluctantly — it's the intended division of labor, now written
+down as a reason rather than left to be inferred: sim's job is
+producing ground truth a mutation operator can trust was coherent
+*before* mutation, precisely because sim itself never introduces
+incoherence as a side effect of its own generation.
 
 ## Deliberate exclusions
 
@@ -797,7 +904,9 @@ detail view (every resource wire, catalytic input, and the
 `pathway-ir` union) generated mechanically from
 [`docs/sim-theory.edn`](docs/sim-theory.edn). [`.agents/plans/roadmap.md`](.agents/plans/roadmap.md)
 is the milestone plan this diagram's *next*/*later* stages resolve
-into.
+into. [`docs/site-profiles.md`](docs/site-profiles.md) answers "how do
+I make it simulate *my* hospital" — the config layer for site-specific
+codes, naming idioms, and Z-segments.
 
 ## Relation to the ehr-testing-* family
 
@@ -893,6 +1002,396 @@ MIT — see [LICENSE](LICENSE). No PHI anywhere, by construction.
                           org.clojure/test.check {:mvn/version "1.1.3"}
                           org.slf4j/slf4j-nop {:mvn/version "2.0.17"}}
              :main-opts ["-m" "cloverage.coverage" "-p" "src" "-s" "test"]}}}
+
+========== END FILE ==========
+
+========== FILE: ./docs/clinical-realities.md ==========
+# Modeling and encoding clinical realities
+
+Hospitals generate events that people outside the domain — and many
+inside it — would never think to model. This document is the catalog
+of those realities: what actually happens, how it shows up on the
+wire, how this simulator models it, and why a tester should care.
+Each entry follows the same four-part shape so the catalog stays
+extensible and each entry doubles as a backlog item with its design
+already sketched.
+
+The shape:
+
+1. **The reality** — what actually happens in hospitals.
+2. **The wire truth** — how it appears in records and messages;
+   what is standard HL7 and what is site-custom.
+3. **Our model** — the states, events, attributes, and config that
+   represent it (or will; entries may precede their milestones).
+4. **Why testers care** — what this reality breaks in real systems,
+   i.e. its value as generated test traffic.
+
+Entries marked *(stub)* are captured-not-designed: real phenomena
+recorded here so they aren't rediscovered, with modeling deferred to
+a named or future milestone.
+
+---
+
+## Post-mortem events
+
+**The reality.** A patient's death does not end their event stream.
+The body transfers to the morgue, then releases to a funeral home;
+some deaths fall under medical-examiner jurisdiction and get an
+autopsy referral; and — the case almost nobody outside the field
+expects — an organ donor may remain in the ICU for hours to days
+*after declaration of death*, ventilated and on pressors for donor
+management, followed by organ procurement, which is a full surgical
+procedure (OR, surgical team, real procedure codes) performed on a
+legally dead patient. During donor management, active orders and
+results continue on a decedent, and billing responsibility for
+donor-management activity typically shifts from the patient's payer
+to the organ procurement organization — a payer change post-mortem.
+
+**The wire truth.** Standard HL7v2 carries more of this than
+expected: PID-29/PID-30 hold death datetime and indicator; PV1-36
+discharge disposition uses table 0112, whose expired codes (20,
+40–42) distinguish died-here from died-at-home from place-unknown;
+the morgue is routinely a real *location*, so a genuine ADT^A02
+transfers the decedent to MORGUE before the final A03; procurement
+and autopsy have real SNOMED and ICD-10-PCS codes. Beyond that it
+goes site-custom fast: decedent-affairs workflows, ME referral,
+release-of-body tracking — typically Z-segments and house-defined
+order types (see the site-profile entry, below).
+
+**Our model.** `:expired` is a status reached via a death event or an
+expired discharge disposition — and it is *clinically absorbing but
+operationally alive*. The event-validity table expresses this
+directly: therapeutic-intent event classes become illegal in
+`:expired`, while an enumerable set remains legal — morgue and
+funeral-home transfers, autopsy and specimen events, and, gated on a
+`:donor` attribute, the donor-management and procurement family. This
+is the entry that motivates the validity table's conditional-row
+shape (status × event-class × attributes, not status × event-type
+alone). Facility config gains a `:class :morgue` ward. The
+post-mortem payer shift is recorded as an attribute-change event when
+the donor pathway lands. Milestone: the mechanism (conditional
+validity rows, morgue ward class, expired status) is near-term
+state-model material; the donor pathway itself is later content.
+
+**Why testers care.** Post-death activity is a classic
+downstream-system rejection: many EHRs and interfaces hard-fail any
+activity after PID-29's death datetime. A donor-management scenario —
+orders, results, and an OR procedure all timestamped after declared
+death, followed by a morgue A02 and a disposition-20 A03 — is
+premium traffic precisely because it is *correct* and still breaks
+naive consumers for the right reasons. So is the simpler case: a
+morgue transfer arriving after a system already closed the encounter.
+
+---
+
+## Site-defined codes and Z-segments *(stub — design sketched, see roadmap)*
+
+**The reality.** Every hospital defines its own custom fields and
+code values, and they all do it differently — this is the
+standards-sanctioned escape hatch (HL7's user-defined tables; whole
+site-invented Z-segments) that makes the universal representation
+unattainable, per the guide's opening chapters.
+
+**The wire truth.** User-defined tables (patient class 0004,
+disposition 0112, location types) where sites extend freely;
+Z-segments (ZPI, ZDS, …) that every interface must route and no
+universal parser can know. Simulated Hospital's own struct concedes
+it: `Type string // values are defined per-trust`.
+
+**Our model.** The *site profile* config layer: code-table overrides,
+naming idioms (`:surge-format` was this layer's first citizen),
+Z-segment templates binding fields to state paths — applied at the
+emitter, since idiosyncrasy is mostly a rendering dialect, with the
+reserved open `:attributes` map as the state-side carrier when a
+custom field needs a fact standard state doesn't hold. Two site
+profiles over one seed = the same ground truth in two hospitals'
+accents; truth is invariant under dialect.
+
+**Why testers care.** "How do I make it simulate *my* hospital" is
+the first question domain experts ask; site-custom values are also
+among the first things that break a naively-configured interface.
+
+---
+
+## Newborns and the Babyboy/Babygirl merge *(stub)*
+
+**The reality.** Birth creates a patient who never arrived: an
+admission with no prior existence, initially registered under a
+placeholder name ("Babyboy JONES"), linked to the mother's record,
+and later renamed — and frequently *merged* when registration created
+duplicates in the delivery rush.
+
+**The wire truth.** A04/A01 for the newborn, mother-baby linkage
+fields, an A08 demographic-overhaul storm at naming, and the A34/A40
+merge family cleaning up afterward.
+
+**Our model / why testers care.** A natural churn generator (M2's
+merge steps get an organic scenario rather than only an injected
+one), and placeholder-name→rename→merge sequences are notorious
+patient-matching test cases. Deferred until identity-under-merge
+lands (M2 prerequisite work).
+
+---
+
+## Leave of absence *(stub)*
+
+**The reality.** An admitted patient goes home for a weekend —
+mid-admission — and comes back. The bed may be held or released.
+
+**The wire truth.** ADT^A21 (leave of absence) / A22 (return), a
+message pair most integration engines have never been tested against.
+
+**Our model / why testers care.** A status sub-mode like boarding
+(admitted, physically absent), one validity-table row-set, and an
+occupancy question (held vs released bed) the projection can express
+either way. Rarely-exercised message types are exactly what a
+conformance gate should see at least once.
+
+---
+
+## Observation-vs-inpatient class flips *(stub)*
+
+**The reality.** A patient's *class* changes mid-stay — outpatient/
+observation converted to inpatient (or the reverse) for clinical and
+billing reasons, sometimes retroactively.
+
+**The wire truth.** ADT^A06/A07 (change patient class), among the
+most billing-sensitive and least-tested messages in the ADT family.
+
+**Our model / why testers care.** `:class` is already split from
+`:status` in the accumulator (the SimHospital PV1-2 lesson), so a
+class-change event is cheap; retroactive flips are premium
+churn-adjacent traffic. Candidate for the M2 churn family or
+immediately after.
+
+---
+
+*Adding an entry: follow the four-part shape; link the milestone that
+lands it or mark it (stub); if it motivates a mechanism (as
+post-mortem motivates conditional validity rows), name the mechanism
+explicitly so the design credit is traceable.*
+
+========== END FILE ==========
+
+========== FILE: ./docs/event-sourcing.md ==========
+# Event sourcing, and why this simulator's architecture is not a stylistic choice
+
+This is the explainer for a question worth answering plainly, once,
+rather than re-deriving from ADR cross-references every time it comes
+up: why does this simulator's engine work the way it does, and why
+should a tester reading its output trust that shape? The short answer
+is that this project didn't choose event sourcing as an implementation
+fashion — it recognized that the domain it models (hospital ADT
+traffic) has always been an event-sourced system in every way but
+name, and built the one piece that was actually missing: making the log
+a first-class, queryable thing instead of a fact every downstream
+system had to reconstruct for itself, forty years running.
+
+## What event sourcing is, and how this simulator does it
+
+Event sourcing is the discipline of treating a log of immutable facts
+as the one authoritative record, and deriving every other view of the
+system — current state, historical snapshots, aggregates — by
+replaying that log through a pure function. The alternative, ordinary
+mutable-state design, keeps "current state" as the primary record and
+treats history (if it's kept at all) as a derivative, usually lossy,
+side effect of mutation. Event sourcing inverts that: the log is
+primitive, state is derived, and "what happened" and "what is true
+now" can never silently disagree, because there is only one function
+that produces the second from the first.
+
+This simulator's engine (`ehr-testing-sim.engine`) implements exactly
+that inversion, decided at [ADR-0008](../notes/ADRs.md#adr-0008) and
+specified in full at
+[`docs/patient-state-model.md`](patient-state-model.md). Three pieces
+make it concrete:
+
+- **The log is the primitive.** `ground-truth-log` — a flat,
+  time-ordered sequence of events — is the only place a fact about a
+  run originates. Nothing else the engine produces is authoritative;
+  everything else is computed from it.
+- **`decide`/`evolve` is the split that makes the inversion mechanical
+  rather than aspirational.** `decide (rng, t, world, patient, step) ->
+  {:events :advance}` consults the current fold of all patient state
+  (read-only) and the run's single seeded RNG to decide what happens,
+  and returns facts — it never mutates anything and never returns a
+  new state. `evolve (state, event) -> state'` is the *only* function
+  that ever produces a new patient state, and it is pure, total, and
+  ignorant of everything except the one event it's folding. There is
+  no code path in this engine that assigns into a patient's state
+  directly; the only way state changes is by an event passing through
+  `evolve`.
+- **State is a fold, and so is every projection built on it.** A
+  patient's current state, at any point in a run, is
+  `(reduce evolve initial-state event-subsequence)` — a computed
+  value, not a second thing the engine has to remember to keep in
+  sync. The occupancy board (`docs/operational-models.md`'s "what's in
+  RENAL-04 right now") is the same idea one layer up: a **projection**
+  over the set of patient states, proven consistent by its own law
+  (**board ≡ fold over patient locations**, a property test, not a
+  code-review claim). The authority hierarchy this project actually
+  has is three deep — **log → patient states → occupancy board** —
+  each stage a projection of the one before it, each with its own
+  provable consistency law, none of them a second place a fact can
+  originate.
+
+The payoff of this inversion is not abstract: log↔state drift, the
+failure mode of any system that keeps events and current state as two
+things a bug can let disagree, is **impossible by construction** here,
+not merely tested for. A property test (patient state, at every event
+boundary of a run, equals folding that patient's own event
+subsequence through `evolve` from its initial state) is the executable
+form of that claim, not an added nicety on top of it.
+
+## The keystone framing: this domain already had this shape
+
+Here is the claim this document exists to state plainly: **HL7v2 is an
+event stream, and always has been.** Every ADT message — A01
+admission, A02 transfer, A03 discharge, A08 update, the whole churn
+family this project's `InjectChurn` stage will grow into — is a
+domain event: a fact about something that happened to a patient, at a
+time, with enough detail to act on. Every downstream system that
+consumes an ADT feed — an ADT-triggered order system, a bed-management
+board, a downstream ancillary system's own patient index — has spent
+decades folding its own state from that feed, event by event, without
+anyone involved calling it "event sourcing" or drawing the log as a
+primitive. The pattern was there before the name; the industry just
+never wrote it down as an architecture, so every consumer re-derives
+the same fold logic independently, and every integration bug where two
+systems' derived state disagrees is exactly the log↔state-drift failure
+mode this project's engine makes impossible.
+
+**FHIR is the materialized view of that same stream.** A FHIR
+`Patient`, `Encounter`, or `Location` resource is current-state
+data — a snapshot, not an event — which is precisely what a
+materialized view *is* in event-sourcing vocabulary: a query-optimized
+projection of an event log, kept (or in FHIR's case, typically
+regenerated) for read convenience rather than carrying the history that
+produced it. An ADT feed and a FHIR resource server describing the same
+hospital are not two different architectures; they are the event side
+and the materialized-view side of one architecture that healthcare
+already had, expressed across two different standards that were never
+designed to acknowledge each other's relationship this explicitly.
+
+This simulator emits both sides *naturally*, not as two independent
+rendering efforts that happen to agree, because the underlying engine
+already has the shape that makes both sides cheap: `hl7v2-stream`
+(`EmitHL7`, built) is the log rendered as messages; `state-document`
+(`EmitState`, planned — M6) will be `state-history` — itself a
+derived fold, per ADR-0008 — rendered as FHIR resources or CDA
+documents at a queried instant. The **emitter-coherence** law
+(`docs/sim-theory.md`'s global laws) — replaying `hl7v2-stream`
+reconstructs `state-history`, and a FHIR snapshot at instant *t* agrees
+with the state implied by messages up to *t* — is not a hoped-for
+property bolted onto two independently-built emitters. It is the
+direct consequence of both emitters consuming the same log-is-primitive
+architecture the domain already implied. This project didn't invent a
+clever trick to keep two output formats in sync; it made explicit a
+structure HL7v2 and FHIR were already, silently, two views of.
+
+## The upstream contrasts: what happens without this made explicit
+
+Two mined upstream sources show, concretely, what the domain's
+event-sourced shape costs a system that doesn't name it —
+[`docs/patient-state-model.md`](patient-state-model.md#design-inputs-mined-from-upstream)
+carries the full mining record; this section restates its two
+receipts rather than re-verifying either source fresh.
+
+**Simulated Hospital's `ir.PatientInfo`: a shadow-field zoo, one field
+per thing that might need undoing.** `PatientInfo`'s location alone is
+*six* fields — `Location`, `PriorLocation`,
+`PriorLocationForCancelTransfer`, `PendingLocation`,
+`PriorPendingLocation`, and a prior for that one too — and the
+in-code comment on the third is the whole argument in one sentence:
+normal flow clears `PriorLocation` after a transfer completes, but
+`CancelTransfer` has to reinstate the value that was just cleared, so
+it needs its own shadow copy to undo the clearing. Every cancellable
+mutation in a mutable-state design without a log grows its own bespoke
+undo field, because "what was true before the thing I need to cancel"
+has nowhere else to live. This project's engine needs **one**
+`:location` field, because `:transfer-in-error`'s `decide` can query
+the log directly for the patient's prior location-setting event — the
+log already *is* the undo history, so nothing needs its own copy of it.
+[ADR-0010](../notes/ADRs.md#adr-0010) extends the same argument to
+identity: a merge's "what MRN did this patient answer to before" is the
+same kind of prior-value fact, and it lives on the merge event itself,
+not in a redirect table a mutable design would need instead.
+
+**Synthea's `Person.history`: a hand-rolled log, verified in this
+project's own mining record.** Synthea's GMF modules guard conditional
+transitions like "prior state X, within window" by walking
+`Person.history`, the person's own recorded trail of visited module
+states — which is, functionally, a mutable-world approximation of an
+event log, built because the GMF interpreter had no primitive log to
+query instead. `docs/patient-state-model.md`'s mining section reads
+this as validation of this project's own accumulator/cursor split, not
+as a design flaw in Synthea (Synthea's clinical modeling problem is a
+different one, a patient's whole simulated life rather than one
+hospital encounter, and it solves the history-query problem that
+`Person.history` exists for well enough for its own purposes). The
+observation worth carrying forward, rather than re-litigating
+Synthea's own design choices: threading death through a module's
+running state — so that later transitions can guard on "has this
+person died" the way any other prior-state condition is guarded —
+is exactly the kind of state-visit-history query `Person.history`
+exists to answer, in a system with no primitive log to ask instead.
+(This detail is carried per this document's own briefing rather than a
+fresh source read this session; flagged as such per `AGENTS.md`'s
+provenance discipline, the same way ADR-0010 flags its own SimHospital
+merge inference.) M5's GMF interpreter port compiles `PriorState`-style
+guards to queries over *this* project's ground-truth log directly —
+typed, timestamped, and already authoritative — rather than porting
+`Person.history` itself; the accumulator deliberately carries no
+visit-history field of its own for exactly this reason.
+
+## The practical payoffs
+
+Making the domain's event-sourced shape explicit, rather than leaving
+it implicit the way HL7v2 and FHIR both do, pays for itself in ways
+that are specific to this project's actual use as a test-corpus
+generator, not just architectural tidiness:
+
+- **`(config, seed, version)` *is* the corpus.** Because every output —
+  messages, state documents, the invariant verdict — is a pure
+  function of config, seed, and the engine's own version (ADR-0009),
+  a generated log or corpus is a **cache** of that function's output,
+  not an artifact that has to be preserved and shipped as the source
+  of truth. A consumer who needs "the same traffic again" ships the
+  manifest (`ehr-testing-sim.manifest`) — the pinned inputs — and
+  regenerates on demand, rather than archiving gigabytes of messages
+  that a three-tuple could reproduce byte-for-byte.
+- **Checkpoint/resume is replay-to-*t*.** Because `state-history` at
+  any prefix is `(reduce evolve initial-world log-prefix)`, "resume a
+  run from where it left off" and "show me the hospital's state at
+  simulated instant *t*" are the same operation: fold the log up to
+  that point. No separate checkpointing mechanism is needed because
+  the log was always going to be replayed to get state anyway — a
+  checkpoint is just a replay whose result is cached instead of
+  recomputed.
+- **Cross-version replay is explicitly not promised.** This is a
+  boundary, not a gap: [ADR-0009](../notes/ADRs.md#adr-0009) states
+  that a fixed seed and config reproduce byte-identical output only
+  *within* a generator version — the engine's step vocabulary is
+  expected to grow (M2 through M6, `.agents/plans/roadmap.md`), and
+  each growth can add stochastic draws an old pathway didn't
+  previously consume. A consumer who needs long-term reproducibility
+  pins the generator version in the manifest alongside the seed, the
+  same way they'd pin any dependency version — "replay forever" was
+  never a claim this architecture makes, only "replay deterministically
+  against a stated version," which is the claim a corpus's manifest
+  actually lets a consumer verify.
+
+## See also
+
+[`docs/sim-theory.md`](sim-theory.md) and
+[`docs/sim-theory.edn`](sim-theory.edn) for the full stage-by-stage
+theory this document's architecture sits inside;
+[`docs/patient-state-model.md`](patient-state-model.md) for the
+accumulator shape `evolve` folds into and the full upstream-mining
+record; [`docs/operational-models.md`](operational-models.md) for the
+occupancy-board projection worked out in detail;
+[`notes/ADRs.md`](../notes/ADRs.md) ADR-0002, ADR-0008, ADR-0009, and
+ADR-0010 for the decision records this explainer narrates in prose.
 
 ========== END FILE ==========
 
@@ -1186,7 +1685,7 @@ of the accumulator `ehr-testing-sim.engine/evolve` folds the
 ground-truth log into (ADR-0008), the states and transitions that
 accumulator moves through, and the event-validity table that will
 double as `check.clj`'s invariant skeleton now and `InjectChurn`'s
-applicability oracle later (M2). It formalizes what
+applicability oracle later (M2b). It formalizes what
 [`docs/operational-models.md`](operational-models.md) describes in
 prose — that document is authoritative on *policy* (the allocation
 ladder, the taxonomy, the NPI decision); this one is authoritative on
@@ -1252,19 +1751,19 @@ gaps and one design lesson:
   whatever it was at admission (typically `:inpatient`) throughout,
   regardless of which physical ward they're sitting in.
 - **`VisitID`** per encounter (PV1-19) — not landed yet; flagged for
-  whenever encounters become first-class (readmission scenarios, M2
+  whenever encounters become first-class (readmission scenarios, M2b
   or later). Not part of the schema below.
 - **Pending locations and expected admit/discharge/transfer
   datetimes** (the A14/A15-family pending events) carry *expected*
   times, a field class this project's events don't have yet. Flagged
-  for the M2 churn milestone (`pending-*` step types), not designed
+  for the M2b churn milestone (`pending-*` step types), not designed
   here.
 - **`ReadmissionIndicator`, attending doctor, account status** — small,
   cheap PV1 fields once each is seen; no design burden.
 
 **The cautionary tale, worth recording as the worked example of why
 the log-is-primitive decision (ADR-0008) pays for itself starting at
-M2, not "someday":** `PatientInfo`'s location alone is *six* fields —
+M2b, not "someday":** `PatientInfo`'s location alone is *six* fields —
 `Location`, `PriorLocation`, `PriorLocationForCancelTransfer`,
 `PendingLocation`, `PriorPendingLocation`, and a prior for that one
 too. The in-code comment on the third explains why: normal flow clears
@@ -1278,14 +1777,14 @@ mutable-state workaround for not having an event log: without one,
 except a hand-maintained prior-value field, one per cancellable
 mutation.
 
-In this project's event-sourced engine, `:transfer-in-error`'s (M2)
+In this project's event-sourced engine, `:transfer-in-error`'s (M2b)
 `decide` reads the prior location by querying the log directly for
 that patient's most recent location-setting event before the one being
 cancelled, and the emitter derives PV1-6 (prior location) the same way
 at message-build time. **One `:location` field in the accumulator,
 plus a log query, replaces all six `PatientInfo` location fields.**
 This is not a hoped-for benefit of ADR-0008 — it is the concrete
-reason M2's cancel-family step types are expected to be cheap rather
+reason M2b's cancel-family step types are expected to be cheap rather
 than each growing their own shadow state.
 
 ## The accumulator
@@ -1296,7 +1795,7 @@ than each growing their own shadow state.
 | Field | Type | Notes |
 |---|---|---|
 | `:mrn` | `:string` | Stable patient identifier; never reassigned. |
-| `:status` | `[:enum :new :admitted :discharged]` | Lifecycle. Boarding is **not** a fourth status — see below. |
+| `:status` | `[:enum :new :admitted :discharged :expired]` | Lifecycle. Boarding is **not** a separate status — see below. `:expired` (candidate, M2b+ — see `docs/clinical-realities.md`'s post-mortem entry) is **clinically absorbing but operationally alive**: reached via a death event or an expired discharge disposition, it is not a synonym for `:discharged` — a patient can be transferred (to a morgue ward, `:class :morgue`) or undergo autopsy/donor-management events while `:status = :expired`, exactly the way an `:admitted` patient can, before a final disposition-20 `:discharge` moves them to `:discharged`. See the event validity table below for what's legal in `:expired`. |
 | `:class` | `[:enum :inpatient :emergency :outpatient :preadmit :recurring :obstetrics]`, optional until admission | PV1-2. Tracked separately from `:status` per `ir.PatientInfo`'s own separation (mined above) — registration category, not lifecycle. Distinct from a *ward's* `:class` (`:inpatient`/`:ed`, `docs/operational-models.md`'s facility config) — same word, two different things: one is what kind of patient this is, the other is what a ward is designated for. Set at admission, unchanged by transfer within M1's scope. |
 | `:home-ward` | `:string`, ward id, nil until admission | The ward the pathway named — clinical intent (`docs/operational-models.md`'s own term for the rung-1/2 target). Diverges from `:location`'s ward exactly on rungs 3 (outlier) and 4 (boarding) of the allocation ladder. |
 | `:location` | `[:map [:ward :string] [:bed :string] [:placement [:enum :licensed :surge]]]`, nil until admission | The patient's actual **physical** location, always concrete — never nil-bed, even while boarding (see worked example below). `:placement` is exactly the two values `docs/operational-models.md` specifies; ladder rungs 3 and 4 are distinguished from 1 and 2 not by a third placement value but by `:location`'s ward differing from `:home-ward` (see the table below). |
@@ -1308,7 +1807,7 @@ than each growing their own shadow state.
 Deliberately absent, per the mining above: no visit-history field (the
 log is the history — M5's interpreter queries it directly), no
 `VisitID` (encounters aren't first-class yet), no shadow prior-location
-fields (M2's cancel-family reads priors from the log).
+fields (M2b's cancel-family reads priors from the log).
 
 **Landed.** `ehr-testing-sim.engine/PatientState` carries every field
 in the table above, including `:location`'s `{:ward :bed :placement}`
@@ -1316,12 +1815,30 @@ map shape — the allocation ladder (`ehr-testing-sim.facility/allocate`)
 populates it for real as of Milestone M1. One field this table didn't
 originally name turned out to be necessary once the ladder's cross-
 patient coupling was implemented: `:admitted-at` (the simulated
-minute of admission), used only to break ties among multiple patients
+minute of admission — see ADR-0011 for the future move to simulated
+*seconds*), used only to break ties among multiple patients
 boarding for the same ward — the longest-waiting one (earliest
 `:admitted-at`, MRN as a further tiebreak) is the one a bed-ready
 transfer relieves. It is not a shadow/undo field in the SimHospital
 sense above (mined section): it is a plain fact recorded once at
 admission and never rewritten, exactly like `:status` or `:class`.
+
+**Boarding relief policy: FIFO by `:admitted-at`, ratified as the
+default — not a law.** Relieving the longest-waiting boarder first is
+this project's ratified default, chosen because it's the simplest
+policy that `:admitted-at` alone can express without inventing
+another field. It is deliberately **not** baked into the invariant
+catalog as a correctness rule: real hospitals often relieve boarders
+by acuity, service priority, or other clinical criteria, not strict
+arrival order, and encoding FIFO as a law would make it impossible to
+ever generate the (equally real) traffic of a hospital whose bed-ready
+transfers *don't* follow arrival order. FIFO-by-`:admitted-at` is
+therefore a **site-profile/Calibrate-territory config knob
+candidate** — `docs/site-profiles.md` and the `Calibrate` stage
+(`docs/sim-theory.edn`) are where an acuity-weighted or other
+alternative relief policy would eventually be configured, the same
+"policy, not law" treatment `docs/operational-models.md` already gives
+the no-census-floor non-invariant for surge use.
 
 (Pre-M1 staging note, kept for history: the session that first landed
 `evolve`/`decide` — ADR-0008 — shipped `PatientState` with every field
@@ -1379,11 +1896,11 @@ stateDiagram-v2
     Boarding --> Discharged : A03 discharge (still boarding at time of discharge)
     Discharged --> [*]
 
-    Admitted --> Pending : pending-* (M2, planned)
-    Pending --> Admitted : pending resolves (M2, planned)
-    Admitted --> CancelledOrInError : cancel-*, *-in-error (M2, planned)
-    CancelledOrInError --> Admitted : cancel-in-error reinstates (M2, planned)
-    Admitted --> Merged : merge (M2, planned)
+    Admitted --> Pending : pending-* (M2b, planned)
+    Pending --> Admitted : pending resolves (M2b, planned)
+    Admitted --> CancelledOrInError : cancel-*, *-in-error (M2b, planned)
+    CancelledOrInError --> Admitted : cancel-in-error reinstates (M2b, planned)
+    Admitted --> Merged : merge (M2b, planned)
     Merged --> [*]
 
     note right of Boarding
@@ -1402,9 +1919,21 @@ to hang the bed-ready-transfer transition on; per the accumulator
 table, it is **not** a fourth value of `:status` — it is the
 `:home-ward ≠ :location.ward` (ED-class) condition holding while
 `:status` is `:admitted`. `Pending`, `CancelledOrInError`, and `Merged`
-are M2's churn family, shown so this diagram doesn't need a redraw
-when M2 lands additively — only new edges, no restructuring of what's
+are M2b's churn family, shown so this diagram doesn't need a redraw
+when M2b lands additively — only new edges, no restructuring of what's
 here.
+
+**Not yet drawn, recorded in prose rather than redrawing the diagram
+this session (docs-only session; the diagram redraw is a small,
+mechanical follow-on):** `Admitted --> Expired` on a death event or an
+expired discharge disposition, and `Expired --> Discharged` on the
+final disposition-20 discharge. `Expired` would be its own top-level
+status box, unlike `Boarding` — it is a real fourth value of `:status`
+(see the accumulator table), not a condition over the existing three,
+because a patient in `:expired` is neither `:admitted` in the ordinary
+therapeutic sense nor `:discharged` yet. `docs/clinical-realities.md`'s
+post-mortem entry motivates the status; the event validity table below
+formalizes what's legal while in it.
 
 ## Event validity table
 
@@ -1413,20 +1942,50 @@ occur. This table does **double duty**, deliberately: it is the
 skeleton `check.clj`'s invariant catalog implements directly (each row
 becomes "event X's patient was in a legal state at the time," a
 co-landing invariant per `AGENTS.md`), and it is the applicability
-oracle `InjectChurn` (M2) will consult to decide where a churn event
+oracle `InjectChurn` (M2b) will consult to decide where a churn event
 can be legally inserted into an existing pathway — the same predicate
 answers "was this legal when it happened" and "would this be legal to
 insert here," because both ask the same question about the same
 state.
 
-| Event | Legal when | Illegal example |
-|---|---|---|
-| `:admission` | `:status = :new` | Admitting an already-admitted or already-discharged patient. |
-| `:transfer` (incl. bed-ready) | `:status = :admitted` (Admitted or Boarding) | Transferring a patient who hasn't been admitted yet, or who's already discharged. |
-| `:discharge` | `:status = :admitted` (Admitted or Boarding) | Discharging a patient not currently admitted, or discharging twice. |
-| `:pending-*` (M2, planned) | `:status = :admitted`, not already pending | Double-pending; pending a non-admitted patient. |
-| `:cancel-*` / `:*-in-error` (M2, planned) | The event class being cancelled must exist in this patient's log and not already be cancelled | Cancelling an event that never happened, or cancelling twice. |
-| `:merge` (M2, planned) | Both MRNs exist; at least the surviving MRN is `:admitted` or reachable | Merging into/from an MRN that was never admitted, or a double merge. |
+**Declared shape: status × event-class × attribute-conditions, not
+status × event-type alone.** The table below started as a per-event-
+*type* mapping (one row per `:admission`, `:transfer`, ...), which is
+enough while every event type's legality depends only on `:status`. The
+post-mortem entry (`docs/clinical-realities.md`) breaks that
+assumption: whether an event is legal in `:expired` depends on what
+*class* of event it is (therapeutic-intent vs. administrative/post-
+mortem), and one of those classes is itself gated on a patient
+*attribute* (`:donor`), not on status alone. The table's real shape is
+therefore a predicate over three axes — `(status, event-class,
+attribute-conditions) -> legal?` — and rows below are grouped by event-
+class wherever a single event type doesn't map to a single class.
+
+| Event / event-class | Legal when (status) | Attribute condition | Illegal example |
+|---|---|---|---|
+| `:admission` | `:status = :new` | — | Admitting an already-admitted or already-discharged patient. |
+| `:transfer` (incl. bed-ready) | `:status = :admitted` (Admitted or Boarding) | — | Transferring a patient who hasn't been admitted yet, or who's already discharged. |
+| `:discharge` | `:status = :admitted` (Admitted or Boarding) | — | Discharging a patient not currently admitted, or discharging twice. |
+| `:pending-*` (M2b, planned) | `:status = :admitted`, not already pending | — | Double-pending; pending a non-admitted patient. |
+| `:cancel-*` / `:*-in-error` (M2b, planned) | The event class being cancelled must exist in this patient's log and not already be cancelled | — | Cancelling an event that never happened, or cancelling twice. |
+| `:merge` (M2b, planned) | Both patient-ids exist (ADR-0010); at least the surviving patient-id is `:admitted` or reachable | — | Merging into/from a patient-id that was never admitted, or a double merge. |
+| Therapeutic-intent classes (orders, meds, procedures with clinical intent) | **Illegal** when `:status = :expired` | — | An order or medication timestamped after a death event — the classic post-mortem rejection case (`docs/clinical-realities.md`). |
+| Morgue/funeral-home transfer | Legal when `:status = :expired` (also legal pre-expiry as an ordinary `:transfer`) | — | A morgue transfer for a patient who is not `:expired`. |
+| Autopsy / specimen events | Legal when `:status = :expired` | — | An autopsy event for a patient who is not `:expired`. |
+| Donor-management / organ-procurement events | Legal when `:status = :expired` | **gated on `:donor` = true** in `:attributes` | A procurement event for a patient whose `:attributes` doesn't carry `:donor true` — the gate that makes this row conditional rather than a plain status check. |
+| Leave-of-absence, A21/A22 (candidate, M2b+ stub) | `:status = :admitted`, not already on leave — a sub-mode of Admitted parallel to Boarding (`docs/clinical-realities.md`) | — | Returning from leave (A22) for a patient who was never marked on leave (A21). |
+| Class-flip, A06/A07 (candidate, M2b+ stub) | `:status = :admitted` (Admitted or Boarding); `:class` changes, `:status` doesn't | — | A class-flip event for a patient who isn't currently admitted. |
+
+**Facility config gains a `:class :morgue` ward.** The morgue/funeral-
+home and autopsy rows above presuppose a real *location* a decedent can
+be transferred to — `docs/clinical-realities.md`'s own wire-truth
+section notes a genuine ADT^A02 transfers the decedent to MORGUE before
+the final A03. `docs/operational-models.md`'s facility config
+(`{:id :name :beds ... :class :inpatient|:ed}`) gains `:class :morgue`
+as a third documented ward class — **config documentation only, no
+code this session**; a morgue "ward" is a real occupancy-tracked
+location by the existing exclusive-resource model (ADR-0007), it simply
+never boards or admits in the ordinary sense.
 
 The current `check.clj` catalog (`timestamps-monotone`,
 `discharge-follows-admission`) already encodes the `:discharge` row's
@@ -1434,7 +1993,10 @@ constraint in a more specific form (admission strictly precedes
 discharge, not merely "some admission exists"); M1 formalizes the
 `:admission` and `:transfer` rows as new invariants in the same change
 that lands the `:transfer` step type (`AGENTS.md`'s co-landing
-convention).
+convention). The post-mortem, leave-of-absence, and class-flip rows are
+candidates for M2b (or immediately after, per `docs/clinical-
+realities.md`'s own milestone notes) — recorded here as the applicability
+oracle's target shape, not yet implemented in `check.clj`.
 
 ========== END FILE ==========
 
@@ -1936,7 +2498,13 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
           "decide/evolve split (ADR-0008): decide (rng, t, world, mrn, step) -> {:events :advance} consults world-so-far and the RNG but never mutates; evolve (world, event) -> world' is the ONLY function that changes patient state, pure and total, folding one event at a time -- so state-history is DERIVED (reduce evolve over a log prefix), not a second output the engine must keep in sync with the log by discipline; this is what makes state-based emitters renderings rather than redesigns (ADR-0002)"
           "order-profiles catalytic (target 3, hashed US-units config, docs/operational-models.md): order and result step types land under Execute's existing :built contract as the engine's step vocabulary grows -- an EmitHL7-style co-landing addition, not a new stage (repairs the plan's earlier capture gap: order profiles and the ORM/ORU cycle were discussed from the first session but appeared in no planning artifact before this one)"
           "provider-pool catalytic (target 3, hashed config, docs/operational-models.md): attending assignment at admission draws from the provider pool the same way bed assignment draws from facility config -- both are Execute-time allocations, not separate stages"]
-   :contract "v1 scope (Milestone M1, docs/operational-models.md): the walking-skeleton step set (:admission :delay :discharge) plus :transfer, engine-assigned via the allocation ladder and provider sampling -- provider-pool is a real catalytic now (synthetic Luhn-valid NPIs materialized once per run, ehr-testing-sim.config), not just a declared wire. The WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"}
+   :contract "v1 scope (Milestone M1, docs/operational-models.md): the walking-skeleton step set (:admission :delay :discharge) plus :transfer, engine-assigned via the allocation ladder and provider sampling -- provider-pool is a real catalytic now (synthetic Luhn-valid NPIs materialized once per run, ehr-testing-sim.config), not just a declared wire. The WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"
+   ;; M2a engine-prep (ADR-0010 patient-id/:participants, ADR-0011
+   ;; seconds/UTC-offset/arrival-process/warm-up) lands entirely under
+   ;; this existing :built contract -- no new input/output/catalytic,
+   ;; comment only, docs/sim-theory.md records why this needed no
+   ;; diagram regeneration.
+   }
 
   {:id :check
    :label "Check"
@@ -2101,6 +2669,24 @@ Simulated Hospital's order profiles and the ORM/ORU result cycle were
 discussed from this project's first session but, until this pass,
 named in no planning artifact.
 
+## M2a's engine-prep decisions add no new stage or wire
+
+[ADR-0010](../notes/ADRs.md#adr-0010) (patient identity, MRNs-as-state,
+the `:participants` event shape) and [ADR-0011](../notes/ADRs.md#adr-0011)
+(seconds granularity, a pinned UTC offset, a seeded arrival process, a
+warm-up window) are both engine-internal refactors that land entirely
+under `Execute`'s existing `:built` contract — they change what a
+patient-fold key and an event's timestamp/subject shape look like
+internally, not `Execute`'s declared inputs, outputs, or catalytic
+wires (`provider-pool`, `order-profiles`), so neither decision needed
+an EDN edit beyond a comment. A one-line comment noting both ADRs as
+engine-prep context was added at `:execute`'s `:contract` note; since
+EDN comments (`;;`) are stripped before the equation→Mermaid machinery
+ever sees the data, this cannot change what any diagram generated from
+`sim-theory.edn` renders — confirmed by inspection rather than by
+re-running the generator, since a comment-only change has no data for
+that machinery to read differently.
+
 ## Resource type bindings
 
 Per the notation, every resource name binds to a type; an equation
@@ -2219,6 +2805,143 @@ Recorded here rather than silently decided:
    transport below the theory's level of description, not a stage. If
    paced/real-time emission ever acquires laws of its own (e.g.
    bounded reordering), it earns an equation then.
+
+========== END FILE ==========
+
+========== FILE: ./docs/site-profiles.md ==========
+# Site profiles: the "simulate MY hospital" config layer
+
+**Design capture only — no code lands with this document.** This is
+the answer to the first question any domain expert asks on meeting
+this project: "how do I make it simulate *my* hospital?"
+`docs/clinical-realities.md`'s site-defined-codes entry names the
+reality this layer exists to configure; this document specifies the
+config layer itself.
+
+## The reality this layer answers to
+
+Every real hospital extends the standards it nominally conforms to,
+and every hospital does it differently. HL7v2 sanctions this directly:
+user-defined tables (patient class, table 0004; discharge disposition,
+table 0112; location types) are explicitly sites' to extend, and
+Z-segments (`ZPI`, `ZDS`, whatever a given site invented) are a
+first-class, standards-blessed escape hatch that no universal parser
+can know in advance. This isn't a standards failure to route around —
+it's the mechanism by which one message grammar serves thousands of
+institutions with genuinely different operational vocabularies. A
+simulator that hard-codes one hospital's idiom produces traffic that
+looks like the same fictional institution every time, which is exactly
+the realism gap `docs/problem-statement.md`'s claim #5 (operational
+realism) exists to close.
+
+## What exists today
+
+Site-specific configuration is not a new concept this document invents
+— it has one citizen already shipped, and this layer is where that
+citizen's pattern gets a name and a home for what comes next.
+
+- **`:surge-format`** (`docs/operational-models.md`) is retroactively
+  named this layer's **first citizen**: a format string
+  (`"%s-H%02d"` by default) a config author supplies to control how
+  overflow bed slots are named, because real hospitals name hallway
+  beds, pseudo-rooms, and chair codes in wildly site-specific ways,
+  and baking one convention into engine code would make every
+  generated corpus look like the same institution. `:surge-format`
+  already demonstrates the shape every future site-profile knob
+  follows: a config value that changes *how something renders or
+  names itself*, never *what happened* — the naming idiom is a
+  dialect, not a fact.
+- **The reserved `:attributes` map** (`docs/patient-state-model.md`) —
+  an open `[:map-of :keyword :any]` on the patient accumulator,
+  reserved for M5's GMF interpreter but available today as the
+  **state-side carrier** a site profile writes to when a custom field
+  needs to hold a fact standard accumulator fields don't have a place
+  for (e.g., a site-specific ward designation, a locally tracked flag
+  a Z-segment will later render). `:donor` (`docs/clinical-
+  realities.md`'s post-mortem entry, `docs/patient-state-model.md`'s
+  event-validity table) is the first concrete user of this map, ahead
+  of any site-profile machinery existing to configure it — a preview
+  of the pattern, not itself site-profile content.
+
+## What this layer designs, for a future milestone
+
+Three components, each extending an existing idea rather than
+inventing a new mechanism:
+
+1. **Code-table overrides.** A site profile supplies its own value set
+   for a user-defined HL7 table — most concretely, patient class
+   (table 0004, `docs/patient-state-model.md`'s `:class` field) and
+   discharge disposition (table 0112, `docs/clinical-realities.md`'s
+   post-mortem entry already names disposition codes 20/40–42 for
+   died-here/died-at-home/place-unknown). Overriding a table is a
+   **rendering-time substitution**: the underlying state value
+   (`:class :inpatient`, a disposition concept) doesn't change: only
+   which code string an emitter writes for it does, per the site
+   profile in effect. This is `:surge-format`'s pattern applied to
+   code tables instead of bed-naming strings.
+2. **Naming idioms**, generalizing `:surge-format` beyond bed slots to
+   any place this project's engine currently picks one baked-in
+   naming convention — ward ids, provider id formats, whatever a
+   future resource model needs named. Each is a config-supplied format
+   or lookup a site profile overrides, never a hard-coded string in
+   engine or emitter code.
+3. **Z-segment templates**, binding a Z-segment's fields to state
+   paths in the patient accumulator — most naturally, paths into the
+   reserved `:attributes` map, since a Z-segment by definition carries
+   facts standard segments don't. A template is a declarative mapping
+   (field position → state path, plus a table/format for the value)
+   that the emitter reads at render time. This is where a site's fully
+   custom fields (decedent-affairs tracking, ME-referral status,
+   whatever a real site's Z-segments carry) become renderable without
+   the engine needing to know what any particular site's Z-segment
+   means — only that a template says where its values come from.
+
+**Applied at the emitter, because idiosyncrasy is a rendering
+dialect.** All three components bind at emit time
+(`docs/sim-theory.edn`'s `EmitHL7`/`EmitState` stages), never inside
+`decide`/`evolve` or the ground-truth log. This follows directly from
+ADR-0002's separation of ground truth from wire format: a site profile
+changes how a fact is *said*, never what fact is true. The engine and
+the invariant catalog (`check.clj`) never need to know which site
+profile is active; only the emitter's render call sites do.
+
+## The invariance claim
+
+**Two site profiles over one seed produce the same ground truth in two
+accents.** Stated as a **future property test**, once site profiles
+are built: for a fixed `(config, seed)` pair, the ground-truth log is
+byte-identical across any two site profiles — a site profile can only
+change `hl7v2-stream`'s rendering (code strings, Z-segment content,
+naming idioms), never `ground-truth-log`'s content or `check.clj`'s
+verdict on it. This is the same "truth is invariant under dialect"
+argument [`docs/event-sourcing.md`](event-sourcing.md) makes for
+emitter coherence generally, specialized to site profiles as the
+dialect-selection mechanism: two hospitals' interfaces can disagree
+about what a disposition code looks like on the wire while agreeing,
+provably, about what actually happened to the patient.
+
+## Honest split: today vs. future
+
+**Exists today:** `:surge-format` (a real, shipped config knob) and the
+reserved `:attributes` map (a real, shipped extension point, currently
+written only by engine-internal state like `:donor`, not yet by any
+site-profile mechanism). **Designed, not built:** code-table overrides,
+generalized naming idioms beyond bed slots, Z-segment templates, the
+site-profile config schema that would bundle all of these into one
+named, swappable unit, and the invariance property test above. No
+`sim-config` key for "the active site profile" exists yet; this
+document specifies what one would configure, not its wire format or
+schema.
+
+## Where this lands
+
+`.agents/plans/roadmap.md` records a proposed milestone for this layer
+(marked for author review — placement, not existence, is the open
+question), reasoned as landing after M3: Z-segment templates are thin
+content without order/result data to bind them to (M3's
+`order-profiles` catalytic, `docs/sim-theory.edn`), so a site-profile
+milestone that lands before M3 would have little beyond code-table
+overrides to actually exercise.
 
 ========== END FILE ==========
 
@@ -2895,6 +3618,284 @@ session whose own pinned-seed regression goes red should read this ADR
 before assuming a bug: check whether that session's own new step types
 explain the diff first, and if so, follow the same accept-and-record
 pattern rather than re-litigating the question.
+
+---
+
+## ADR-0010 — Patient identity becomes an internal `:patient-id`; MRNs move into state; events gain a `:participants` set
+
+**Status:** Accepted (author-directed 2026-07-26) — design capture for
+Milestone M2a (`.agents/plans/roadmap.md`); no code lands with this
+ADR.
+
+**Context.** `docs/patient-state-model.md`'s accumulator uses `:mrn` as
+a stable, never-reassigned identifier, and `ehr-testing-sim.engine`
+folds the log and keys its work queue by that same `:mrn`. M2b's churn
+family (`docs/sim-theory.edn`'s `InjectChurn`) needs a merge step
+(ADT^A34/A40) and, per `docs/clinical-realities.md`'s newborn entry, an
+organic merge scenario as well — and a real hospital's MRN is exactly
+the identifier that merge *changes*: two records (and their MRNs)
+become one patient, one MRN retired from active use but still owed to
+every message and log entry that referenced it before the merge. Using
+`:mrn` as the fold/queue key doesn't survive that: the key one patient
+is folded and scheduled under would have to change mid-run, at exactly
+the moment (a merge) when losing continuity of identity is least
+acceptable. Separately, M2b's bed-swap step and the merge step itself
+are the first step types where a single event legitimately describes
+something happening to *two* patients at once, not one — a shape
+`ehr-testing-sim.engine`'s current event schema (one implicit subject
+per event, keyed by its own `:mrn`) has no room for. Both problems are
+solved by the same underlying move (an event needs to be able to name
+more than one patient, and a patient needs an identity that survives
+what happens to their MRN), so they're decided together here rather
+than as two ADRs that would have to cross-reference each other's
+assumptions at every turn.
+
+**Decision.**
+
+1. **Identity.** Introduce an internal, deterministic `:patient-id` —
+   generated the same way bed ids, provider ids, and NPIs already are
+   (from the run's single seeded RNG, `docs/operational-models.md`) —
+   as the fold key `evolve` dispatches on and the key the engine's work
+   queue schedules by. `:patient-id` is never reassigned and never
+   rebinds; it is what MRN was assumed to be before merge complicated
+   that assumption.
+   - **MRNs become state, not identity.** The accumulator's `:mrn`
+     string field is replaced by `{:mrns #{...} :active-mrn ...}`: the
+     set of every MRN this patient-id has ever answered to, and which
+     one is currently live. A fresh patient starts with a singleton
+     set and that MRN as `:active-mrn`.
+   - **Merge is an event that rebinds, not a fold that disappears.** A
+     merge (A34/A40, landed in M2b) is an ordinary event two patient-
+     ids participate in (see point 2): the surviving patient-id's
+     `evolve` absorbs the merged identity's `:mrns` set into its own
+     and updates `:active-mrn` per the merge's stated direction; the
+     merged-away patient-id's own stream ends with a terminal
+     merged-into event and folds no further — its `:patient-id` still
+     exists as a fold target for every event that named it *before*
+     the merge, it simply gains no new state after.
+   - **Emitters render `:active-mrn`.** PID-3 and every other MRN-
+     bearing field renders whichever MRN is currently active for the
+     patient-id a message is about — exactly one value, no set
+     leaking into wire format.
+   - **The ground-truth log keeps both ids on merge events.** A merge
+     event carries both the surviving and the merged-away
+     `:patient-id` (and, since MRNs are what a message-parsing
+     consumer actually sees, both MRNs) so that message↔truth mapping
+     — the problem-statement's own guarantee, "every emitted message
+     is derivable from the ground-truth log, and vice versa" — never
+     breaks across a merge: a test harness holding only a pre-merge
+     MRN can still find its patient's continued log by looking up
+     which `:patient-id` that MRN belonged to and following the merge
+     event to the surviving id.
+   - **Consequence, recorded not actioned here:** every current
+     "events-for-mrn" phrasing — in tests, in prose, in any helper
+     that takes an MRN and returns a patient's events — becomes
+     "events-for-patient" once `:patient-id` is the real key. This
+     session does not rename anything (docs/notes only, per this
+     session's own scope boundary); M2a's implementation is where the
+     rename actually happens.
+
+2. **Multi-participant events.** Events gain a `:participants` field —
+   a vector of patient-ids, carrying roles where roles matter (e.g.
+   `[{:patient-id ... :role :subject} {:patient-id ... :role :subject}]`
+   for a bed-swap's two occupants, `[{:patient-id ... :role :survivor}
+   {:patient-id ... :role :merged}]` for a merge). A patient's state is
+   the fold of every event in whose `:participants` they appear, not
+   only events keyed by a single `:mrn`/`:patient-id` field as today.
+   Every event this project has today (`:admission`, `:delay`,
+   `:discharge`, M1's `:transfer`) is the **degenerate, single-
+   participant case** — a `:participants` vector of length one — so no
+   event this project has already shipped needs a *behavioral*
+   migration; only the id-key change (point 1) touches them, and that
+   touch is mechanical (rename the field, don't change its
+   cardinality). Invariants may now assert **cross-participant
+   coherence**: a bed-swap must leave both participants placed
+   somewhere (neither vanishes from the occupancy projection mid-
+   event); a merge must leave exactly one active MRN shared between
+   the two participants once folded (never zero, never two actives
+   claiming the same identity).
+
+**The SimHospital contrast, reasoned by analogy rather than freshly
+mined.** `docs/patient-state-model.md`'s own mining section already
+established the shape: `ir.PatientInfo`'s six location fields
+(`Location`, `PriorLocation`, `PriorLocationForCancelTransfer`, and
+three more) exist because a mutable-state design with no event log
+needs a hand-maintained shadow field everywhere a mutation might later
+need undoing. Merge is architecturally the same problem one level up —
+"what identity did this patient answer to before the merge" is exactly
+the kind of prior-value fact a mutable design has nowhere to keep
+except another bespoke field or side table. This project does not
+re-verify SimHospital's actual merge-handling source this session (no
+fresh read; `AGENTS.md`'s "do not invent facts about upstream sources"
+applies), so the claim here is inference from the already-verified
+location-field pattern, not a new mined fact: expect merge to be
+another instance of the same shadow-state-accretion family the log
+dissolves, on the strength of the pattern already established, not on
+a fresh citation. In this project's design, the log already carries
+"what MRN this patient-id answered to before" as an ordinary fact on
+the merge event itself — nothing needs its own undo field, the same
+argument `docs/patient-state-model.md` already made for location.
+
+**Rejected.**
+
+- **Keeping `:mrn` as the fold/queue key and giving merge special-case
+  handling** (e.g., re-keying the queue mid-run, or maintaining a
+  redirect table from old MRN to new) — rejected because it reproduces
+  exactly the shadow-bookkeeping problem this decision exists to avoid,
+  just relocated from patient state into engine plumbing.
+- **A single-subject event schema with a separate "linked-events"
+  side-table for multi-patient effects** (bed-swap, merge) — rejected
+  because it recreates a second place facts about cross-patient
+  coupling live, the same failure mode ADR-0008 already rejected for
+  patient state generally; `:participants` keeps the single ground-
+  truth-log-is-primitive shape (ADR-0008) intact by making multi-
+  subject-ness a property of the event's own data, not an escape hatch
+  around the event schema.
+
+**Consequences.** M2a's implementation work: rename the accumulator's
+`:mrn` field to `{:mrns :active-mrn}`, introduce `:patient-id`
+generation alongside bed/provider/NPI generation, thread
+`:participants` through the event schema (a vector even for today's
+single-subject events), and update every `evolve`/`decide` method and
+test helper that assumed a bare `:mrn` key — a mechanical but repo-wide
+change, which is exactly why it is scoped as its own milestone (M2a)
+ahead of M2b's actual churn step types rather than folded into them.
+`check.clj` gains cross-participant coherence as a new invariant
+*shape*, not new invariants themselves (those land with M2b's bed-swap
+and merge step types, per the co-landing convention). No wire-format
+consequence yet: PID-3 already renders a single MRN string; it renders
+`:active-mrn` instead of `:mrn` post-M2a, a rename at the render call
+site, not a segment redesign.
+
+---
+
+## ADR-0011 — The time model: integer seconds, a pinned UTC offset, a seeded arrival process, and a marked warm-up window
+
+**Status:** Accepted (author-directed 2026-07-26) — design capture for
+Milestone M2a (`.agents/plans/roadmap.md`); no code lands with this
+ADR.
+
+**Context.** The engine's clock today is implicit — event timestamps
+are simulated minutes from run start (`docs/patient-state-model.md`'s
+`:admitted-at`, typed `:int, simulated minutes`), there is no timezone
+or offset concept anywhere in the pipeline, patient count is a fixed
+`N` sampled up front, and a run has no notion of a warm-up period
+distinct from steady state. Four gaps surfaced together while scoping
+M2a because they share one property: each is cheaper to fix now, before
+M2b's churn family and M3's order/result bursts multiply the surface
+that depends on the clock, than to fix after every downstream consumer
+(emitters, the future log player, `docs/site-profiles.md`'s eventual
+config) has already assumed today's shape.
+
+**Decision.**
+
+1. **Granularity: integer seconds from run start, replacing minutes.**
+   Every timestamp in the engine — the event queue's ordering key, the
+   ground-truth log, `:admitted-at` and any future `:*-at` field — is
+   an integer count of seconds since the run began, not minutes.
+   Rendering precision (whether an emitter shows `HH:MM` or `HH:MM:SS`)
+   is each emitter's own choice at render time, unconstrained by the
+   engine's internal grain. **Rationale:** M3's order/result steps
+   (`docs/sim-theory.edn`'s `Execute` contract note on the
+   `order-profiles` catalytic) plausibly need sub-minute ordering for
+   a burst of results returning close together, and the roadmap's
+   future log-player consumer (`.agents/plans/roadmap.md`'s consumer
+   plan, this session) needs the same fine grain to pace replay
+   realistically. Changing grain now costs exactly one seed
+   perturbation (every timestamp-consuming draw shifts once) —
+   ADR-0009's policy already states that this class of change is
+   accepted and regenerated, not guarded against. Changing grain later,
+   once M3's order/result content and a log player both exist and
+   assume minutes, would cost a migration across every downstream
+   consumer instead of one regeneration here.
+2. **DST/zone: v1 pins a fixed UTC offset.** `sim-config` gains an
+   offset field (default `+00:00`), stated once per run and recorded in
+   the run manifest (`ehr-testing-sim.manifest`) alongside the other
+   pinned inputs ADR-0007 already established the pattern for (seed,
+   engine params, config hash). No timezone database, no daylight-
+   saving transition logic, no per-event offset — one offset, fixed for
+   the whole run. A deliberately DST-crossing corpus (a run whose
+   simulated window spans a spring-forward or fall-back transition) is
+   recorded in the roadmap as **premium future test data** — real
+   interfaces mishandle DST transitions often enough that it's valuable
+   generated traffic — not v1 scope: v1's job is a correct, simple
+   clock, not the hardest clock.
+3. **Arrival process: a seeded alternative to fixed `:patients N`.**
+   Alongside today's fixed patient count, `sim-config` gains a seeded
+   **arrival process** — exponential inter-arrival times at a
+   configured rate (a Poisson arrival process, the standard queueing-
+   theory model for independent arrivals) — as a second way to
+   populate a run. This is what makes load-driven realism possible:
+   boarding (`docs/operational-models.md`'s allocation ladder rung 4)
+   is a function of census pressure, and census pressure is a function
+   of how fast patients arrive relative to how fast beds free up, which
+   a fixed `N` sampled once can't vary within a run the way a live rate
+   can. It's also the mechanism the future log player needs for
+   open-ended generation (a corpus with no fixed end, paced against a
+   rate rather than exhausted after `N` patients). **Mechanism, API
+   shape only — not built this session:** windowed generation, where
+   the engine materializes arrivals for a rolling time window rather
+   than the whole run up front, and discharged patients are retired
+   from the working set (`world`, ADR-0008) once their stream is
+   complete, so a long or open-ended run's live working set stays
+   bounded rather than growing with total elapsed time. Sketched here
+   as the shape M2a's implementation targets; not designed in the
+   fuller sense `docs/operational-models.md` designs the allocation
+   ladder.
+4. **Warm-up: a config window whose events are marked or trimmed.** A
+   run beginning from an empty hospital has a cold-start artifact — the
+   first stretch of simulated time is systematically less
+   representative than steady state (no boarding is possible until
+   wards fill, no bed-ready transfers are possible until someone's been
+   admitted long enough to discharge). `sim-config` gains a warm-up
+   window (a duration from run start); events generated inside it are
+   either marked (a `:warm-up true` flag events downstream can filter
+   on) or trimmed entirely at packaging time (`docs/sim-theory.edn`'s
+   `Package` stage) — both options recorded, the choice between them
+   deferred to M2a's implementation rather than decided here, since it
+   turns on packaging details (does a consumer want to see the
+   cold-start traffic at all, or never receive it) this session doesn't
+   have enough information to settle. Either way, a steady-state
+   corpus intended for calibration or realism claims (`Calibrate`,
+   `docs/sim-theory.edn`) can exclude the cold-start artifact instead
+   of silently including it as if it were representative.
+
+**Consequences.** ADR-0009's within-version seed-stability policy
+absorbs decision 1's perturbation exactly as that ADR already commits
+to: same config + seed still byte-identical, but M2a's landing is
+another documented instance of "the generator's stochastic surface
+grew," not a regression. `docs/patient-state-model.md`'s `:admitted-at`
+type note (currently "simulated minutes") and any other prose
+referring to simulated minutes become stale the moment M2a lands
+seconds granularity; updating them is M2a's job (a mechanical doc pass
+alongside the code change), tracked here so it isn't silently missed
+in the gap between this ADR and that implementation. The run manifest
+gains the UTC-offset field (decision 2) the same way it already
+records seed and config hash — a schema addition, not a new concept,
+for `ehr-testing-sim.manifest/MirroredManifest`. The roadmap
+(`.agents/plans/roadmap.md`) gains the DST-crossing corpus as a named
+future-premium-content item and the arrival-process API sketch as
+M2a scope.
+
+**Rejected.**
+
+- **Keeping minutes and adding sub-minute precision only where M3
+  needs it** (a mixed-grain clock) — rejected because a clock whose
+  grain depends on which step type is running is a subtler and more
+  surprising property than "the clock is seconds, always," for a
+  saving (avoiding one seed perturbation) ADR-0009 already says isn't
+  worth engineering around.
+- **A full IANA timezone database with real DST transition rules** —
+  rejected for v1 as more machinery than the stated need (a
+  DST-crossing corpus as premium *future* content, not baseline
+  traffic) justifies; a fixed offset is the simplest thing that lets
+  every v1 corpus state its own UTC relationship unambiguously in the
+  manifest.
+- **Building windowed arrival generation and warm-up trimming this
+  session** — rejected because this is a docs/ADR session (see this
+  document's own header discipline); the API shape is captured so
+  M2a's implementation has a target, not so this session can skip
+  ahead of it.
 
 ========== END FILE ==========
 
