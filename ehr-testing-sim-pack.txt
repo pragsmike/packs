@@ -1,7 +1,7 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T18:07:50Z
-HEAD: aa1bb641822cc203289af338c106495eb10affb1
+generated (UTC): 2026-07-26T18:48:01Z
+HEAD: 4031739eaafe94039daabcf5871c200f93137063
 git status --porcelain:
 working tree clean
 elides: .agents/skills, .agents/prompts/archive
@@ -101,11 +101,10 @@ the regression suite.
 ========== FILE: ./.agents/plans/roadmap.md ==========
 # Roadmap
 
-**Status: proposed.** ADR-0003 deferred writing a plan "until first
-real use" of `.agents/plans/`; this is that first use. Everything
-below — milestone order, scope, and the deliberate exclusions — is
-this session's proposal for the author to ratify, reorder, or veto,
-not a committed schedule. Each milestone names the
+**Status: accepted (2026-07-26).** ADR-0003 deferred writing a plan
+"until first real use" of `.agents/plans/`; this is that first use.
+Milestone order, scope, and the deliberate exclusions below are
+author-ratified. Each milestone names the
 [`sim-theory.edn`](../../docs/sim-theory.edn) stage(s) it advances and
 the invariants that must co-land with it (`AGENTS.md`'s co-landing
 convention: every new engine step type ships with its `check.clj`
@@ -114,8 +113,15 @@ invariants in the same change).
 ## M1 — Facility + providers models, transfer step, occupancy projection
 
 Advances **Execute** (`:built`, growing its step vocabulary) via its
-new `provider-pool` catalytic, plus the transfer step type (ADT^A02 in
-`EmitHL7`'s message-type-registry, once emitted).
+new `provider-pool` catalytic, plus the transfer step type.
+**A02 emission is IN M1** — the co-landing convention (`AGENTS.md`)
+extends to the emitter's `message-type-registry`, not just
+`check.clj`: a step type without a registered message type produces
+traffic that's invisible to every consumer downstream of `EmitHL7`,
+which is exactly the kind of silent gap the co-landing rule exists to
+prevent. The registry entry and derivability-law test coverage for
+A02 land in the same change as the `:transfer` step itself, not in a
+follow-on.
 [`docs/operational-models.md`](../../docs/operational-models.md),
 reviewed this session, is this milestone's spec — nothing here
 redecides what that document already decided.
@@ -1076,10 +1082,11 @@ table for provider identifiers:
   that no real NPI could occupy).
 
 **Decision: (a).** A generated 10-digit number that happens to
-coincide with a real NPPES-assigned NPI is possible (the space is
-10 billion minus check-digit constraints, NPPES has roughly a few
-million active assignments, so collision probability is low but
-non-zero) and **harmless**: NPPES is itself public data (the NPI
+coincide with a real NPPES-assigned NPI is possible (the valid-NPI
+body space is 10^9 — the check digit is determined by the nine body
+digits, not free to vary — and NPPES has roughly a few million active
+assignments, so collision probability is low but non-zero) and
+**harmless**: NPPES is itself public data (the NPI
 Registry is a public lookup service), so a coincidental match reveals
 nothing not already public, and no PHI is implicated — an NPI
 identifies a *provider*, not a patient. Recommending (a) over (b)
@@ -1165,6 +1172,258 @@ sampling as Persona's eventual job, age-linked at 65+ for Medicare.
 Open questions, recorded rather than silently decided: attending
 reassignment semantics on service vs. location transfer; caseload as
 a future realism knob for provider sampling.
+
+========== END FILE ==========
+
+========== FILE: ./docs/patient-state-model.md ==========
+# Patient state model
+
+This document specifies the patient lifecycle state machine: the shape
+of the accumulator `ehr-testing-sim.engine/evolve` folds the
+ground-truth log into (ADR-0008), the states and transitions that
+accumulator moves through, and the event-validity table that will
+double as `check.clj`'s invariant skeleton now and `InjectChurn`'s
+applicability oracle later (M2). It formalizes what
+[`docs/operational-models.md`](operational-models.md) describes in
+prose — that document is authoritative on *policy* (the allocation
+ladder, the taxonomy, the NPI decision); this one is authoritative on
+the literal *shape* of the thing pathway generation and churn validity
+will read and write.
+
+## Design inputs: mined from upstream
+
+Before formalizing the schema, two upstream sources were read
+specifically for how each represents patient state — Synthea's
+`Person`/`Module` (Java) and Simulated Hospital's `ir.PatientInfo`
+(Go), verified against source 2026-07-26. One validates this project's
+existing architecture; the other is both a checklist of fields still
+missing and a cautionary tale about what happens without an event log.
+
+**Synthea validates the accumulator/cursor split, and adds two
+requirements.** Synthea splits patient state into workflow cursors and
+a fact blackboard: `Person.attributes` is an open `Map<String,Object>`
+shared by every concurrently running GMF module, and each module
+stores its own current-state cursor inside that map, keyed by module
+name. Clinical facts accumulate in a separate `HealthRecord`. This
+project's shape already mirrors that split — the queue-carried
+remaining pathway steps are the cursor, the patient accumulator is the
+blackboard-plus-record — so this is read as validation, not as a
+reason to change anything. Two things Synthea does that this project
+must still account for:
+
+1. **GMF guards query state-*visit history***, not a duplicated log.
+   Conditional transitions like "PriorState X, within window" walk
+   `Person.history`, the person's recorded trail of visited module
+   states — a mutable-world approximation of an event log. When M5
+   ports the GMF interpreter, `PriorState` guards compile to queries
+   over *our* ground-truth log — typed, timestamped, and already
+   authoritative (ADR-0008) — rather than to a second history
+   structure. **The accumulator below does not carry its own visit
+   history for this reason: the log is `Person.history` done right,
+   and the interpreter reads the log directly when M5 lands.**
+2. **An open `:attributes` sub-map is reserved now.** Synthea's
+   modules coordinate through named blackboard attributes — one
+   module sets a condition flag, another guards on it. This
+   accumulator needs the same open extension point once the
+   interpreter exists; it is reserved in the schema below
+   (`:attributes`, `[:map-of :keyword :any]`) so nothing else claims
+   the name between now and M5, even though nothing writes to it yet.
+
+Also noted, for completeness rather than as a design constraint:
+Synthea advances in fixed time ticks (roughly 7 days) because its
+horizon is a lifetime. This project's encounter-horizon discrete-event
+engine has no equivalent tick loop — GMF `Delay` states will compile
+to scheduled wake-ups (M5), not ticks, when that milestone lands.
+
+**Simulated Hospital's `ir.PatientInfo` is a field-by-field checklist,
+and a cautionary tale about representing history without a log.**
+Auditing this accumulator against `PatientInfo`'s fields surfaces real
+gaps and one design lesson:
+
+- **`Class`** (EMERGENCY / INPATIENT / OUTPATIENT / PREADMIT /
+  RECURRING / OBSTETRICS, PV1-2) is tracked **separately from
+  `Status`** in `PatientInfo`, and this accumulator does the same
+  (`:class`, below) — lifecycle (`:status`: new/admitted/discharged)
+  and registration category (`:class`) move independently. This is
+  exactly the axis boarding needs: a boarding patient's `:class` is
+  whatever it was at admission (typically `:inpatient`) throughout,
+  regardless of which physical ward they're sitting in.
+- **`VisitID`** per encounter (PV1-19) — not landed yet; flagged for
+  whenever encounters become first-class (readmission scenarios, M2
+  or later). Not part of the schema below.
+- **Pending locations and expected admit/discharge/transfer
+  datetimes** (the A14/A15-family pending events) carry *expected*
+  times, a field class this project's events don't have yet. Flagged
+  for the M2 churn milestone (`pending-*` step types), not designed
+  here.
+- **`ReadmissionIndicator`, attending doctor, account status** — small,
+  cheap PV1 fields once each is seen; no design burden.
+
+**The cautionary tale, worth recording as the worked example of why
+the log-is-primitive decision (ADR-0008) pays for itself starting at
+M2, not "someday":** `PatientInfo`'s location alone is *six* fields —
+`Location`, `PriorLocation`, `PriorLocationForCancelTransfer`,
+`PendingLocation`, `PriorPendingLocation`, and a prior for that one
+too. The in-code comment on the third explains why: normal flow clears
+`PriorLocation` after a transfer completes, so later messages omit it
+— but `CancelTransfer` has to reinstate the value that was just
+cleared, so it needs its own shadow copy to undo the clearing. Every
+cancellable mutation in that codebase grows a bespoke shadow field to
+hold whatever it might later need to undo. That field zoo *is* the
+mutable-state workaround for not having an event log: without one,
+"what was true before the thing I need to cancel" has nowhere to live
+except a hand-maintained prior-value field, one per cancellable
+mutation.
+
+In this project's event-sourced engine, `:transfer-in-error`'s (M2)
+`decide` reads the prior location by querying the log directly for
+that patient's most recent location-setting event before the one being
+cancelled, and the emitter derives PV1-6 (prior location) the same way
+at message-build time. **One `:location` field in the accumulator,
+plus a log query, replaces all six `PatientInfo` location fields.**
+This is not a hoped-for benefit of ADR-0008 — it is the concrete
+reason M2's cancel-family step types are expected to be cheap rather
+than each growing their own shadow state.
+
+## The accumulator
+
+`ehr-testing-sim.engine/PatientState` (malli), the type
+`evolve`'s fold produces and `decide` reads:
+
+| Field | Type | Notes |
+|---|---|---|
+| `:mrn` | `:string` | Stable patient identifier; never reassigned. |
+| `:status` | `[:enum :new :admitted :discharged]` | Lifecycle. Boarding is **not** a fourth status — see below. |
+| `:class` | `[:enum :inpatient :emergency :outpatient :preadmit :recurring :obstetrics]`, optional until admission | PV1-2. Tracked separately from `:status` per `ir.PatientInfo`'s own separation (mined above) — registration category, not lifecycle. Distinct from a *ward's* `:class` (`:inpatient`/`:ed`, `docs/operational-models.md`'s facility config) — same word, two different things: one is what kind of patient this is, the other is what a ward is designated for. Set at admission, unchanged by transfer within M1's scope. |
+| `:home-ward` | `:string`, ward id, nil until admission | The ward the pathway named — clinical intent (`docs/operational-models.md`'s own term for the rung-1/2 target). Diverges from `:location`'s ward exactly on rungs 3 (outlier) and 4 (boarding) of the allocation ladder. |
+| `:location` | `[:map [:ward :string] [:bed :string] [:placement [:enum :licensed :surge]]]`, nil until admission | The patient's actual **physical** location, always concrete — never nil-bed, even while boarding (see worked example below). `:placement` is exactly the two values `docs/operational-models.md` specifies; ladder rungs 3 and 4 are distinguished from 1 and 2 not by a third placement value but by `:location`'s ward differing from `:home-ward` (see the table below). |
+| `:attending` | `:string`, provider id, nil until admission | References `docs/operational-models.md`'s provider pool by id; rendered PV1-7 as `id^family^given` at emit time, not stored denormalized. |
+| `:payer` | `:string`, payer id, nil until sampled | References the payer pool by id (Persona's job once it lands; engine patient-init until then, per `docs/operational-models.md`). Never re-sampled — the attribute-pool contract. |
+| `:attributes` | `[:map-of :keyword :any]`, default `{}` | **Reserved, unused until M5.** The open blackboard Synthea's modules coordinate through (mined above) — named now so nothing else claims the key before the GMF interpreter lands. |
+
+Deliberately absent, per the mining above: no visit-history field (the
+log is the history — M5's interpreter queries it directly), no
+`VisitID` (encounters aren't first-class yet), no shadow prior-location
+fields (M2's cancel-family reads priors from the log).
+
+**Staging note.** This table is the M1 target shape. The session that
+lands `evolve`/`decide` (ADR-0008) ships `PatientState` with `:class`,
+`:home-ward`, `:attending`, `:payer`, and `:attributes` present as
+described here, but `:location` still in its pre-M1 shape — a bare
+ward-name string, matching the v0 step set's own `:location` event
+field — because the `{:ward :bed :placement}` structure only becomes
+real alongside Milestone M1's allocation ladder. `:location` upgrades
+to the map shape when that ladder lands, in the same change (the same
+co-landing discipline as everywhere else in this project: a field
+shape and the code that populates it meaningfully land together, not
+ahead of each other).
+
+### Worked example: boarding, precisely
+
+A patient admitted to Renal, but Renal (and its surge) are full, boards
+in an ED surge slot:
+
+```
+:status     :admitted
+:class      :inpatient
+:home-ward  "renal"
+:location   {:ward "ed" :bed "ED-H03" :placement :surge}
+```
+
+`:location` is always where the patient physically *is* — this
+deliberately departs from an earlier hypothesis (nil `:bed` while
+administrative ward carries the target) floated ahead of this
+document, because `docs/operational-models.md` itself is unambiguous
+that boarding means "the patient's state simply carries a location
+that isn't Renal while its status says Renal" — i.e. `:location` holds
+the physical fact, and the administrative fact lives in the separate
+`:home-ward` field this document introduces to make that prose
+literal. `:home-ward "renal" ≠ :location.ward "ed"` **is** boarding —
+no separate boolean flag is needed. The same mismatch with the
+*other* member of the pair distinguishes outlier placement (rung 3:
+`:home-ward` ≠ `:location.ward`, but `:location.ward`'s configured
+`:class` is `:inpatient`, i.e. a real other ward, not ED) from
+boarding (rung 4: `:location.ward`'s `:class` is `:ed`). Rungs 1 and 2
+are the base case, `:home-ward = :location.ward`, distinguished from
+each other only by `:placement`.
+
+| Ladder rung | `:placement` | `:home-ward` vs `:location.ward` |
+|---|---|---|
+| 1. Home-ward licensed | `:licensed` | equal |
+| 2. Home-ward surge | `:surge` | equal |
+| 3. Other-ward licensed (outlier) | `:licensed` | differ; `:location.ward` is `:inpatient`-class |
+| 4. Boarding | `:surge` | differ; `:location.ward` is `:ed`-class |
+
+## States and transitions
+
+```mermaid
+stateDiagram-v2
+    [*] --> New
+    New --> Admitted : A01 admission (ladder rungs 1-3)
+    New --> Boarding : A01 admission (ladder rung 4)
+    Admitted --> Admitted : A02 transfer (location changes, home-ward unchanged)
+    Admitted --> Boarding : A02 transfer landing on rung 4
+    Boarding --> Admitted : A02 bed-ready transfer (another patient's discharge frees a home-ward bed)
+    Admitted --> Discharged : A03 discharge
+    Boarding --> Discharged : A03 discharge (still boarding at time of discharge)
+    Discharged --> [*]
+
+    Admitted --> Pending : pending-* (M2, planned)
+    Pending --> Admitted : pending resolves (M2, planned)
+    Admitted --> CancelledOrInError : cancel-*, *-in-error (M2, planned)
+    CancelledOrInError --> Admitted : cancel-in-error reinstates (M2, planned)
+    Admitted --> Merged : merge (M2, planned)
+    Merged --> [*]
+
+    note right of Boarding
+        Sub-mode of Admitted, not a
+        fourth top-level status.
+        status stays :admitted;
+        home-ward != location.ward
+        (ED-class) is what boarding
+        means. See the accumulator
+        table above.
+    end note
+```
+
+Boarding is drawn as its own box only because a diagram needs a node
+to hang the bed-ready-transfer transition on; per the accumulator
+table, it is **not** a fourth value of `:status` — it is the
+`:home-ward ≠ :location.ward` (ED-class) condition holding while
+`:status` is `:admitted`. `Pending`, `CancelledOrInError`, and `Merged`
+are M2's churn family, shown so this diagram doesn't need a redraw
+when M2 lands additively — only new edges, no restructuring of what's
+here.
+
+## Event validity table
+
+For each event type, the patient states in which the event is legal to
+occur. This table does **double duty**, deliberately: it is the
+skeleton `check.clj`'s invariant catalog implements directly (each row
+becomes "event X's patient was in a legal state at the time," a
+co-landing invariant per `AGENTS.md`), and it is the applicability
+oracle `InjectChurn` (M2) will consult to decide where a churn event
+can be legally inserted into an existing pathway — the same predicate
+answers "was this legal when it happened" and "would this be legal to
+insert here," because both ask the same question about the same
+state.
+
+| Event | Legal when | Illegal example |
+|---|---|---|
+| `:admission` | `:status = :new` | Admitting an already-admitted or already-discharged patient. |
+| `:transfer` (incl. bed-ready) | `:status = :admitted` (Admitted or Boarding) | Transferring a patient who hasn't been admitted yet, or who's already discharged. |
+| `:discharge` | `:status = :admitted` (Admitted or Boarding) | Discharging a patient not currently admitted, or discharging twice. |
+| `:pending-*` (M2, planned) | `:status = :admitted`, not already pending | Double-pending; pending a non-admitted patient. |
+| `:cancel-*` / `:*-in-error` (M2, planned) | The event class being cancelled must exist in this patient's log and not already be cancelled | Cancelling an event that never happened, or cancelling twice. |
+| `:merge` (M2, planned) | Both MRNs exist; at least the surviving MRN is `:admitted` or reachable | Merging into/from an MRN that was never admitted, or a double merge. |
+
+The current `check.clj` catalog (`timestamps-monotone`,
+`discharge-follows-admission`) already encodes the `:discharge` row's
+constraint in a more specific form (admission strictly precedes
+discharge, not merely "some admission exists"); M1 formalizes the
+`:admission` and `:transfer` rows as new invariants in the same change
+that lands the `:transfer` step type (`AGENTS.md`'s co-landing
+convention).
 
 ========== END FILE ==========
 
@@ -1663,7 +1922,7 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
    :outputs ["ground-truth-log" "state-history"]
    :catalytic ["provider-pool" "order-profiles"]
    :laws ["determinism: single seeded RNG, totally ordered event queue ([t seq-no] tiebreak) => byte-identical serialized output for identical inputs+seed -- property-tested (engine-test/determinism-holds-for-all-seeds, 100 trials green 2026-07-26)"
-          "pure fold: (state, due-event) -> (state', emitted-events); full per-patient state history is retained, which is what makes state-based emitters renderings rather than redesigns (ADR-0002)"
+          "decide/evolve split (ADR-0008): decide (rng, t, world, mrn, step) -> {:events :advance} consults world-so-far and the RNG but never mutates; evolve (world, event) -> world' is the ONLY function that changes patient state, pure and total, folding one event at a time -- so state-history is DERIVED (reduce evolve over a log prefix), not a second output the engine must keep in sync with the log by discipline; this is what makes state-based emitters renderings rather than redesigns (ADR-0002)"
           "order-profiles catalytic (target 3, hashed US-units config, docs/operational-models.md): order and result step types land under Execute's existing :built contract as the engine's step vocabulary grows -- an EmitHL7-style co-landing addition, not a new stage (repairs the plan's earlier capture gap: order profiles and the ORM/ORU cycle were discussed from the first session but appeared in no planning artifact before this one)"
           "provider-pool catalytic (target 3, hashed config, docs/operational-models.md): attending assignment at admission draws from the provider pool the same way bed assignment draws from facility config -- both are Execute-time allocations, not separate stages"]
    :contract "v0 scope: executes the walking-skeleton step set (:admission :delay :discharge) for staggered multi-patient arrivals; the WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"}
@@ -1930,6 +2189,18 @@ Recorded here rather than silently decided:
    and could drop out of Execute's signature, with EmitState consuming
    `ground-truth-log` instead. Deferred until EmitState exists to
    test it.
+
+   **RESOLVED (ADR-0008), ahead of the "deferred until EmitState
+   exists" plan above:** `state-history` is derived. The engine's
+   `decide`/`evolve` split makes `evolve (world, event) -> world'` the
+   only function that ever produces a new patient state, and it is a
+   pure fold over the log — `state-history` at any prefix is
+   `(reduce evolve initial-world log-prefix)`, a computed projection,
+   not independent bookkeeping the engine could let drift from the
+   log. The original entry is left standing above rather than deleted,
+   per this project's append-don't-erase convention for resolved
+   questions; EmitState (M6) still consumes this resolution when it
+   lands, it just no longer has to *establish* it.
 4. **Sum types on output wires** — inherited open question from
    tools' notation (Gate's routing discussion); sim's Check has the
    same shape (pass/rejected) and defers the same way.
@@ -2328,9 +2599,9 @@ records that as its own ADR, exactly as ADR-0003 already anticipated.
 
 ## ADR-0007 — Three-class operational resource taxonomy; occupancy as a derived projection; encounter-horizon scope; payers as an attribute; synthetic NPIs are Luhn-valid
 
-**Status:** Proposed (2026-07-26) — pending author review, per this
-session's brief; see [`docs/operational-models.md`](../docs/operational-models.md)
-for the full design this ADR records the decisions from.
+**Status:** Accepted (author-ratified 2026-07-26) — see
+[`docs/operational-models.md`](../docs/operational-models.md) for the
+full design this ADR records the decisions from.
 
 **Context.** The theory (`docs/sim-theory.edn`) named facility,
 provider, and payer resources only implicitly — as config a stage
@@ -2419,8 +2690,120 @@ work starts. The occupancy consistency law is a property test M1 must
 ship, not an optional nicety. `docs/problem-statement.md` gains
 constraint 10 (encounter horizon) as a one-sentence addition, per this
 session's own scope-minimality rule for touching that document. No
-code changes accompany this ADR — it is Proposed pending the author's
-review of `docs/operational-models.md`, per this session's brief.
+code accompanied this ADR at acceptance time; Milestone M1
+(`.agents/plans/roadmap.md`) is where `docs/operational-models.md`'s
+design becomes code.
+
+---
+
+## ADR-0008 — The engine is event-sourced: `decide`/`evolve` replace the fused `transition`; patient state is a fold of the log
+
+**Status:** Accepted (author-directed 2026-07-26)
+
+**Context.** The v0 engine's `transition` multimethod (`engine.clj`)
+fused two responsibilities that Milestone M1 is about to put real
+pressure on: given a patient's state and a pathway step, it decided
+what happens (consulting the RNG) *and* computed the resulting state
+*and* produced the ground-truth events, all in one function, one
+return value (`{:patient :events :advance}`). This was adequate for a
+three-step walking skeleton where every step touched exactly one
+patient's own state and nothing else. M1 breaks that: the allocation
+ladder must consult *other* patients' locations (the occupancy
+projection) before deciding where to place an admission, and the
+bed-ready transfer for a boarding patient is triggered by a *different*
+patient's discharge — a decision made while processing patient B's
+step needs to emit an event that changes patient A's state. A fused
+transition has no clean place to put "I looked at the whole facility
+and decided something happens to someone else." Splitting the
+responsibility now, before M1's step types multiply the surface, is
+cheaper than retrofitting it after.
+
+**Decision.**
+
+1. **The ground-truth log is the single primitive.** Patient state
+   (all patients', not any one patient's in isolation — the fold
+   input the theory calls `state-history`) is not maintained as an
+   independent structure the engine mutates; it is what you get by
+   folding the log through one pure function. There is no second
+   place a fact about a patient's state can originate.
+2. **Step application splits into a `decide`/`evolve` pair,**
+   replacing the fused `transition` multimethod:
+   - **`decide`** `(rng, t, world, mrn, step) → {:events [...] :advance N}`.
+     Consults `world` (the current fold of all patient state so far —
+     read-only) and the run's single RNG to decide what happens.
+     Returns the facts (events); **never returns a new state** and
+     never mutates `world`. This is where the allocation ladder and
+     the bed-ready cross-patient trigger live: `decide` may return
+     events naming a patient other than `mrn` (e.g. patient B's
+     discharge `decide` call also returns a transfer event for
+     boarding patient A), because deciding what happens is exactly
+     where cross-patient coupling belongs.
+   - **`evolve`** `(patient-state, event) → patient-state'`. Pure,
+     total, and deterministic: no RNG, no knowledge of the step or the
+     decision that produced the event, no knowledge of `world` or any
+     other patient — dispatch on the event's own `:event` key alone,
+     operating on exactly the one patient the event names. This is
+     deliberately narrower than `decide`'s view: cross-patient
+     coupling is a *decision* (does B's discharge free a bed A is
+     waiting on?), never a state-transition rule, so `evolve` never
+     needs to see two patients at once even when `decide` does. The
+     run loop is what maps an event to the right patient's slice of
+     `world` (`(:mrn event)`) and folds `evolve` in there.
+   - **The only path by which patient state changes is folding
+     emitted events through `evolve`.** The run loop calls `decide`,
+     then folds each returned event into `world` via `evolve` at that
+     event's own `:mrn`, then appends `events` to the ground-truth
+     log, in that order, every time. There is no code path that
+     assigns into a patient's state directly.
+3. **Consequences for the theory, recorded here and synced into
+   `docs/sim-theory.edn`/`.md`:**
+   - Log↔state drift — the failure mode of a system that maintains
+     state and events as two things a bug can let disagree — becomes
+     impossible by construction, not merely tested for: there is only
+     one function (`evolve`) that ever produces a new patient state,
+     and it is a pure fold over exactly the events already in the log.
+   - `sim-theory.md`'s open question #3 (is `state-history` primitive
+     or derived?) is **RESOLVED: derived.** `state-history` is
+     `(reduce evolve initial-world log-prefix)` at any prefix length —
+     a computable projection, not a second output the engine must keep
+     in sync with the log by discipline. The authority hierarchy is
+     now explicit and three deep: **log → patient states → occupancy
+     board**, each stage a projection of the one before it, each with
+     its own provable consistency law (the occupancy board's is
+     `docs/operational-models.md`'s "board ≡ fold over patient
+     locations"; patient states' is this ADR's fold property).
+   - EmitState's future implementation is exactly "fold the log to
+     instant *t*, render" — the snapshot-at-instant law
+     (`sim-theory.edn`'s `:emit-state` stage) stops being aspirational
+     prose once `evolve` exists to do the folding.
+   - The **emitter-coherence** global law (`sim-theory.md`) gains its
+     mechanism: "replaying `hl7v2-stream` reconstructs `state-history`"
+     is now a claim about composing `evolve` with message parsing, not
+     a hoped-for property with no stated procedure.
+
+**Rejected.** Keeping the fused `transition` and adding cross-patient
+awareness as a special case bolted onto it — cheaper today (no API
+change), but every step type M1 and M2 add (transfer, bed-swap,
+cancel-\*, merge) would widen the surface on which the returned
+`:patient` and the emitted `:events` could silently disagree, and a
+fused function gives cross-patient effects no principled place to
+live except further special-casing. Splitting once, now, is paid down
+across every future step type instead of re-argued per step.
+
+**Consequences.** `engine.clj`'s public surface changes: `transition`
+is replaced by `decide` and `evolve` (a breaking change to an internal
+namespace, not the CLI embedding contract ADR-0001 governs — no
+version note needed there). Every existing step type
+(`:admission`, `:delay`, `:discharge`) gets a `decide` method and,
+where it changes patient state, an `evolve` method; `:delay` has a
+`decide` (it samples the RNG) but no `evolve` (it changes no patient
+state, so it emits no events for `evolve` to fold). The property test
+this ADR requires — patient state, at every event boundary of a run,
+equals folding that patient's own event subsequence through `evolve`
+from its initial state — is the executable form of "impossible by
+construction," not an added nicety. A pinned-seed regression proves
+the refactor changes internal structure without changing observable
+output for the v0 step set.
 
 ========== END FILE ==========
 
@@ -2763,15 +3146,23 @@ review of `docs/operational-models.md`, per this session's brief.
 ========== FILE: ./src/ehr_testing_sim/engine.clj ==========
 (ns ehr-testing-sim.engine
   "The discrete-event simulation core: a priority queue of pending
-  events ordered by simulated time, a map of patient states, and a
-  step-transition function. Architecture mined from Google's Simulated
-  Hospital (pkg/state WrappedQueue + pkg/hospital RunNextEventIfDue),
-  reduced to its functional essence: where the Go original mutates
-  patient structs in place, this engine is a pure fold --
-  (state, due-event) -> (state', emitted-events) -- so full state
-  history per patient is retained, which is what will later make
-  state-based emitters (FHIR/CDA snapshots at any simulated instant)
-  a rendering concern rather than a redesign.
+  events ordered by simulated time, a world of patient states, and the
+  decide/evolve pair (ADR-0008) that replaces a single fused
+  transition function. Architecture mined from Google's Simulated
+  Hospital (pkg/state WrappedQueue + pkg/hospital RunNextEventIfDue).
+
+  Event-sourcing doctrine (ADR-0008): the ground-truth log is the only
+  primitive. `decide` (rng, t, world, mrn, step) -> {:events :advance}
+  consults the current world (every patient's state so far) and the
+  run's single RNG to decide what happens, but never returns a new
+  state -- this is where cross-patient coupling lives (a discharge's
+  decide call may also emit a transfer event for a DIFFERENT patient).
+  `evolve` (patient-state, event) -> patient-state' is pure, total, and
+  narrower: no RNG, no knowledge of world or of any patient but the one
+  the event names. The ONLY path by which patient state changes is
+  folding emitted events through `evolve`; docs/patient-state-model.md
+  is PatientState's design spec, docs/sim-theory.md open question #3
+  (state-history is derived, not primitive) is this ADR's resolution.
 
   Determinism doctrine: ALL randomness flows from the single
   java.util.Random seeded in `run`. No other entropy source (wall
@@ -2784,40 +3175,95 @@ review of `docs/operational-models.md`, per this session's brief.
   configured number of patients with staggered arrivals, producing the
   ground-truth trajectory log. Emission to HL7v2 is a separate
   namespace consuming this log -- events here are format-free."
-  (:require [ehr-testing-sim.pathway :as pathway])
+  (:require [ehr-testing-sim.pathway :as pathway]
+            [malli.core :as m])
   (:import [java.util Random]))
+
+(def PatientState
+  "The engine's per-patient accumulator -- what folding `evolve` over a
+  patient's own event subsequence produces (docs/patient-state-model.md
+  is the full design spec). :class/:home-ward/:attending/:payer/
+  :attributes are reserved fields that land for real with Milestone M1
+  (docs/operational-models.md) and beyond (:attributes waits on M5);
+  the v0 step set (:admission/:delay/:discharge) populates only :mrn,
+  :status, and :location (still a bare ward-name string here --
+  :location's {:ward :bed :placement} shape is Milestone M1's own
+  change, landing with the allocation ladder, not this one)."
+  [:map
+   [:mrn :string]
+   [:status [:enum :new :admitted :discharged]]
+   [:class {:optional true} [:enum :inpatient :emergency :outpatient
+                              :preadmit :recurring :obstetrics]]
+   [:home-ward {:optional true} [:maybe :string]]
+   [:location {:optional true} [:maybe :string]]
+   [:attending {:optional true} [:maybe :string]]
+   [:payer {:optional true} [:maybe :string]]
+   [:attributes {:optional true} [:map-of :keyword :any]]])
+
+(defn valid-patient?
+  "Validates a patient accumulator against PatientState -- the same
+  valid?/explain convention ehr-testing-sim.pathway already uses."
+  [patient]
+  (m/validate PatientState patient))
+
+(defn initial-patient
+  "The state a patient starts in when its arrival is scheduled --
+  `evolve`'s fold origin. The single place this shape is constructed,
+  so tests reconstructing state independently (the fold-consistency
+  property) start from the same place the engine itself does."
+  [mrn]
+  {:mrn mrn :status :new})
 
 (defn- rand-int-in
   "Uniform integer in [lo, hi] from the seeded RNG."
   [^Random rng lo hi]
   (+ lo (.nextInt rng (inc (- hi lo)))))
 
-(defmulti transition
-  "Applies one pathway step to one patient's state at simulated time t
-  (minutes from epoch of the run). Returns
-  {:patient <patient'> :events [<ground-truth event>...] :advance <minutes>}.
-  Pure given the RNG (the RNG is the only stateful argument, and its
-  consumption order is fixed by the deterministic event ordering)."
-  (fn [_rng _t _patient step] (:type step)))
+(defmulti decide
+  "Decides what happens when patient `mrn` is due to execute `step` at
+  simulated time t (minutes from epoch of the run). Consults `world`
+  (every patient's current state, keyed by mrn -- read-only) and the
+  seeded RNG to make stochastic and cross-patient choices; returns
+  {:events [<ground-truth event>...] :advance <minutes>}. NEVER returns
+  or implies a new patient state -- state changes only by folding the
+  returned events through `evolve` (ADR-0008). Pure given the RNG (the
+  RNG is the only stateful argument, and its consumption order is
+  fixed by the deterministic event ordering)."
+  (fn [_rng _t _world _mrn step] (:type step)))
 
-(defmethod transition :admission
-  [_rng t patient {:keys [location reason]}]
-  {:patient (assoc patient :status :admitted :location location)
-   :events [{:event :admission :t t :mrn (:mrn patient)
+(defmethod decide :admission
+  [_rng t _world mrn {:keys [location reason]}]
+  {:events [{:event :admission :t t :mrn mrn
              :location location :reason reason}]
    :advance 0})
 
-(defmethod transition :delay
-  [rng _t patient {:keys [from to]}]
-  {:patient patient
-   :events []
+(defmethod decide :delay
+  [rng _t _world _mrn {:keys [from to]}]
+  {:events []
    :advance (rand-int-in rng from to)})
 
-(defmethod transition :discharge
-  [_rng t patient _step]
-  {:patient (assoc patient :status :discharged :location nil)
-   :events [{:event :discharge :t t :mrn (:mrn patient)}]
+(defmethod decide :discharge
+  [_rng t _world mrn _step]
+  {:events [{:event :discharge :t t :mrn mrn}]
    :advance 0})
+
+(defmulti evolve
+  "Folds one ground-truth event into the one patient it names:
+  (patient-state, event) -> patient-state'. Pure and total: no RNG, no
+  knowledge of the step or decision that produced the event, no
+  knowledge of `world` or any other patient. This is the ONLY function
+  that ever produces a new patient state (ADR-0008) -- the run loop is
+  what maps an event to the right patient's slice of `world` via the
+  event's own :mrn and folds `evolve` in there."
+  (fn [_patient event] (:event event)))
+
+(defmethod evolve :admission
+  [patient {:keys [location]}]
+  (assoc patient :status :admitted :location location))
+
+(defmethod evolve :discharge
+  [patient _event]
+  (assoc patient :status :discharged :location nil))
 
 (defn- pop-min
   "Removes and returns the earliest queue entry. Queue is a sorted-map
@@ -2835,10 +3281,16 @@ review of `docs/operational-models.md`, per this session's brief.
     :arrival-gap max minutes between successive patient arrivals
                  (default 60; actual gaps sampled from the seeded RNG)
 
-  Returns {:ground-truth [event ...]} where events are format-free maps
-  ordered by [t seq-no]. Emitters consume this log; test assertions
-  target it directly (it is a first-class output, per the problem
-  statement)."
+  Returns {:ground-truth [event ...] :state-history {mrn [state ...]}}.
+  ground-truth is format-free, ordered by [t seq-no]; emitters consume
+  it and test assertions target it directly (a first-class output, per
+  the problem statement). state-history is DERIVED (ADR-0008; sim-
+  theory.md open question #3) -- (get state-history mrn) is exactly
+  (rest (reductions evolve (initial-patient mrn) (events for mrn))),
+  proven as a property test (engine-test/patient-state-is-a-fold-of-
+  the-log) rather than assumed; the engine computes it as a byproduct
+  of the loop below because decide needs live world state to make its
+  next decision, not because it's a second source of truth."
   [{:keys [seed patients pathway arrival-gap]
     :or {patients 1
          pathway pathway/sample-admission-discharge
@@ -2848,27 +3300,35 @@ review of `docs/operational-models.md`, per this session's brief.
         ;; Stagger arrivals; consume RNG in patient order (fixed).
         arrivals (vec (reductions + 0 (repeatedly (dec patients)
                                                   #(rand-int-in rng 0 arrival-gap))))
+        mrn-for (fn [i] (format "MRN%06d" (inc i)))
         init-queue (into (sorted-map)
                          (map-indexed
                           (fn [i arrival-t]
                             [[arrival-t i]
-                             {:patient {:mrn (format "MRN%06d" (inc i)) :status :new}
-                              :steps (:steps pathway)}])
-                          arrivals))]
+                             {:mrn (mrn-for i) :steps (:steps pathway)}])
+                          arrivals))
+        init-world (into {} (map-indexed (fn [i _] [(mrn-for i) (initial-patient (mrn-for i))]))
+                         arrivals)]
     (loop [queue init-queue
            seq-no patients
-           ground-truth (transient [])]
+           world init-world
+           ground-truth (transient [])
+           state-history {}]
       (if (empty? queue)
-        {:ground-truth (persistent! ground-truth)}
-        (let [[[t _] {:keys [patient steps]} queue'] (pop-min queue)
+        {:ground-truth (persistent! ground-truth)
+         :state-history state-history}
+        (let [[[t _] {:keys [mrn steps]} queue'] (pop-min queue)
               [step & remaining] steps
-              {p' :patient evs :events adv :advance} (transition rng t patient step)
-              ground-truth' (reduce conj! ground-truth evs)]
+              {:keys [events advance]} (decide rng t world mrn step)
+              world' (reduce (fn [w ev] (update w (:mrn ev) evolve ev)) world events)
+              ground-truth' (reduce conj! ground-truth events)
+              state-history' (reduce (fn [sh ev]
+                                        (update sh (:mrn ev) (fnil conj []) (get world' (:mrn ev))))
+                                      state-history events)]
           (if (seq remaining)
-            (recur (assoc queue' [(+ t adv) seq-no] {:patient p' :steps (vec remaining)})
-                   (inc seq-no)
-                   ground-truth')
-            (recur queue' seq-no ground-truth')))))))
+            (recur (assoc queue' [(+ t advance) seq-no] {:mrn mrn :steps (vec remaining)})
+                   (inc seq-no) world' ground-truth' state-history')
+            (recur queue' seq-no world' ground-truth' state-history')))))))
 
 ========== END FILE ==========
 
@@ -3276,11 +3736,16 @@ review of `docs/operational-models.md`, per this session's brief.
   "Determinism and invariants over the engine. The properties here are
   the executable form of the problem statement's Guarantees section:
   same inputs + seed => identical output; every run satisfies the
-  invariant catalog."
+  invariant catalog. Also: ADR-0008's decide/evolve split -- patient
+  state is a fold of the log, proven as a property, plus a pinned-seed
+  regression proving the refactor didn't change observable output for
+  the v0 step set."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.check :as check]
             [ehr-testing-sim.result :as result]))
@@ -3319,6 +3784,43 @@ review of `docs/operational-models.md`, per this session's brief.
                  patients (gen/choose 1 10)]
     (= (engine/run {:seed seed :patients patients})
        (engine/run {:seed seed :patients patients}))))
+
+;; --- ADR-0008: the engine is event-sourced ------------------------------
+
+(defspec patient-state-is-a-fold-of-the-log 100
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 15)]
+    (let [{:keys [ground-truth state-history]} (engine/run {:seed seed :patients patients})]
+      (every?
+       (fn [[mrn events]]
+         (= (rest (reductions engine/evolve (engine/initial-patient mrn) events))
+            (get state-history mrn)))
+       (group-by :mrn ground-truth)))))
+
+(deftest pinned-seed-survives-decide-evolve-refactor
+  (testing "ADR-0008's decide/evolve split changes the engine's internal
+            structure but not its observable output for the v0 step set --
+            the ground-truth log captured before the refactor (see the
+            fixture's own header comment) must still be reproducible
+            byte-for-byte after it."
+    (let [baseline (edn/read-string
+                    (slurp (io/resource "ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn")))
+          current (select-keys (engine/run {:seed 42 :patients 5}) [:ground-truth])]
+      (is (= baseline current)))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn ==========
+;; Captured from ehr-testing-sim.engine/run {:seed 42 :patients 5} at the
+;; START of the M1 session that introduced ADR-0008's decide/evolve split
+;; (2026-07-26), BEFORE any refactor -- the pre-refactor ground truth this
+;; repo's determinism guarantee says must still be reproducible byte-for-
+;; byte after the engine is restructured internally. See
+;; ehr_testing_sim.engine_test/pinned-seed-survives-decide-evolve-refactor.
+;; Do NOT regenerate this file casually: it is the baseline a future
+;; regression compares against, not a snapshot to keep in sync with
+;; whatever the engine currently produces.
+{:ground-truth [{:event :admission, :t 0, :mrn "MRN000001", :location "Renal", :reason "Kidney problems"} {:event :admission, :t 5, :mrn "MRN000002", :location "Renal", :reason "Kidney problems"} {:event :admission, :t 37, :mrn "MRN000003", :location "Renal", :reason "Kidney problems"} {:event :admission, :t 62, :mrn "MRN000004", :location "Renal", :reason "Kidney problems"} {:event :discharge, :t 91, :mrn "MRN000002"} {:event :admission, :t 100, :mrn "MRN000005", :location "Renal", :reason "Kidney problems"} {:event :discharge, :t 132, :mrn "MRN000004"} {:event :discharge, :t 153, :mrn "MRN000001"} {:event :discharge, :t 211, :mrn "MRN000003"} {:event :discharge, :t 220, :mrn "MRN000005"}]}
 
 ========== END FILE ==========
 
