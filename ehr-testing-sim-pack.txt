@@ -1,9 +1,9 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T18:48:01Z
-HEAD: 4031739eaafe94039daabcf5871c200f93137063
+generated (UTC): 2026-07-26T19:37:45Z
+HEAD: 1117ce9c3704e69c9e1e69af81ce694837c38f69
 git status --porcelain:
-working tree clean
+?? docs/clinical-realities.md
 elides: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
@@ -747,7 +747,10 @@ against what *should* be true, independent of message parsing. See
 problem, constraints, black-box contract, and validation program.
 
 **Status: pre-release walking skeleton.** Built: the engine, the
-invariant catalog, and HL7v2 admission/discharge emission (below).
+invariant catalog, and HL7v2 admission/discharge/transfer emission
+(below); the facility and providers models (beds, the allocation
+ladder, boarding, bed-ready transfers, synthetic attendings —
+docs/operational-models.md).
 
 ## Pipeline: now / next / later
 
@@ -785,7 +788,7 @@ flowchart LR
 ```
 
 **Now** (green): Execute, Check, EmitHL7 — property-tested and green
-(20 tests / 55 assertions). **Next** (amber): InjectChurn, growing the
+(62 tests / 134 assertions). **Next** (amber): InjectChurn, growing the
 engine's step vocabulary starting with transfer. **Later** (dashed
 grey): everything else in the *want*.
 
@@ -1299,6 +1302,7 @@ than each growing their own shadow state.
 | `:location` | `[:map [:ward :string] [:bed :string] [:placement [:enum :licensed :surge]]]`, nil until admission | The patient's actual **physical** location, always concrete — never nil-bed, even while boarding (see worked example below). `:placement` is exactly the two values `docs/operational-models.md` specifies; ladder rungs 3 and 4 are distinguished from 1 and 2 not by a third placement value but by `:location`'s ward differing from `:home-ward` (see the table below). |
 | `:attending` | `:string`, provider id, nil until admission | References `docs/operational-models.md`'s provider pool by id; rendered PV1-7 as `id^family^given` at emit time, not stored denormalized. |
 | `:payer` | `:string`, payer id, nil until sampled | References the payer pool by id (Persona's job once it lands; engine patient-init until then, per `docs/operational-models.md`). Never re-sampled — the attribute-pool contract. |
+| `:admitted-at` | `:int`, simulated minutes, nil until admission | The moment this patient was admitted. Landed with Milestone M1 for exactly one purpose: breaking ties among multiple patients boarding for the same ward — the bed-ready transfer relieves the longest-waiting one first (earliest `:admitted-at`, MRN as a further tiebreak). Not a SimHospital-style shadow field — set once, never rewritten. |
 | `:attributes` | `[:map-of :keyword :any]`, default `{}` | **Reserved, unused until M5.** The open blackboard Synthea's modules coordinate through (mined above) — named now so nothing else claims the key before the GMF interpreter lands. |
 
 Deliberately absent, per the mining above: no visit-history field (the
@@ -1306,17 +1310,24 @@ log is the history — M5's interpreter queries it directly), no
 `VisitID` (encounters aren't first-class yet), no shadow prior-location
 fields (M2's cancel-family reads priors from the log).
 
-**Staging note.** This table is the M1 target shape. The session that
-lands `evolve`/`decide` (ADR-0008) ships `PatientState` with `:class`,
-`:home-ward`, `:attending`, `:payer`, and `:attributes` present as
-described here, but `:location` still in its pre-M1 shape — a bare
-ward-name string, matching the v0 step set's own `:location` event
-field — because the `{:ward :bed :placement}` structure only becomes
-real alongside Milestone M1's allocation ladder. `:location` upgrades
-to the map shape when that ladder lands, in the same change (the same
-co-landing discipline as everywhere else in this project: a field
-shape and the code that populates it meaningfully land together, not
-ahead of each other).
+**Landed.** `ehr-testing-sim.engine/PatientState` carries every field
+in the table above, including `:location`'s `{:ward :bed :placement}`
+map shape — the allocation ladder (`ehr-testing-sim.facility/allocate`)
+populates it for real as of Milestone M1. One field this table didn't
+originally name turned out to be necessary once the ladder's cross-
+patient coupling was implemented: `:admitted-at` (the simulated
+minute of admission), used only to break ties among multiple patients
+boarding for the same ward — the longest-waiting one (earliest
+`:admitted-at`, MRN as a further tiebreak) is the one a bed-ready
+transfer relieves. It is not a shadow/undo field in the SimHospital
+sense above (mined section): it is a plain fact recorded once at
+admission and never rewritten, exactly like `:status` or `:class`.
+
+(Pre-M1 staging note, kept for history: the session that first landed
+`evolve`/`decide` — ADR-0008 — shipped `PatientState` with every field
+above present except `:location`, which stayed in its v0 bare-string
+shape until this ladder existed to populate the map shape meaningfully.
+That staging is now resolved.)
 
 ### Worked example: boarding, precisely
 
@@ -1925,7 +1936,7 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
           "decide/evolve split (ADR-0008): decide (rng, t, world, mrn, step) -> {:events :advance} consults world-so-far and the RNG but never mutates; evolve (world, event) -> world' is the ONLY function that changes patient state, pure and total, folding one event at a time -- so state-history is DERIVED (reduce evolve over a log prefix), not a second output the engine must keep in sync with the log by discipline; this is what makes state-based emitters renderings rather than redesigns (ADR-0002)"
           "order-profiles catalytic (target 3, hashed US-units config, docs/operational-models.md): order and result step types land under Execute's existing :built contract as the engine's step vocabulary grows -- an EmitHL7-style co-landing addition, not a new stage (repairs the plan's earlier capture gap: order profiles and the ORM/ORU cycle were discussed from the first session but appeared in no planning artifact before this one)"
           "provider-pool catalytic (target 3, hashed config, docs/operational-models.md): attending assignment at admission draws from the provider pool the same way bed assignment draws from facility config -- both are Execute-time allocations, not separate stages"]
-   :contract "v0 scope: executes the walking-skeleton step set (:admission :delay :discharge) for staggered multi-patient arrivals; the WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"}
+   :contract "v1 scope (Milestone M1, docs/operational-models.md): the walking-skeleton step set (:admission :delay :discharge) plus :transfer, engine-assigned via the allocation ladder and provider sampling -- provider-pool is a real catalytic now (synthetic Luhn-valid NPIs materialized once per run, ehr-testing-sim.config), not just a declared wire. The WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"}
 
   {:id :check
    :label "Check"
@@ -2805,6 +2816,86 @@ construction," not an added nicety. A pinned-seed regression proves
 the refactor changes internal structure without changing observable
 output for the v0 step set.
 
+---
+
+## ADR-0009 — Seed stability is a within-version guarantee, not a cross-version one; the manifest's generator version is the cross-version key
+
+**Status:** Accepted (2026-07-26)
+
+**Context.** Milestone M1 (docs/operational-models.md) gives
+`:admission`'s `decide` two NEW stochastic choices it never had in
+v0: a seeded draw among candidate beds (the allocation ladder) and a
+seeded draw among ward-eligible providers (attending assignment) —
+plus, once per run, generating each provider's synthetic NPI from the
+same RNG (ADR-0007's decision (a), explicitly "generated from the run
+seed"). None of this existed when the decide/evolve refactor session
+captured `test/ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn`
+as a regression baseline. Every admission now consumes RNG draws that
+didn't exist before, which shifts the entire downstream RNG stream for
+ANY pathway using `:admission` — the pinned fixture (and, by the same
+logic, any external consumer who had pinned a seed against pre-M1
+output) necessarily produces different byte-for-byte output after M1,
+even though the *pathway* is unchanged. This was flagged as a live
+possibility before M1 landed, with two options on the table: accept
+the perturbation and regenerate, or engineer draw isolation to keep
+legacy output stable.
+
+**Decision.**
+
+1. **Take option (a): accept the perturbation.** Same config + seed
+   still yields byte-identical output (ADR-0002's guarantee is
+   unweakened) — but that guarantee is now stated precisely as a
+   **within-version** guarantee: identical output for a fixed
+   generator version, not across versions where the generator's own
+   step vocabulary and stochastic surface have grown. Before this
+   library's first published release, growing the step vocabulary
+   (this roadmap's whole M1-M6 sequence) is expected to keep shifting
+   RNG consumption for existing pathways whenever a step type they use
+   gains new stochastic behavior it didn't have before — this is not
+   a regression to guard against, it is what "the engine's step
+   vocabulary grows" (`sim-theory.edn`'s own `:execute` contract note)
+   means in practice.
+2. **The manifest's `:generator {:version ...}` field
+   (`ehr-testing-sim.manifest`, already shipped) is the cross-version
+   key.** A consumer that needs "will this exact byte stream reproduce
+   later" should pin generator version alongside seed and config, not
+   assume seed alone survives generator upgrades. No schema change
+   needed — `MirroredManifest` already carries this field; this ADR
+   just names it as the authoritative answer to a question this
+   project hadn't had occasion to state a policy on before.
+3. **The fixture is regenerated, not silently.** Before/after are both
+   recorded in the M1 session's own summary (and in `git log` for
+   commit that lands this ADR); the fixture file's header comment is
+   updated to say what it now pins (post-M1 output) and to warn that
+   the SAME regeneration is expected at each future milestone whose
+   step types add stochastic behavior existing pathways now exercise.
+
+**Rejected.** **Option (b): engineer draw isolation** to keep legacy
+byte-for-byte output stable across this change — e.g., a separate RNG
+stream for NPI generation, or skipping the bed-choice draw whenever
+only one candidate exists. Rejected on two grounds: first, making RNG
+*consumption* depend on facility *content* (draw only when >1
+candidate) is a strictly worse property than "consumption changed
+once, for a documented reason" — it would mean two structurally
+equivalent configs that merely differ in candidate count diverge in
+draw count, a subtler and more surprising coupling than what this ADR
+accepts instead. Second, ADR-0007 already specified NPIs as "generated
+from the run seed," which is only a meaningful claim if NPI generation
+consumes the SAME single RNG stream everything else does — carving out
+a second, isolated stream for it would break the "one seed, one RNG,
+fully determined consumption order" simplicity ADR-0002 and ADR-0008
+already established, in exchange for a backward-compatibility
+guarantee this pre-release project doesn't need yet.
+
+**Consequences.** `test/ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn`
+is regenerated against M1's engine (see the M1 session summary for the
+before/after diff); its header comment and the referencing test's
+docstring are updated to describe it as the post-M1 baseline. A future
+session whose own pinned-seed regression goes red should read this ADR
+before assuming a bug: check whether that session's own new step types
+explain the diff first, and if so, follow the same accept-and-record
+pattern rather than re-litigating the question.
+
 ========== END FILE ==========
 
 ========== FILE: ./notes/facts-register.md ==========
@@ -2850,8 +2941,20 @@ output for the v0 step set.
   what the result-not-throw doctrine's :rejected arm is for.
 
   v0 catalog is minimal; every new step type added to the engine MUST
-  land with its invariants here in the same change."
-  (:require [ehr-testing-sim.result :as result]))
+  land with its invariants here in the same change.
+
+  Milestone M1 (docs/operational-models.md) adds the facility-aware
+  invariants (no double occupancy, one physical slot per admitted
+  patient, capacity, surge-only-when-earlier-rungs-exhausted) plus the
+  event-validity rows from docs/patient-state-model.md (admission only
+  when :new, transfer only when :admitted, a transfer's declared
+  :from matches the fold). These read patient/world state via
+  ehr-testing-sim.engine/replay -- the same fold `evolve` always was,
+  reused rather than reimplemented (ADR-0008)."
+  (:require [ehr-testing-sim.config :as config]
+            [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.facility :as facility]
+            [ehr-testing-sim.result :as result]))
 
 (defn- by-patient [ground-truth]
   (group-by :mrn ground-truth))
@@ -2876,19 +2979,130 @@ output for the v0 step set.
         :when (or (neg? first-admit) (< d first-admit))]
     {:invariant :discharge-follows-admission :mrn mrn :at d}))
 
+;; --- M1 event-validity rows (docs/patient-state-model.md) ---------------
+
+(defn admission-only-when-new
+  "docs/patient-state-model.md's event-validity table: :admission is
+  legal only when the patient's prior state is :new."
+  [ground-truth]
+  (for [{:keys [event before]} (engine/replay ground-truth)
+        :when (and (= :admission (:event event)) (not= :new (:status before)))]
+    {:invariant :admission-only-when-new :mrn (:mrn event) :at (:t event)}))
+
+(defn transfer-only-when-admitted
+  "docs/patient-state-model.md's event-validity table: :transfer
+  (including bed-ready) is legal only when the patient's prior state
+  is :admitted (Admitted or Boarding)."
+  [ground-truth]
+  (for [{:keys [event before]} (engine/replay ground-truth)
+        :when (and (= :transfer (:event event)) (not= :admitted (:status before)))]
+    {:invariant :transfer-only-when-admitted :mrn (:mrn event) :at (:t event)}))
+
+(defn transfer-from-matches-state
+  "A transfer event's declared :from matches the patient's actual
+  location immediately beforehand (docs/operational-models.md)."
+  [ground-truth]
+  (for [{:keys [event before]} (engine/replay ground-truth)
+        :when (and (= :transfer (:event event)) (not= (:from event) (:location before)))]
+    {:invariant :transfer-from-matches-state :mrn (:mrn event) :at (:t event)}))
+
+;; --- M1 facility invariants (docs/operational-models.md) ----------------
+
+(defn no-double-occupancy
+  "No bed holds two patients at once, at any event boundary."
+  [ground-truth]
+  (for [{:keys [event world-after]} (engine/replay ground-truth)
+        :let [beds (keep (comp :bed :location) (vals world-after))
+              dupes (->> beds frequencies (filter (comp #(> % 1) val)) (map key))]
+        bed dupes]
+    {:invariant :no-double-occupancy :bed bed :at (:t event)}))
+
+(defn admitted-occupies-one-slot
+  "An admitted patient (Admitted or Boarding) occupies exactly one
+  physical slot -- location and its bed are never nil while admitted."
+  [ground-truth]
+  (for [{:keys [event world-after]} (engine/replay ground-truth)
+        [mrn {:keys [status location]}] world-after
+        :when (and (= status :admitted) (or (nil? location) (nil? (:bed location))))]
+    {:invariant :admitted-occupies-one-slot :mrn mrn :at (:t event)}))
+
+(defn occupancy-within-capacity
+  "Occupancy never exceeds a ward's declared capacity (licensed +
+  surge slots)."
+  [ground-truth facility-config]
+  (for [{:keys [event world-after]} (engine/replay ground-truth)
+        ward (:wards facility-config)
+        :let [cap (+ (:beds ward) (:surge-slots ward))
+              occ (count (filter #(= (:name ward) (get-in % [:location :ward])) (vals world-after)))]
+        :when (> occ cap)]
+    {:invariant :occupancy-within-capacity :ward (:name ward) :at (:t event)
+     :occupied occ :capacity cap}))
+
+(defn- earlier-rungs-exhausted?
+  "Whether the ladder's earlier rungs were legitimately exhausted at
+  `board`, for a placement targeting `target-ward-name` on behalf of
+  `home-ward-name`: rung 2 (home surge) requires only rung 1 (home
+  licensed) exhausted; rung 4 (boarding, target is a DIFFERENT,
+  ED-class ward) requires rungs 1-3 all exhausted."
+  [facility-config board home-ward-name target-ward-name]
+  (let [home-ward (facility/ward-by-name facility-config home-ward-name)
+        home-licensed-free? (boolean (seq (remove board (facility/licensed-bed-ids home-ward))))
+        home-surge-free? (boolean (seq (remove board (facility/surge-slot-ids home-ward))))]
+    (if (= home-ward-name target-ward-name)
+      (not home-licensed-free?)
+      (let [other-inpatient (remove #(= (:id %) (:id home-ward))
+                                     (filter #(= :inpatient (:class %)) (:wards facility-config)))
+            other-licensed-free? (boolean
+                                   (some #(seq (remove board (facility/licensed-bed-ids %))) other-inpatient))]
+        (and (not home-licensed-free?) (not home-surge-free?) (not other-licensed-free?))))))
+
+(defn surge-only-when-earlier-rungs-exhausted
+  "Surge placement (rung 2 or 4) only occurs when the earlier rungs are
+  legitimately exhausted -- unless :forced true (docs/operational-
+  models.md's own exemption for the authoring escape hatch)."
+  [ground-truth facility-config]
+  (for [{:keys [event world-before]} (engine/replay ground-truth)
+        :when (and (#{:admission :transfer} (:event event))
+                   (= :surge (get-in event [:location :placement]))
+                   (not (:forced event))
+                   (not (earlier-rungs-exhausted? facility-config
+                                                  (facility/occupancy-board world-before)
+                                                  (:home-ward event)
+                                                  (get-in event [:location :ward]))))]
+    {:invariant :surge-only-when-earlier-rungs-exhausted :mrn (:mrn event) :at (:t event)}))
+
 (def catalog
   "The full invariant catalog, in reporting order."
   [#'timestamps-monotone
-   #'discharge-follows-admission])
+   #'discharge-follows-admission
+   #'admission-only-when-new
+   #'transfer-only-when-admitted
+   #'transfer-from-matches-state
+   #'no-double-occupancy
+   #'admitted-occupies-one-slot])
+
+(def facility-catalog
+  "Invariants that need the facility config, not just the log (checked
+  separately from `catalog` because their function signature differs
+  -- `check-all` runs both)."
+  [#'occupancy-within-capacity
+   #'surge-only-when-earlier-rungs-exhausted])
 
 (defn check-all
-  "Runs every invariant in the catalog over a ground-truth log."
-  [ground-truth]
-  (let [violations (into [] (mapcat #(% ground-truth)) catalog)]
-    (if (empty? violations)
-      (result/ok {:invariants-checked (mapv (comp :name meta) catalog)
-                  :events (count ground-truth)})
-      (result/rejected :invariant-violation {:violations violations}))))
+  "Runs every invariant in the catalog over a ground-truth log.
+  `facility-config` (default config/default-facility) is needed by the
+  capacity/surge-ladder invariants; existing 1-arg call sites are
+  unaffected."
+  ([ground-truth] (check-all ground-truth config/default-facility))
+  ([ground-truth facility-config]
+   (let [base-violations (into [] (mapcat #(% ground-truth)) catalog)
+         facility-violations (into [] (mapcat #(% ground-truth facility-config)) facility-catalog)
+         violations (into base-violations facility-violations)]
+     (if (empty? violations)
+       (result/ok {:invariants-checked (into (mapv (comp :name meta) catalog)
+                                              (mapv (comp :name meta) facility-catalog))
+                   :events (count ground-truth)})
+       (result/rejected :invariant-violation {:violations violations})))))
 
 ========== END FILE ==========
 
@@ -3028,20 +3242,179 @@ output for the v0 step set.
 
 ========== END FILE ==========
 
+========== FILE: ./src/ehr_testing_sim/config.clj ==========
+(ns ehr-testing-sim.config
+  "Config schemas and shipped defaults for the operational resource
+  models (docs/operational-models.md): facility (beds -- exclusive),
+  providers (shared). Payers land with Persona (M4); not here.
+
+  Also: the synthetic-NPI Luhn math. ADR-0007 decision (a): provider
+  identifiers are structurally valid NPIs (correct Luhn check digit
+  over the CMS `80840` health-industry-issuer prefix), generated from
+  the run's own seeded RNG -- not an obviously-fake sentinel format.
+  `materialize-providers` is the one place a run turns the static,
+  id-less `default-provider-templates` into a real provider pool by
+  drawing NPIs; called once per run, before the main event loop
+  (ehr-testing-sim.engine/run), so provider identity is as deterministic
+  as everything else in the theory."
+  (:require [malli.core :as m]))
+
+;; --- Facility --------------------------------------------------------
+
+(def Ward
+  [:map
+   [:id :keyword]
+   [:name :string]
+   [:beds :int]
+   [:surge-slots :int]
+   [:surge-format :string]
+   [:class [:enum :inpatient :ed]]])
+
+(def Facility
+  [:map
+   [:id :keyword]
+   [:wards [:vector Ward]]])
+
+(defn valid-facility? [facility] (m/validate Facility facility))
+(defn explain-facility [facility] (m/explain Facility facility))
+
+(def default-facility
+  "Small on purpose (docs/operational-models.md): one ED ward and two
+  inpatient wards, enough to exercise transfers and surge without
+  asking a config author to model a whole hospital first."
+  {:id :general-hospital
+   :wards [{:id :ed :name "Emergency" :beds 0 :surge-slots 6
+            :surge-format "%s-H%02d" :class :ed}
+           {:id :renal :name "Renal" :beds 4 :surge-slots 2
+            :surge-format "%s-H%02d" :class :inpatient}
+           {:id :cardiology :name "Cardiology" :beds 4 :surge-slots 2
+            :surge-format "%s-H%02d" :class :inpatient}]})
+
+;; --- Providers ---------------------------------------------------------
+
+(def ProviderName
+  [:map [:family :string] [:given :string]])
+
+(def ProviderTemplate
+  "A provider entry before NPI generation -- everything about a
+  provider except its identifier, which `materialize-providers` fills
+  in from the run's seed."
+  [:map
+   [:name ProviderName]
+   [:role [:enum :attending :consulting :referring]]
+   [:specialty :string]
+   [:wards [:vector :keyword]]])
+
+(def Provider
+  [:map
+   [:id :string]
+   [:name ProviderName]
+   [:role [:enum :attending :consulting :referring]]
+   [:specialty :string]
+   [:wards [:vector :keyword]]])
+
+(defn valid-provider-template? [template] (m/validate ProviderTemplate template))
+(defn valid-provider? [provider] (m/validate Provider provider))
+
+(def default-provider-templates
+  "A small pool, each ward-eligible per docs/operational-models.md's
+  'ward-eligible providers' rule; Dr. Reyes is deliberately eligible
+  everywhere so the default config always has an attending for any
+  ward, including the ED wards used only for boarding/surge."
+  [{:name {:family "Chen" :given "Amara"} :role :attending
+    :specialty "Nephrology" :wards [:renal]}
+   {:name {:family "Okafor" :given "David"} :role :attending
+    :specialty "Cardiology" :wards [:cardiology]}
+   {:name {:family "Reyes" :given "Priya"} :role :attending
+    :specialty "Emergency Medicine" :wards [:ed :renal :cardiology]}])
+
+;; --- Synthetic NPIs: Luhn over the 80840 issuer prefix ------------------
+
+(def ^:private npi-issuer-prefix "80840")
+
+(defn- luhn-check-digit
+  "The check digit that makes `digits` (a string of decimal digits)
+  pass the Luhn checksum once appended. Processes digits right to
+  left, doubling every digit at an even 0-based index -- the
+  about-to-be-appended check digit will occupy the new rightmost
+  (index 0) position, so a digit at index i in `digits` sits at index
+  i+1 afterward; doubling on even i here is what lines up with the
+  standard Luhn doubling-every-other-digit-from-the-right rule once
+  the check digit is in place."
+  [digits]
+  (let [total (->> digits
+                   reverse
+                   (map-indexed (fn [i c]
+                                  (let [d (- (int c) (int \0))]
+                                    (if (even? i)
+                                      (let [doubled (* 2 d)]
+                                        (if (> doubled 9) (- doubled 9) doubled))
+                                      d))))
+                   (reduce +))]
+    (mod (- 10 (mod total 10)) 10)))
+
+(defn npi-check-digit
+  "The NPI standard's check digit for a 9-digit body: Luhn over the
+  constant issuer prefix \"80840\" plus the body (docs/operational-
+  models.md). E.g. body \"123456789\" -> 3, the well-known example
+  NPI 1234567893's own check digit."
+  [body9]
+  (luhn-check-digit (str npi-issuer-prefix body9)))
+
+(defn valid-npi?
+  [npi10]
+  (and (string? npi10)
+       (= 10 (count npi10))
+       (every? #(Character/isDigit ^char %) npi10)
+       (= (Character/digit ^char (nth npi10 9) 10)
+          (npi-check-digit (subs npi10 0 9)))))
+
+(defn- rand-digit
+  [^java.util.Random rng]
+  (.nextInt rng 10))
+
+(defn generate-npi
+  "Draws 9 random digits from `rng` and appends the correct Luhn check
+  digit -- a structurally valid synthetic NPI (docs/operational-
+  models.md decision (a)) that would pass any downstream NPI-format
+  validator without being assigned to a real provider."
+  [rng]
+  (let [body (apply str (repeatedly 9 #(rand-digit rng)))]
+    (str body (npi-check-digit body))))
+
+(defn materialize-providers
+  "The one place provider NPIs are generated: draws one synthetic NPI
+  per template from `rng`, in template order (fixed -- determinism),
+  and returns the templates with `:id` filled in. Called once per run,
+  before the main event loop, so provider identity is as deterministic
+  as arrival staggering and bed choice."
+  [rng provider-templates]
+  (mapv #(assoc % :id (generate-npi rng)) provider-templates))
+
+========== END FILE ==========
+
 ========== FILE: ./src/ehr_testing_sim/emit_hl7.clj ==========
 (ns ehr-testing-sim.emit-hl7
   "EmitHL7 (docs/sim-theory.edn): pure log -> ER7 messages, the thin
-  vertical slice from ground-truth-log to hl7v2-stream. v0 scope:
-  ADT^A01 (admission) and ADT^A03 (discharge) only, MSH/EVN/PID/PV1
-  populated minimally -- on org.clojars.cmiles74/clojure-hl7-parser's
-  own data structures (the only runtime dependency this stage adds).
+  vertical slice from ground-truth-log to hl7v2-stream. v0 scope was
+  ADT^A01 (admission) and ADT^A03 (discharge) only; Milestone M1
+  (docs/operational-models.md) adds ADT^A02 (transfer, including bed-
+  ready) alongside its step type, per the roadmap's own co-landing
+  extension of that rule to this registry. MSH/EVN/PID/PV1 populated
+  minimally -- on org.clojars.cmiles74/clojure-hl7-parser's own data
+  structures (the only runtime dependency this stage adds).
 
   Consumes the ground-truth log ONLY: no RNG, no wall clock
-  (determinism law). Every timestamp is rendered from the pinned
-  :reference-date run-config input plus the event's log-relative
-  minute offset (timestamp-anchoring law) -- never from
+  (determinism law). facility/providers are additional PINNED,
+  non-random inputs (like :reference-date already was) needed to
+  render PV1-3/6's ward^^bed^facility shape and PV1-7's attending --
+  passing them doesn't touch the no-RNG/no-wall-clock doctrine, since
+  neither is sampled here, only rendered. Every timestamp is rendered
+  from the pinned :reference-date run-config input plus the event's
+  log-relative minute offset (timestamp-anchoring law) -- never from
   System/currentTimeMillis or similar."
-  (:require [com.nervestaple.hl7-parser.parser :as parser]))
+  (:require [com.nervestaple.hl7-parser.parser :as parser]
+            [ehr-testing-sim.config :as config]))
 
 (def default-reference-date
   "Pinned default for the :reference-date run-config input (an ISO
@@ -3053,12 +3426,15 @@ output for the v0 step set.
 
 (def message-type-registry
   "Event type -> HL7 message type/trigger: the emitter's own catalytic
-  catalog (docs/sim-theory.edn, catalytic target 4). v0 covers exactly
-  the two event types the engine emits today; a new engine step type
-  earns an entry here in the same change that adds it (the same
-  co-landing convention check.clj's catalog already follows)."
+  catalog (docs/sim-theory.edn, catalytic target 4). A new engine step
+  type earns an entry here in the same change that adds it (the same
+  co-landing convention check.clj's catalog already follows -- and, per
+  Milestone M1's roadmap note, extended to this registry too: a step
+  type without a message-type entry produces traffic invisible to every
+  consumer downstream of this stage)."
   {:admission {:type "ADT" :trigger "A01"}
-   :discharge {:type "ADT" :trigger "A03"}})
+   :discharge {:type "ADT" :trigger "A03"}
+   :transfer {:type "ADT" :trigger "A02"}})
 
 (def ^:private hl7-timestamp-formatter
   (java.time.format.DateTimeFormatter/ofPattern "yyyyMMddHHmmss"))
@@ -3107,56 +3483,104 @@ output for the v0 step set.
    (parser/create-field [])
    (parser/create-field [mrn])))
 
+(defn- location-field
+  "Renders a location map as ward^^bed^facility (PV1-3/PV1-6's shared
+  shape, docs/operational-models.md's transfer/A02 spec: 'PV1-3 renders
+  ward^^bed with facility in PV1-3.4'). nil location (no prior, or a
+  v0 event with no location at all) -> an empty field, same as v0's
+  own nil-location handling."
+  [facility-name location]
+  (if-let [ward (:ward location)]
+    (parser/create-field [ward "" (or (:bed location) "") facility-name])
+    (parser/create-field [])))
+
+(defn- provider-field
+  "PV1-7: id^family^given. nil provider -> empty field."
+  [provider]
+  (if provider
+    (parser/create-field [(:id provider) (get-in provider [:name :family]) (get-in provider [:name :given])])
+    (parser/create-field [])))
+
+(defn- provider-by-id
+  [providers id]
+  (first (filter #(= id (:id %)) providers)))
+
 (defn- pv1-segment
-  [location]
+  "PV1-6 (prior location) is read directly off the CURRENT event's own
+  :from -- present only on :transfer events -- never a separately
+  maintained prior-location field on patient state (docs/patient-
+  state-model.md's Simulated Hospital lesson: one :location field plus
+  the log's own facts replaces a shadow-field zoo)."
+  [facility-name location from provider]
   (parser/create-segment
    "PV1"
    (parser/create-field ["1"])
    (parser/create-field ["I"])
-   (parser/create-field (if location [location] []))))
+   (location-field facility-name location)
+   (parser/create-field [])
+   (parser/create-field [])
+   (location-field facility-name from)
+   (provider-field provider)))
 
 (defn event->message
   "Renders one ground-truth event to an ER7 string, or nil when the
-  event's :event isn't in `message-type-registry` (v0 scope: only
-  :admission and :discharge produce messages)."
-  [reference-date {:keys [event t mrn location]}]
+  event's :event isn't in `message-type-registry`."
+  [reference-date facility providers {:keys [event t mrn location from attending]}]
   (when-let [type+trigger (message-type-registry event)]
     (let [ts (hl7-timestamp reference-date t)
-          control-id (str mrn "-" (:trigger type+trigger) "-" t)]
+          control-id (str mrn "-" (:trigger type+trigger) "-" t)
+          facility-name (name (:id facility))
+          provider (provider-by-id providers attending)]
       (parser/str-message
        (parser/create-message
         parser/DEFAULT-DELIMITERS
         (msh-segment type+trigger control-id ts)
         (evn-segment (:trigger type+trigger) ts)
         (pid-segment mrn)
-        (pv1-segment location))))))
+        (pv1-segment facility-name location from provider))))))
+
+(def ^:private default-providers
+  "A fixed, arbitrary reference-seed provider pool -- purely a fallback
+  default for callers that don't care about exact NPI values (`emit`'s
+  2-arg arity). A real run threads back its OWN materialized providers
+  (ehr-testing-sim.engine/run's :providers) instead, so its messages'
+  PV1-7 matches its own ground-truth log's :attending ids."
+  (config/materialize-providers (java.util.Random. 0) config/default-provider-templates))
 
 (defn emit
   "The stage function: ground-truth log -> vector of ER7 message
-  strings, in log order. Pure function of `ground-truth` and
-  `reference-date` alone (determinism law); events outside v0 scope
-  are skipped, not errored -- the theory's laws bind the events this
-  stage claims to handle, not every event type that may ever appear in
-  a log."
-  [ground-truth reference-date]
-  (into [] (keep (partial event->message reference-date)) ground-truth))
+  strings, in log order. Pure function of its arguments alone
+  (determinism law); events outside `message-type-registry` are
+  skipped, not errored -- the theory's laws bind the events this stage
+  claims to handle, not every event type that may ever appear in a
+  log. `facility`/`providers` default for standalone convenience;
+  callers rendering a specific run's log should pass back that SAME
+  run's :facility/:providers (ehr-testing-sim.run does)."
+  ([ground-truth reference-date]
+   (emit ground-truth reference-date config/default-facility default-providers))
+  ([ground-truth reference-date facility providers]
+   (into [] (keep (partial event->message reference-date facility providers)) ground-truth)))
 
 ========== END FILE ==========
 
 ========== FILE: ./src/ehr_testing_sim/engine.clj ==========
 (ns ehr-testing-sim.engine
   "The discrete-event simulation core: a priority queue of pending
-  events ordered by simulated time, a world of patient states, and the
-  decide/evolve pair (ADR-0008) that replaces a single fused
-  transition function. Architecture mined from Google's Simulated
-  Hospital (pkg/state WrappedQueue + pkg/hospital RunNextEventIfDue).
+  events ordered by simulated time, a world of patient states (plus,
+  from Milestone M1 on, the static facility/provider config decide
+  needs to read), and the decide/evolve pair (ADR-0008) that replaces
+  a single fused transition function. Architecture mined from Google's
+  Simulated Hospital (pkg/state WrappedQueue + pkg/hospital
+  RunNextEventIfDue).
 
   Event-sourcing doctrine (ADR-0008): the ground-truth log is the only
   primitive. `decide` (rng, t, world, mrn, step) -> {:events :advance}
-  consults the current world (every patient's state so far) and the
-  run's single RNG to decide what happens, but never returns a new
-  state -- this is where cross-patient coupling lives (a discharge's
-  decide call may also emit a transfer event for a DIFFERENT patient).
+  consults the current world (every patient's state so far, plus
+  facility/provider config -- read-only) and the run's single RNG to
+  decide what happens, but never returns a new state -- this is where
+  cross-patient coupling lives (a discharge's decide call may also
+  emit a transfer event for a DIFFERENT patient, the bed-ready
+  transfer for a boarding patient, docs/operational-models.md).
   `evolve` (patient-state, event) -> patient-state' is pure, total, and
   narrower: no RNG, no knowledge of world or of any patient but the one
   the event names. The ONLY path by which patient state changes is
@@ -3168,36 +3592,41 @@ output for the v0 step set.
   java.util.Random seeded in `run`. No other entropy source (wall
   clock, hash ordering, nondeterministic seq realization) may
   influence output. Same config + seed => identical output, byte for
-  byte once serialized. This is guarantee #1 of the problem statement
-  and is enforced by property tests, not by review alone.
+  byte once serialized -- WITHIN a version; see notes/ADRs.md ADR-0009
+  for the cross-version seed-stability policy Milestone M1's new RNG
+  draws (bed choice, attending sampling) triggered.
 
-  The v0 skeleton executes :admission/:delay/:discharge pathways for a
-  configured number of patients with staggered arrivals, producing the
-  ground-truth trajectory log. Emission to HL7v2 is a separate
-  namespace consuming this log -- events here are format-free."
+  Step vocabulary: v0's :admission/:delay/:discharge, plus Milestone
+  M1's :transfer (docs/operational-models.md's allocation ladder).
+  Emission to HL7v2 is a separate namespace consuming the ground-truth
+  log -- events here are format-free."
   (:require [ehr-testing-sim.pathway :as pathway]
+            [ehr-testing-sim.config :as config]
+            [ehr-testing-sim.facility :as facility]
             [malli.core :as m])
   (:import [java.util Random]))
 
 (def PatientState
   "The engine's per-patient accumulator -- what folding `evolve` over a
   patient's own event subsequence produces (docs/patient-state-model.md
-  is the full design spec). :class/:home-ward/:attending/:payer/
-  :attributes are reserved fields that land for real with Milestone M1
-  (docs/operational-models.md) and beyond (:attributes waits on M5);
-  the v0 step set (:admission/:delay/:discharge) populates only :mrn,
-  :status, and :location (still a bare ward-name string here --
-  :location's {:ward :bed :placement} shape is Milestone M1's own
-  change, landing with the allocation ladder, not this one)."
+  is the full design spec). As of Milestone M1: :location is the
+  {:ward :bed :placement} map (upgraded from v0's bare ward-name
+  string, alongside the allocation ladder that populates it for real);
+  :class/:attending/:payer/:admitted-at are populated at admission;
+  :attributes remains reserved, unused until M5."
   [:map
    [:mrn :string]
    [:status [:enum :new :admitted :discharged]]
    [:class {:optional true} [:enum :inpatient :emergency :outpatient
                               :preadmit :recurring :obstetrics]]
    [:home-ward {:optional true} [:maybe :string]]
-   [:location {:optional true} [:maybe :string]]
+   [:location {:optional true} [:maybe [:map
+                                         [:ward :string]
+                                         [:bed :string]
+                                         [:placement [:enum :licensed :surge]]]]]
    [:attending {:optional true} [:maybe :string]]
    [:payer {:optional true} [:maybe :string]]
+   [:admitted-at {:optional true} [:maybe :int]]
    [:attributes {:optional true} [:map-of :keyword :any]]])
 
 (defn valid-patient?
@@ -3222,30 +3651,68 @@ output for the v0 step set.
 (defmulti decide
   "Decides what happens when patient `mrn` is due to execute `step` at
   simulated time t (minutes from epoch of the run). Consults `world`
-  (every patient's current state, keyed by mrn -- read-only) and the
-  seeded RNG to make stochastic and cross-patient choices; returns
-  {:events [<ground-truth event>...] :advance <minutes>}. NEVER returns
-  or implies a new patient state -- state changes only by folding the
-  returned events through `evolve` (ADR-0008). Pure given the RNG (the
-  RNG is the only stateful argument, and its consumption order is
-  fixed by the deterministic event ordering)."
+  ({:patients {mrn -> patient-state} :facility .. :providers ..} --
+  read-only) and the seeded RNG to make stochastic and cross-patient
+  choices; returns {:events [<ground-truth event>...] :advance
+  <minutes>}. NEVER returns or implies a new patient state -- state
+  changes only by folding the returned events through `evolve`
+  (ADR-0008). Pure given the RNG (the RNG is the only stateful
+  argument, and its consumption order is fixed by the deterministic
+  event ordering)."
   (fn [_rng _t _world _mrn step] (:type step)))
 
 (defmethod decide :admission
-  [_rng t _world mrn {:keys [location reason]}]
-  {:events [{:event :admission :t t :mrn mrn
-             :location location :reason reason}]
-   :advance 0})
+  [rng t world mrn {:keys [location reason force-placement]}]
+  (let [{:keys [facility providers patients]} world
+        board (facility/occupancy-board patients)
+        {:keys [home-ward] :as alloc} (facility/allocate rng facility board location force-placement)
+        ward-id (:id (facility/ward-by-name facility home-ward))
+        attending (facility/choose-attending rng providers ward-id)]
+    {:events [(merge {:event :admission :t t :mrn mrn :reason reason :attending attending}
+                     alloc)]
+     :advance 0}))
 
 (defmethod decide :delay
   [rng _t _world _mrn {:keys [from to]}]
   {:events []
    :advance (rand-int-in rng from to)})
 
+(defmethod decide :transfer
+  [rng t world mrn {:keys [location force-placement]}]
+  (let [{:keys [facility patients]} world
+        board (facility/occupancy-board patients)
+        patient (get patients mrn)
+        alloc (facility/allocate rng facility board location force-placement)]
+    {:events [(merge {:event :transfer :t t :mrn mrn :from (:location patient)
+                      :attending (:attending patient) :bed-ready false}
+                     alloc)]
+     :advance 0}))
+
 (defmethod decide :discharge
-  [_rng t _world mrn _step]
-  {:events [{:event :discharge :t t :mrn mrn}]
-   :advance 0})
+  [_rng t world mrn _step]
+  (let [patient (get-in world [:patients mrn])
+        discharge-event {:event :discharge :t t :mrn mrn
+                          :location (:location patient) :attending (:attending patient)}
+        vacated-ward (get-in patient [:location :ward])
+        vacated-location (:location patient)
+        waiting-mrn (->> (:patients world)
+                          (remove (fn [[m _]] (= m mrn)))
+                          (filter (fn [[_ p]] (and (= :admitted (:status p))
+                                                    (not= (:home-ward p) (get-in p [:location :ward]))
+                                                    (= vacated-ward (:home-ward p)))))
+                          (sort-by (fn [[m p]] [(:admitted-at p) m]))
+                          ffirst)]
+    {:events (cond-> [discharge-event]
+               waiting-mrn
+               (conj {:event :transfer :t t :mrn waiting-mrn
+                      :from (:location (get-in world [:patients waiting-mrn]))
+                      :attending (:attending (get-in world [:patients waiting-mrn]))
+                      :home-ward (get-in world [:patients waiting-mrn :home-ward])
+                      :location vacated-location
+                      :placement (:placement vacated-location)
+                      :forced false
+                      :bed-ready true}))
+     :advance 0}))
 
 (defmulti evolve
   "Folds one ground-truth event into the one patient it names:
@@ -3258,12 +3725,45 @@ output for the v0 step set.
   (fn [_patient event] (:event event)))
 
 (defmethod evolve :admission
-  [patient {:keys [location]}]
-  (assoc patient :status :admitted :location location))
+  [patient {:keys [location home-ward attending t]}]
+  (assoc patient
+         :status :admitted
+         :class :inpatient
+         :home-ward home-ward
+         :location location
+         :attending attending
+         :admitted-at t))
+
+(defmethod evolve :transfer
+  [patient {:keys [location home-ward]}]
+  (assoc patient :location location :home-ward home-ward))
 
 (defmethod evolve :discharge
   [patient _event]
   (assoc patient :status :discharged :location nil))
+
+(defn replay
+  "Replays `ground-truth` through `evolve`, returning a parallel seq of
+  {:event :mrn :before :after :world-before :world-after} -- ONE place
+  both check.clj's cross-patient invariants and emit-hl7's PV1
+  derivation get 'patient/world state at any point in the log' from,
+  rather than each reimplementing the fold. `world-before`/
+  `world-after` are the full {mrn -> patient-state} map immediately
+  before/after this event; `before`/`after` are that same event's own
+  mrn's state, for convenience (ADR-0008: state-history is derived --
+  this IS that derivation, generalized across patients)."
+  [ground-truth]
+  (loop [events ground-truth patients {} acc (transient [])]
+    (if (empty? events)
+      (persistent! acc)
+      (let [event (first events)
+            mrn (:mrn event)
+            before (get patients mrn (initial-patient mrn))
+            after (evolve before event)
+            patients' (assoc patients mrn after)]
+        (recur (rest events) patients'
+               (conj! acc {:event event :mrn mrn :before before :after after
+                           :world-before patients :world-after patients'}))))))
 
 (defn- pop-min
   "Removes and returns the earliest queue entry. Queue is a sorted-map
@@ -3280,23 +3780,39 @@ output for the v0 step set.
     :pathway     a pathway IR map (default pathway/sample-admission-discharge)
     :arrival-gap max minutes between successive patient arrivals
                  (default 60; actual gaps sampled from the seeded RNG)
+    :facility    facility config (default config/default-facility)
+    :providers   provider templates (default config/default-provider-templates;
+                 NPIs are generated from THIS run's seed -- ADR-0007)
 
-  Returns {:ground-truth [event ...] :state-history {mrn [state ...]}}.
-  ground-truth is format-free, ordered by [t seq-no]; emitters consume
-  it and test assertions target it directly (a first-class output, per
-  the problem statement). state-history is DERIVED (ADR-0008; sim-
+  Returns {:ground-truth [event ...] :state-history {mrn [state ...]}
+  :facility .. :providers [materialized-provider ...]}. The facility
+  and MATERIALIZED providers (real NPIs, not just templates) are
+  echoed back so a caller rendering this run's log (ehr-testing-sim
+  .emit-hl7/emit needs facility + providers for PV1) uses the EXACT
+  config this run allocated against, not a fresh default that might
+  not even share ward names. ground-truth is format-free, ordered by
+  [t seq-no]; emitters consume it and test assertions target it
+  directly (a first-class output, per the problem statement).
+  state-history is DERIVED (ADR-0008; sim-
   theory.md open question #3) -- (get state-history mrn) is exactly
   (rest (reductions evolve (initial-patient mrn) (events for mrn))),
   proven as a property test (engine-test/patient-state-is-a-fold-of-
   the-log) rather than assumed; the engine computes it as a byproduct
   of the loop below because decide needs live world state to make its
   next decision, not because it's a second source of truth."
-  [{:keys [seed patients pathway arrival-gap]
+  [{:keys [seed patients pathway arrival-gap facility providers]
     :or {patients 1
          pathway pathway/sample-admission-discharge
-         arrival-gap 60}}]
+         arrival-gap 60
+         facility config/default-facility
+         providers config/default-provider-templates}}]
   {:pre [(some? seed) (pathway/valid? pathway)]}
   (let [rng (Random. ^long seed)
+        ;; Provider NPIs are generated from this run's seed (ADR-0007),
+        ;; drawn once up front -- before arrival staggering -- so
+        ;; provider identity is as deterministic and as fixed-order as
+        ;; everything else this RNG produces.
+        materialized-providers (config/materialize-providers rng providers)
         ;; Stagger arrivals; consume RNG in patient order (fixed).
         arrivals (vec (reductions + 0 (repeatedly (dec patients)
                                                   #(rand-int-in rng 0 arrival-gap))))
@@ -3307,8 +3823,10 @@ output for the v0 step set.
                             [[arrival-t i]
                              {:mrn (mrn-for i) :steps (:steps pathway)}])
                           arrivals))
-        init-world (into {} (map-indexed (fn [i _] [(mrn-for i) (initial-patient (mrn-for i))]))
-                         arrivals)]
+        init-world {:patients (into {} (map-indexed (fn [i _] [(mrn-for i) (initial-patient (mrn-for i))]))
+                                    arrivals)
+                    :facility facility
+                    :providers materialized-providers}]
     (loop [queue init-queue
            seq-no patients
            world init-world
@@ -3316,19 +3834,154 @@ output for the v0 step set.
            state-history {}]
       (if (empty? queue)
         {:ground-truth (persistent! ground-truth)
-         :state-history state-history}
+         :state-history state-history
+         :facility facility
+         :providers materialized-providers}
         (let [[[t _] {:keys [mrn steps]} queue'] (pop-min queue)
               [step & remaining] steps
               {:keys [events advance]} (decide rng t world mrn step)
-              world' (reduce (fn [w ev] (update w (:mrn ev) evolve ev)) world events)
+              world' (reduce (fn [w ev] (update-in w [:patients (:mrn ev)] evolve ev)) world events)
               ground-truth' (reduce conj! ground-truth events)
               state-history' (reduce (fn [sh ev]
-                                        (update sh (:mrn ev) (fnil conj []) (get world' (:mrn ev))))
+                                        (update sh (:mrn ev) (fnil conj [])
+                                                (get-in world' [:patients (:mrn ev)])))
                                       state-history events)]
           (if (seq remaining)
             (recur (assoc queue' [(+ t advance) seq-no] {:mrn mrn :steps (vec remaining)})
                    (inc seq-no) world' ground-truth' state-history')
             (recur queue' seq-no world' ground-truth' state-history')))))))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/facility.clj ==========
+(ns ehr-testing-sim.facility
+  "The occupancy board and the four-rung allocation ladder
+  (docs/operational-models.md). The board is NEVER an independent
+  structure the engine writes to -- it is a pure fold over patient
+  states (`occupancy-board`), recomputed on demand every time `decide`
+  needs it (ADR-0008's own pattern, applied to beds: one authoritative
+  record -- patient state -- everything else a projection with a
+  proven consistency law).
+
+  Ward matching throughout is by NAME (the string a pathway names,
+  e.g. \"Renal\") -- the same string `:home-ward` and `:location`'s
+  `:ward` carry on patient state and ground-truth events
+  (docs/patient-state-model.md). Provider-ward eligibility, by
+  contrast, is keyed by ward ID (a keyword, e.g. :renal) -- config's
+  own `:wards` vectors on providers -- so `choose-attending` takes an
+  id, not a name; callers cross the boundary via `ward-by-name`."
+  (:require [clojure.string :as str]))
+
+(defn ward-by-name
+  [facility ward-name]
+  (first (filter #(= ward-name (:name %)) (:wards facility))))
+
+(defn ward-by-id
+  [facility ward-id]
+  (first (filter #(= ward-id (:id %)) (:wards facility))))
+
+(defn- ward-tag
+  [ward]
+  (str/upper-case (name (:id ward))))
+
+(defn licensed-bed-ids
+  "Derived, never enumerated (docs/operational-models.md): ward tag +
+  2-digit index, e.g. a ward :id :renal with :beds 3 derives
+  [\"RENAL-01\" \"RENAL-02\" \"RENAL-03\"]."
+  [ward]
+  (mapv #(format "%s-%02d" (ward-tag ward) %) (range 1 (inc (:beds ward)))))
+
+(defn surge-slot-ids
+  "Derived using the ward's own :surge-format -- surge naming is site-
+  idiosyncratic config, not code (docs/operational-models.md)."
+  [ward]
+  (mapv #(format (:surge-format ward) (ward-tag ward) %) (range 1 (inc (:surge-slots ward)))))
+
+(defn occupancy-board
+  "The derived index: bed-id -> mrn, folded from patient states. This
+  IS the consistency law stated as code: recomputing from `patients`
+  from scratch always equals this."
+  [patients]
+  (into {}
+        (keep (fn [[mrn patient]]
+                (when-let [bed (get-in patient [:location :bed])]
+                  [bed mrn])))
+        patients))
+
+(defn- free
+  "Candidate ids from `ids` not present as a key in `board`."
+  [ids board]
+  (remove board ids))
+
+(defn- choose
+  "Uniform seeded choice among `candidates` (a non-empty vector),
+  consuming exactly one RNG draw regardless of candidate count --
+  same determinism law as every other stochastic choice in the theory."
+  [rng candidates]
+  (nth candidates (.nextInt rng (count candidates))))
+
+(defn- placement-of
+  [ward bed]
+  (cond
+    (some #{bed} (licensed-bed-ids ward)) :licensed
+    (some #{bed} (surge-slot-ids ward)) :surge
+    :else (throw (ex-info "force-placement bed is not a valid id for this ward"
+                          {:ward (:name ward) :bed bed}))))
+
+(defn allocate
+  "The four-rung allocation ladder (docs/operational-models.md), seeded
+  within each rung. `force-placement` (optional `{:ward :bed}`)
+  overrides the ladder outright and draws no RNG. Returns
+  {:home-ward :location {:ward :bed :placement} :forced}."
+  [rng facility board home-ward-name force-placement]
+  (if force-placement
+    (let [{:keys [ward bed]} force-placement
+          w (ward-by-name facility ward)]
+      {:home-ward home-ward-name
+       :location {:ward ward :bed bed :placement (placement-of w bed)}
+       :forced true})
+    (let [home-ward (ward-by-name facility home-ward-name)
+          home-licensed (free (licensed-bed-ids home-ward) board)
+          home-surge (free (surge-slot-ids home-ward) board)]
+      (cond
+        (seq home-licensed)
+        {:home-ward home-ward-name
+         :location {:ward home-ward-name :bed (choose rng home-licensed) :placement :licensed}
+         :forced false}
+
+        (seq home-surge)
+        {:home-ward home-ward-name
+         :location {:ward home-ward-name :bed (choose rng home-surge) :placement :surge}
+         :forced false}
+
+        :else
+        (let [other-inpatient (remove #(= (:id %) (:id home-ward))
+                                       (filter #(= :inpatient (:class %)) (:wards facility)))
+              other-candidates (mapcat (fn [w] (map (fn [b] [w b]) (free (licensed-bed-ids w) board)))
+                                       other-inpatient)]
+          (if (seq other-candidates)
+            (let [[w b] (choose rng other-candidates)]
+              {:home-ward home-ward-name
+               :location {:ward (:name w) :bed b :placement :licensed}
+               :forced false})
+            (let [ed-wards (filter #(= :ed (:class %)) (:wards facility))
+                  ed-candidates (mapcat (fn [w] (map (fn [b] [w b]) (free (surge-slot-ids w) board)))
+                                        ed-wards)]
+              (if (seq ed-candidates)
+                (let [[w b] (choose rng ed-candidates)]
+                  {:home-ward home-ward-name
+                   :location {:ward (:name w) :bed b :placement :surge}
+                   :forced false})
+                (throw (ex-info "facility exhausted: no bed available at any ladder rung"
+                                {:home-ward home-ward-name}))))))))))
+
+(defn choose-attending
+  "Seeded uniform sample among providers eligible for `ward-id` (a
+  keyword, matching a provider's :wards vector) -- docs/operational-
+  models.md's 'ward-eligible providers' rule. Returns the provider id."
+  [rng providers ward-id]
+  (let [eligible (filterv #(some #{ward-id} (:wards %)) providers)]
+    (:id (choose rng eligible))))
 
 ========== END FILE ==========
 
@@ -3418,11 +4071,12 @@ output for the v0 step set.
   FHIR/CDA later) renders codes natively with no re-mapping -- codes
   are properties of patient state, not of wire formats.
 
-  The v0 step set is deliberately tiny (walking skeleton): :admission,
-  :delay, :discharge. The full Simulated-Hospital-derived vocabulary
-  (transfer, bed-swap, *-in-error, cancel-*, merge, order, result, ...)
-  lands step by step, each with its engine transition and its
-  invariants in ehr-testing-sim.check."
+  The v0 step set was deliberately tiny (walking skeleton): :admission,
+  :delay, :discharge. Milestone M1 (docs/operational-models.md) adds
+  :transfer, engine-assigned via the allocation ladder. The full
+  Simulated-Hospital-derived vocabulary (bed-swap, *-in-error, cancel-*,
+  merge, order, result, ...) lands step by step, each with its engine
+  decide/evolve methods and its invariants in ehr-testing-sim.check."
   (:require [malli.core :as m]))
 
 (def Concept
@@ -3433,12 +4087,19 @@ output for the v0 step set.
    [:code :string]
    [:display {:optional true} :string]])
 
+(def ForcePlacement
+  "Authoring escape hatch (docs/operational-models.md): forces a
+  specific bed, overriding the allocation ladder outright and
+  exempting the placement from the surge-only-when-full invariant."
+  [:map [:ward :string] [:bed :string]])
+
 (def Step
   [:multi {:dispatch :type}
    [:admission [:map
                 [:type [:= :admission]]
                 [:location :string]
-                [:reason {:optional true} [:or :string Concept]]]]
+                [:reason {:optional true} [:or :string Concept]]
+                [:force-placement {:optional true} ForcePlacement]]]
    [:delay [:map
             [:type [:= :delay]]
             ;; minutes; the engine samples uniformly in [from, to]
@@ -3446,7 +4107,11 @@ output for the v0 step set.
             [:from :int]
             [:to :int]]]
    [:discharge [:map
-                [:type [:= :discharge]]]]])
+                [:type [:= :discharge]]]]
+   [:transfer [:map
+               [:type [:= :transfer]]
+               [:location :string]
+               [:force-placement {:optional true} ForcePlacement]]]])
 
 (def Pathway
   [:map
@@ -3524,7 +4189,12 @@ output for the v0 step set.
   emission (HL7v2 via the ER7 emitter over org.clojars.cmiles74/
   clojure-hl7-parser structures, ehr-testing-sim.emit-hl7) attaches
   here as an output stage consuming the log -- the log is primary,
-  messages are a rendering, and emission is opt-in (:emit \"hl7\")."
+  messages are a rendering, and emission is opt-in (:emit \"hl7\").
+  Milestone M1: engine/run echoes back the :facility and materialized
+  :providers it actually allocated against (docs/operational-models.md);
+  both check/check-all (the capacity/surge-ladder invariants) and
+  emit-hl7/emit (PV1-3/6/7) are threaded that SAME config, not a fresh
+  default that might not even share ward names."
   (:require [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.check :as check]
             [ehr-testing-sim.emit-hl7 :as emit-hl7]
@@ -3549,8 +4219,9 @@ output for the v0 step set.
     (let [reference-date (or reference-date emit-hl7/default-reference-date)
           engine-params (-> (select-keys opts [:patients :arrival-gap])
                              (assoc :reference-date reference-date))
-          {:keys [ground-truth]} (engine/run (merge {:seed seed} (select-keys opts [:patients :arrival-gap])))
-          checked (check/check-all ground-truth)]
+          {:keys [ground-truth facility providers]}
+          (engine/run (merge {:seed seed} (select-keys opts [:patients :arrival-gap :facility :providers])))
+          checked (check/check-all ground-truth facility)]
       (if-not (result/ok? checked)
         (result/error :self-check-failed (:payload checked))
         (result/ok
@@ -3562,7 +4233,122 @@ output for the v0 step set.
                                              :invocation {:verb "run" :opts opts}})
                   :summary {:patients (or patients 1)
                             :events (count ground-truth)}}
-           (= "hl7" emit) (assoc :messages (emit-hl7/emit ground-truth reference-date))))))))
+           (= "hl7" emit) (assoc :messages (emit-hl7/emit ground-truth reference-date facility providers))))))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/check_test.clj ==========
+(ns ehr-testing-sim.check-test
+  "The invariant catalog's Milestone M1 additions (docs/operational-
+  models.md, docs/patient-state-model.md's event-validity table):
+  admission/transfer legality, transfer-from accuracy, no double
+  occupancy, one-slot-per-admitted-patient, capacity, and surge-only-
+  when-earlier-rungs-exhausted. Written before ehr-testing-sim.check
+  grows these (ADR-0004 test-first)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.check :as check]
+            [ehr-testing-sim.config :as config]
+            [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.result :as result]))
+
+(def test-facility
+  {:id :t :wards [{:id :ed :name "ED" :beds 0 :surge-slots 4
+                   :surge-format "%s-H%02d" :class :ed}
+                  {:id :renal :name "Renal" :beds 1 :surge-slots 1
+                   :surge-format "%s-H%02d" :class :inpatient}]})
+
+;; --- Event-validity rows (patient-state-model.md) -----------------------
+
+(deftest admission-only-when-new-detects-double-admission
+  (let [log [{:event :admission :t 0 :mrn "MRN000001" :home-ward "Renal"
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             {:event :admission :t 10 :mrn "MRN000001" :home-ward "Renal"
+              :location {:ward "Renal" :bed "RENAL-02" :placement :licensed}}]]
+    (is (seq (check/admission-only-when-new log)))))
+
+(deftest admission-only-when-new-holds-for-legit-log
+  (is (empty? (check/admission-only-when-new
+               [{:event :admission :t 0 :mrn "MRN000001" :home-ward "Renal"
+                 :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+                {:event :discharge :t 10 :mrn "MRN000001"}]))))
+
+(deftest transfer-only-when-admitted-detects-transfer-before-admission
+  (let [log [{:event :transfer :t 0 :mrn "MRN000001" :home-ward "Renal"
+              :from nil :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}]]
+    (is (seq (check/transfer-only-when-admitted log)))))
+
+(deftest transfer-from-matches-state-detects-lying-event
+  (let [log [{:event :admission :t 0 :mrn "MRN000001" :home-ward "Renal"
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             {:event :transfer :t 10 :mrn "MRN000001" :home-ward "Cardiology"
+              :from {:ward "WRONG" :bed "WRONG-01" :placement :licensed}
+              :location {:ward "Cardiology" :bed "CARDIOLOGY-01" :placement :licensed}}]]
+    (is (seq (check/transfer-from-matches-state log)))))
+
+(deftest transfer-from-matches-state-holds-when-honest
+  (let [log [{:event :admission :t 0 :mrn "MRN000001" :home-ward "Renal"
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             {:event :transfer :t 10 :mrn "MRN000001" :home-ward "Cardiology"
+              :from {:ward "Renal" :bed "RENAL-01" :placement :licensed}
+              :location {:ward "Cardiology" :bed "CARDIOLOGY-01" :placement :licensed}}]]
+    (is (empty? (check/transfer-from-matches-state log)))))
+
+;; --- Occupancy invariants ------------------------------------------------
+
+(deftest no-double-occupancy-detects-collision
+  (let [log [{:event :admission :t 0 :mrn "MRN000001" :home-ward "Renal"
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             {:event :admission :t 5 :mrn "MRN000002" :home-ward "Renal"
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}]]
+    (is (seq (check/no-double-occupancy log)))))
+
+(deftest admitted-occupies-one-slot-detects-nil-location
+  (let [log [{:event :admission :t 0 :mrn "MRN000001" :home-ward "Renal" :location nil}]]
+    (is (seq (check/admitted-occupies-one-slot log)))))
+
+(deftest occupancy-within-capacity-detects-overflow
+  (let [ward {:id :renal :name "Renal" :beds 1 :surge-slots 0
+              :surge-format "%s-H%02d" :class :inpatient}
+        facility {:id :t :wards [ward]}
+        ;; two patients both claim they hold licensed beds in a 1-bed
+        ;; ward -- an impossible log a bug could still produce.
+        log [{:event :admission :t 0 :mrn "MRN000001" :home-ward "Renal"
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             {:event :admission :t 5 :mrn "MRN000002" :home-ward "Renal"
+              :location {:ward "Renal" :bed "RENAL-99" :placement :licensed}}]]
+    (is (seq (check/occupancy-within-capacity log facility)))))
+
+(deftest surge-only-when-earlier-rungs-exhausted-detects-premature-surge
+  (let [facility test-facility
+        ;; Renal has a free licensed bed, yet this admission claims surge.
+        log [{:event :admission :t 0 :mrn "MRN000001" :home-ward "Renal" :forced false
+              :location {:ward "Renal" :bed "RENAL-H01" :placement :surge}}]]
+    (is (seq (check/surge-only-when-earlier-rungs-exhausted log facility)))))
+
+(deftest surge-only-when-earlier-rungs-exhausted-allows-forced
+  (let [facility test-facility
+        log [{:event :admission :t 0 :mrn "MRN000001" :home-ward "Renal" :forced true
+              :location {:ward "Renal" :bed "RENAL-H01" :placement :surge}}]]
+    (is (empty? (check/surge-only-when-earlier-rungs-exhausted log facility)))))
+
+;; --- check-all: facility-aware, backward-compatible arity ---------------
+
+(deftest check-all-defaults-facility-when-omitted
+  (let [{:keys [ground-truth]} (engine/run {:seed 42 :patients 3})]
+    (is (result/ok? (check/check-all ground-truth)))))
+
+(defspec every-m1-run-satisfies-the-invariant-catalog 150
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 12)]
+    (let [facility {:id :t :wards [{:id :ed :name "ED" :beds 0 :surge-slots 15
+                                     :surge-format "%s-H%02d" :class :ed}
+                                    {:id :renal :name "Renal" :beds 1 :surge-slots 0
+                                     :surge-format "%s-H%02d" :class :inpatient}]}
+          {:keys [ground-truth]} (engine/run {:seed seed :patients patients :facility facility})]
+      (result/ok? (check/check-all ground-truth facility)))))
 
 ========== END FILE ==========
 
@@ -3648,6 +4434,78 @@ output for the v0 step set.
 
 ========== END FILE ==========
 
+========== FILE: ./test/ehr_testing_sim/config_test.clj ==========
+(ns ehr-testing-sim.config-test
+  "docs/operational-models.md's config schemas, defaults, and the
+  synthetic-NPI Luhn math (ADR-0007 decision (a): Luhn-valid, not
+  obviously-fake). Written before ehr-testing-sim.config exists
+  (ADR-0004 test-first)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.config :as config])
+  (:import [java.util Random]))
+
+(deftest npi-check-digit-hand-computed
+  (testing "the NPI standard's check digit: Luhn's algorithm applied to
+            the 14-digit string \"80840\" + the 9-digit body, doubling
+            every digit at an even 0-based index counting from the
+            RIGHT of that 14-digit string (the about-to-be-appended
+            check digit will occupy the new rightmost/index-0 position).
+
+            Hand computation for body \"123456789\" (the well-known
+            example NPI 1234567893's own body):
+              14-digit string: 80840123456789
+              reversed:        9 8 7 6 5 4 3 2 1 0 4 8 0 8
+              index:           0 1 2 3 4 5 6 7 8 9 10 11 12 13
+              doubled@even-i:  9->18->9  8  7->14->5  6  5->10->1  4
+                               3->6      2  1->2      0  4->8      8
+                               0->0      8
+              summed:          9+8+5+6+1+4+6+2+2+0+8+8+0+8 = 67
+              check digit:     (10 - (67 mod 10)) mod 10 = (10-7) mod 10 = 3
+            matching the well-known valid NPI 1234567893's own check
+            digit."
+    (is (= 3 (config/npi-check-digit "123456789")))))
+
+(deftest valid-npi?-hand-computed
+  (testing "the full 10-digit NPI from the hand computation above validates"
+    (is (true? (config/valid-npi? "1234567893"))))
+  (testing "flipping the check digit invalidates it"
+    (is (false? (config/valid-npi? "1234567892")))))
+
+(defspec generate-npi-is-always-luhn-valid 100
+  (prop/for-all [seed gen/large-integer]
+    (let [rng (Random. ^long seed)]
+      (config/valid-npi? (config/generate-npi rng)))))
+
+(defspec generate-npi-is-deterministic-in-the-rng-stream 100
+  (prop/for-all [seed gen/large-integer]
+    (= (config/generate-npi (Random. ^long seed))
+       (config/generate-npi (Random. ^long seed)))))
+
+(deftest default-facility-validates
+  (is (config/valid-facility? config/default-facility))
+  (testing "one ED ward and two inpatient wards, per docs/operational-models.md"
+    (is (= 1 (count (filter #(= :ed (:class %)) (:wards config/default-facility)))))
+    (is (= 2 (count (filter #(= :inpatient (:class %)) (:wards config/default-facility)))))))
+
+(deftest default-provider-templates-validate
+  (is (every? config/valid-provider-template? config/default-provider-templates)))
+
+(deftest materialize-providers-assigns-valid-unique-npis
+  (let [rng (Random. 42)
+        providers (config/materialize-providers rng config/default-provider-templates)]
+    (is (every? config/valid-provider? providers))
+    (is (every? #(config/valid-npi? (:id %)) providers))
+    (is (= (count providers) (count (distinct (map :id providers)))))))
+
+(deftest materialize-providers-is-deterministic
+  (is (= (config/materialize-providers (Random. 7) config/default-provider-templates)
+         (config/materialize-providers (Random. 7) config/default-provider-templates))))
+
+========== END FILE ==========
+
 ========== FILE: ./test/ehr_testing_sim/emit_hl7_test.clj ==========
 (ns ehr-testing-sim.emit-hl7-test
   "The EmitHL7 stage's laws (docs/sim-theory.edn): bidirectional
@@ -3658,18 +4516,24 @@ output for the v0 step set.
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.config :as config]
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.emit-hl7 :as emit-hl7]
             [com.nervestaple.hl7-parser.parser :as parser]
             [com.nervestaple.hl7-parser.message :as message])
   (:import [java.time LocalDate LocalDateTime]
-           [java.time.format DateTimeFormatter]))
+           [java.time.format DateTimeFormatter]
+           [java.util Random]))
 
 (def ref-date "2024-01-01")
 
 (defn- admission-discharge-events
+  "Renamed from v0 in spirit only (kept the name -- not worth touching
+  every call site) -- Milestone M1's :transfer joins the events this
+  helper covers, since the derivability law now extends to A02
+  (docs/operational-models.md, .agents/plans/roadmap.md M1)."
   [ground-truth]
-  (filterv #(#{:admission :discharge} (:event %)) ground-truth))
+  (filterv #(#{:admission :discharge :transfer} (:event %)) ground-truth))
 
 (defn- event-key
   "The (mrn, message-type, timestamp) triple a message must carry to
@@ -3717,6 +4581,52 @@ output for the v0 step set.
                  (str type "^" trigger))
                (message/get-field-first-value parsed "MSH" 9)))))))
 
+;; --- Milestone M1: A02, PV1-3/6/7 ----------------------------------------
+
+(def ^:private crowded-facility
+  {:id :crowded-test
+   :wards [{:id :ed :name "ED" :beds 0 :surge-slots 5
+            :surge-format "%s-H%02d" :class :ed}
+           {:id :renal :name "Renal" :beds 1 :surge-slots 0
+            :surge-format "%s-H%02d" :class :inpatient}]})
+
+(defn- find-a02
+  [messages]
+  (first (filter #(re-find #"\^A02" %) messages)))
+
+(deftest message-type-registry-has-a02
+  (is (= {:type "ADT" :trigger "A02"} (emit-hl7/message-type-registry :transfer))))
+
+(deftest transfer-emits-a02-with-pv1-3-6-7
+  (let [{:keys [ground-truth facility providers]}
+        (engine/run {:seed 1 :patients 3 :facility crowded-facility})
+        transfer-event (first (filter #(= :transfer (:event %)) ground-truth))
+        _ (assert transfer-event "expected this seed/facility to produce a bed-ready transfer")
+        messages (emit-hl7/emit ground-truth ref-date facility providers)
+        a02 (find-a02 messages)
+        parsed (parser/parse a02)
+        provider (first (filter #(= (:id %) (:attending transfer-event)) providers))]
+    (testing "PV1-3: ward^^bed^facility"
+      (is (= (str (get-in transfer-event [:location :ward]) "^^"
+                  (get-in transfer-event [:location :bed]) "^"
+                  (name (:id facility)))
+             (message/get-field-first-value parsed "PV1" 3))))
+    (testing "PV1-6: prior location, from the event's own :from -- no shadow field"
+      (is (= (str (get-in transfer-event [:from :ward]) "^^"
+                  (get-in transfer-event [:from :bed]) "^"
+                  (name (:id facility)))
+             (message/get-field-first-value parsed "PV1" 6))))
+    (testing "PV1-7: id^family^given"
+      (is (= (str (:id provider) "^" (get-in provider [:name :family]) "^" (get-in provider [:name :given]))
+             (message/get-field-first-value parsed "PV1" 7))))))
+
+(deftest admission-pv1-6-is-empty-no-prior-location
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        admission (first ground-truth)
+        messages (emit-hl7/emit ground-truth ref-date facility providers)
+        parsed (parser/parse (first messages))]
+    (is (= "" (or (message/get-field-first-value parsed "PV1" 6) "")))))
+
 (deftest timestamp-anchoring-concrete
   (testing "a known offset renders the expected absolute timestamp"
     (is (= "20240101013000" (emit-hl7/hl7-timestamp "2024-01-01" 90)))
@@ -3748,7 +4658,8 @@ output for the v0 step set.
             [clojure.java.io :as io]
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.check :as check]
-            [ehr-testing-sim.result :as result]))
+            [ehr-testing-sim.result :as result])
+  (:import [java.util Random]))
 
 (deftest same-seed-same-output
   (testing "byte-identical reruns"
@@ -3797,12 +4708,120 @@ output for the v0 step set.
             (get state-history mrn)))
        (group-by :mrn ground-truth)))))
 
+;; --- M1: facility, providers, transfer, bed-ready coupling --------------
+
+(def ^:private crowded-facility
+  "One inpatient ward (Renal) with exactly one licensed bed and no
+  surge, so a second concurrent admission always boards; one ED ward
+  with generous surge (sized comfortably above the property test's
+  patient-count ceiling so 'facility exhausted' -- a 5th rung this
+  ladder deliberately doesn't have, docs/operational-models.md -- never
+  fires and the property stays about the coupling, not total capacity)."
+  {:id :crowded-test
+   :wards [{:id :ed :name "ED" :beds 0 :surge-slots 20
+            :surge-format "%s-H%02d" :class :ed}
+           {:id :renal :name "Renal" :beds 1 :surge-slots 0
+            :surge-format "%s-H%02d" :class :inpatient}]})
+
+(def ^:private test-providers
+  [{:id "1234567893" :name {:family "Chen" :given "A"} :role :attending
+    :specialty "Nephrology" :wards [:renal :ed]}])
+
+(deftest bed-ready-transfer-scripted-two-patients
+  (testing "B boards in ED surge because Renal's one bed is taken; A's
+            discharge frees RENAL-01, which bed-ready-transfers B out
+            of boarding -- the cross-patient coupling ADR-0008 exists
+            to make possible."
+    (let [world0 {:patients {"MRN000001" (engine/initial-patient "MRN000001")
+                              "MRN000002" (engine/initial-patient "MRN000002")}
+                  :facility crowded-facility
+                  :providers test-providers}
+          rng (Random. 1)
+          {a-events :events} (engine/decide rng 0 world0 "MRN000001"
+                                             {:type :admission :location "Renal"})
+          world1 (update-in world0 [:patients "MRN000001"]
+                             #(reduce engine/evolve % a-events))
+          {b-events :events} (engine/decide rng 10 world1 "MRN000002"
+                                             {:type :admission :location "Renal"})
+          world2 (update-in world1 [:patients "MRN000002"]
+                             #(reduce engine/evolve % b-events))
+          b-after-admission (get-in world2 [:patients "MRN000002"])]
+      (testing "A got the one licensed bed"
+        (is (= {:ward "Renal" :bed "RENAL-01" :placement :licensed}
+               (get-in world1 [:patients "MRN000001" :location]))))
+      (testing "B is boarding: home-ward Renal, physically in ED surge"
+        (is (= "Renal" (:home-ward b-after-admission)))
+        (is (= "ED" (get-in b-after-admission [:location :ward])))
+        (is (= :surge (get-in b-after-admission [:location :placement]))))
+      (let [{discharge-events :events} (engine/decide rng 100 world2 "MRN000001" {:type :discharge})]
+        (testing "A's discharge ALSO emits B's bed-ready transfer, same t"
+          (is (= 2 (count discharge-events)))
+          (is (= :discharge (:event (first discharge-events))))
+          (let [transfer (second discharge-events)]
+            (is (= :transfer (:event transfer)))
+            (is (true? (:bed-ready transfer)))
+            (is (= "MRN000002" (:mrn transfer)))
+            (is (= 100 (:t transfer)))
+            (is (= "Renal" (get-in transfer [:location :ward])))
+            (is (= "RENAL-01" (get-in transfer [:location :bed])))
+            (let [world3 (-> world2
+                             (update-in [:patients "MRN000001"] #(reduce engine/evolve % [(first discharge-events)]))
+                             (update-in [:patients "MRN000002"] #(reduce engine/evolve % [transfer])))]
+              (testing "B is no longer boarding"
+                (is (= "Renal" (get-in world3 [:patients "MRN000002" :home-ward])))
+                (is (= "Renal" (get-in world3 [:patients "MRN000002" :location :ward])))))))))))
+
+(defn- boarding?
+  [patient]
+  (and (= :admitted (:status patient))
+       (not= (:home-ward patient) (get-in patient [:location :ward]))))
+
+(defspec bed-ready-transfer-relieves-the-longest-waiting-boarder 150
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 3 10)]
+    (let [{:keys [ground-truth]} (engine/run {:seed seed :patients patients :facility crowded-facility})]
+      (every?
+       (fn [{:keys [event world-before]}]
+         (or (not= :discharge (:event event))
+             (let [vacated-ward (get-in world-before [(:mrn event) :location :ward])
+                   waiting (->> world-before
+                                (remove (fn [[mrn _]] (= mrn (:mrn event))))
+                                (filter (fn [[_ p]] (and (boarding? p) (= vacated-ward (:home-ward p)))))
+                                (sort-by (fn [[mrn p]] [(:admitted-at p) mrn]))
+                                (map first))]
+               ;; the specific longest-waiting boarder must get a
+               ;; bed-ready transfer AT THIS SAME instant -- checked
+               ;; against the full ground-truth log rather than this
+               ;; discharge's own replay record, since the transfer is
+               ;; a SEPARATE, immediately-following ground-truth event
+               ;; (same t, next in log order), not a second effect
+               ;; folded into the discharge's own world-after.
+               (or (empty? waiting)
+                   (some #(and (= :transfer (:event %))
+                               (true? (:bed-ready %))
+                               (= (first waiting) (:mrn %))
+                               (= (:t event) (:t %)))
+                         ground-truth)))))
+       (engine/replay ground-truth)))))
+
+(deftest replay-tracks-before-after-and-world
+  (let [{:keys [ground-truth]} (engine/run {:seed 7 :patients 2 :facility crowded-facility})
+        records (engine/replay ground-truth)]
+    (testing "one record per ground-truth event, in order"
+      (is (= (count ground-truth) (count records)))
+      (is (= ground-truth (map :event records))))
+    (testing "world-after of the last record has every patient at their final fold"
+      (let [final-world (:world-after (last records))]
+        (is (= #{"MRN000001" "MRN000002"} (set (keys final-world))))))))
+
 (deftest pinned-seed-survives-decide-evolve-refactor
-  (testing "ADR-0008's decide/evolve split changes the engine's internal
-            structure but not its observable output for the v0 step set --
-            the ground-truth log captured before the refactor (see the
-            fixture's own header comment) must still be reproducible
-            byte-for-byte after it."
+  (testing "the fixture pins the POST-Milestone-M1 baseline (ADR-0009 --
+            M1's bed-choice and attending-sampling RNG draws perturbed
+            the pre-M1 baseline this test used to pin, and that's an
+            accepted, documented, within-version-only guarantee, not a
+            bug). This test now guards against FUTURE undocumented
+            drift, the same role it played for the decide/evolve
+            refactor before M1 gave it a reason to regenerate."
     (let [baseline (edn/read-string
                     (slurp (io/resource "ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn")))
           current (select-keys (engine/run {:seed 42 :patients 5}) [:ground-truth])]
@@ -3810,17 +4829,126 @@ output for the v0 step set.
 
 ========== END FILE ==========
 
+========== FILE: ./test/ehr_testing_sim/facility_test.clj ==========
+(ns ehr-testing-sim.facility-test
+  "The occupancy board (a derived projection, never written directly --
+  ADR-0008/docs/operational-models.md) and the four-rung allocation
+  ladder. Written before ehr-testing-sim.facility exists (ADR-0004
+  test-first)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.config :as config]
+            [ehr-testing-sim.facility :as facility])
+  (:import [java.util Random]))
+
+(def renal-ward
+  {:id :renal :name "Renal" :beds 3 :surge-slots 2
+   :surge-format "%s-H%02d" :class :inpatient})
+
+(deftest bed-ids-are-derived-never-enumerated
+  (testing "licensed bed ids: ward id uppercased, 2-digit index"
+    (is (= ["RENAL-01" "RENAL-02" "RENAL-03"] (facility/licensed-bed-ids renal-ward))))
+  (testing "surge slot ids: the ward's own :surge-format"
+    (is (= ["RENAL-H01" "RENAL-H02"] (facility/surge-slot-ids renal-ward)))))
+
+(deftest occupancy-board-is-a-fold-over-patient-locations
+  (testing "the board is exactly bed -> mrn for every patient with a location"
+    (let [patients {"MRN000001" {:mrn "MRN000001" :status :admitted
+                                  :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+                     "MRN000002" {:mrn "MRN000002" :status :new}}]
+      (is (= {"RENAL-01" "MRN000001"} (facility/occupancy-board patients))))))
+
+(deftest allocation-ladder-rung-1-home-licensed
+  (let [facility {:id :t :wards [renal-ward]}
+        rng (Random. 1)
+        alloc (facility/allocate rng facility {} "Renal" nil)]
+    (is (= "Renal" (:home-ward alloc)))
+    (is (= :licensed (get-in alloc [:location :placement])))
+    (is (= "Renal" (get-in alloc [:location :ward])))
+    (is (contains? (set (facility/licensed-bed-ids renal-ward)) (get-in alloc [:location :bed])))
+    (is (false? (:forced alloc)))))
+
+(deftest allocation-ladder-rung-2-home-surge-once-licensed-full
+  (let [facility {:id :t :wards [renal-ward]}
+        board (into {} (map vector (facility/licensed-bed-ids renal-ward) (repeat "someone")))
+        alloc (facility/allocate (Random. 1) facility board "Renal" nil)]
+    (is (= :surge (get-in alloc [:location :placement])))
+    (is (= "Renal" (get-in alloc [:location :ward])))
+    (is (contains? (set (facility/surge-slot-ids renal-ward)) (get-in alloc [:location :bed])))))
+
+(deftest allocation-ladder-rung-3-other-ward-outlier
+  (let [cardiology (assoc renal-ward :id :cardiology :name "Cardiology")
+        facility {:id :t :wards [renal-ward cardiology]}
+        board (merge (into {} (map vector (facility/licensed-bed-ids renal-ward) (repeat "x")))
+                     (into {} (map vector (facility/surge-slot-ids renal-ward) (repeat "x"))))
+        alloc (facility/allocate (Random. 1) facility board "Renal" nil)]
+    (testing "outlier: home-ward differs from location.ward, a real (inpatient-class) other ward"
+      (is (= "Renal" (:home-ward alloc)))
+      (is (= "Cardiology" (get-in alloc [:location :ward])))
+      (is (= :licensed (get-in alloc [:location :placement]))))))
+
+(deftest allocation-ladder-rung-4-boarding-in-ed-surge
+  (let [cardiology (assoc renal-ward :id :cardiology :name "Cardiology")
+        ed {:id :ed :name "ED" :beds 0 :surge-slots 2 :surge-format "%s-H%02d" :class :ed}
+        facility {:id :t :wards [renal-ward cardiology ed]}
+        full (fn [ward] (into {} (map vector (concat (facility/licensed-bed-ids ward)
+                                                       (facility/surge-slot-ids ward))
+                                       (repeat "x"))))
+        board (merge (full renal-ward) (full cardiology))
+        alloc (facility/allocate (Random. 1) facility board "Renal" nil)]
+    (testing "boarding: home-ward differs from location.ward, which is ED-class"
+      (is (= "Renal" (:home-ward alloc)))
+      (is (= "ED" (get-in alloc [:location :ward])))
+      (is (= :surge (get-in alloc [:location :placement])))
+      (is (contains? (set (facility/surge-slot-ids ed)) (get-in alloc [:location :bed]))))))
+
+(deftest allocation-ladder-force-placement-overrides-and-is-exempt
+  (let [facility {:id :t :wards [renal-ward]}
+        board (into {} (map vector (facility/licensed-bed-ids renal-ward) (repeat "x"))) ;; licensed full
+        alloc (facility/allocate (Random. 1) facility board "Renal" {:ward "Renal" :bed "RENAL-H02"})]
+    (is (true? (:forced alloc)))
+    (is (= "RENAL-H02" (get-in alloc [:location :bed])))
+    (is (= :surge (get-in alloc [:location :placement])))))
+
+(defspec allocate-never-returns-an-occupied-bed 100
+  (prop/for-all [seed gen/large-integer]
+    (let [facility {:id :t :wards [renal-ward
+                                    {:id :ed :name "ED" :beds 0 :surge-slots 2
+                                     :surge-format "%s-H%02d" :class :ed}]}
+          board (into {} (map vector (facility/licensed-bed-ids renal-ward) (repeat "x")))
+          alloc (facility/allocate (Random. ^long seed) facility board "Renal" nil)]
+      (not (contains? board (get-in alloc [:location :bed]))))))
+
+(deftest choose-attending-samples-only-ward-eligible-providers
+  (let [providers (config/materialize-providers (Random. 3) config/default-provider-templates)
+        attending-id (facility/choose-attending (Random. 5) providers :renal)
+        attending (first (filter #(= (:id %) attending-id) providers))]
+    (is (some #{:renal} (:wards attending)))))
+
+(defspec choose-attending-is-deterministic 100
+  (prop/for-all [seed gen/large-integer]
+    (let [providers (config/materialize-providers (Random. 1) config/default-provider-templates)]
+      (= (facility/choose-attending (Random. ^long seed) providers :renal)
+         (facility/choose-attending (Random. ^long seed) providers :renal)))))
+
+========== END FILE ==========
+
 ========== FILE: ./test/ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn ==========
-;; Captured from ehr-testing-sim.engine/run {:seed 42 :patients 5} at the
-;; START of the M1 session that introduced ADR-0008's decide/evolve split
-;; (2026-07-26), BEFORE any refactor -- the pre-refactor ground truth this
-;; repo's determinism guarantee says must still be reproducible byte-for-
-;; byte after the engine is restructured internally. See
+;; Captured from ehr-testing-sim.engine/run {:seed 42 :patients 5}
+;; POST-Milestone-M1 (2026-07-26) -- see notes/ADRs.md ADR-0009. This
+;; file previously pinned the pre-M1 (decide/evolve refactor session)
+;; baseline; M1's allocation-ladder bed choice and attending sampling
+;; both draw RNG at admission time, which perturbed every admission-
+;; bearing pathway's downstream RNG stream, so the pre-M1 baseline is
+;; gone (ADR-0009's before/after is in that session's own summary, not
+;; duplicated here). Regenerate again -- deliberately, not casually --
+;; the next time a milestone's new step types add stochastic behavior
+;; existing pathways now exercise (ADR-0009's own expectation, not a
+;; bug to chase). See
 ;; ehr_testing_sim.engine_test/pinned-seed-survives-decide-evolve-refactor.
-;; Do NOT regenerate this file casually: it is the baseline a future
-;; regression compares against, not a snapshot to keep in sync with
-;; whatever the engine currently produces.
-{:ground-truth [{:event :admission, :t 0, :mrn "MRN000001", :location "Renal", :reason "Kidney problems"} {:event :admission, :t 5, :mrn "MRN000002", :location "Renal", :reason "Kidney problems"} {:event :admission, :t 37, :mrn "MRN000003", :location "Renal", :reason "Kidney problems"} {:event :admission, :t 62, :mrn "MRN000004", :location "Renal", :reason "Kidney problems"} {:event :discharge, :t 91, :mrn "MRN000002"} {:event :admission, :t 100, :mrn "MRN000005", :location "Renal", :reason "Kidney problems"} {:event :discharge, :t 132, :mrn "MRN000004"} {:event :discharge, :t 153, :mrn "MRN000001"} {:event :discharge, :t 211, :mrn "MRN000003"} {:event :discharge, :t 220, :mrn "MRN000005"}]}
+{:ground-truth [{:event :admission, :t 0, :mrn "MRN000001", :reason "Kidney problems", :attending "0384055899", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-02", :placement :licensed}, :forced false} {:event :admission, :t 58, :mrn "MRN000002", :reason "Kidney problems", :attending "0384055899", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-04", :placement :licensed}, :forced false} {:event :admission, :t 78, :mrn "MRN000003", :reason "Kidney problems", :attending "3903633105", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-01", :placement :licensed}, :forced false} {:event :admission, :t 93, :mrn "MRN000004", :reason "Kidney problems", :attending "3903633105", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-03", :placement :licensed}, :forced false} {:event :admission, :t 143, :mrn "MRN000005", :reason "Kidney problems", :attending "3903633105", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-H01", :placement :surge}, :forced false} {:event :discharge, :t 179, :mrn "MRN000004", :location {:ward "Renal", :bed "RENAL-03", :placement :licensed}, :attending "3903633105"} {:event :discharge, :t 202, :mrn "MRN000002", :location {:ward "Renal", :bed "RENAL-04", :placement :licensed}, :attending "0384055899"} {:event :discharge, :t 222, :mrn "MRN000001", :location {:ward "Renal", :bed "RENAL-02", :placement :licensed}, :attending "0384055899"} {:event :discharge, :t 248, :mrn "MRN000003", :location {:ward "Renal", :bed "RENAL-01", :placement :licensed}, :attending "3903633105"} {:event :discharge, :t 304, :mrn "MRN000005", :location {:ward "Renal", :bed "RENAL-H01", :placement :surge}, :attending "3903633105"}]}
 
 ========== END FILE ==========
 
@@ -3844,6 +4972,36 @@ output for the v0 step set.
     (is (= :simulated (:stage m)))
     (is (= {:primary 42} (:seeds m)))
     (is (= "ehr-testing-sim" (get-in m [:generator :name])))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/pathway_test.clj ==========
+(ns ehr-testing-sim.pathway-test
+  "Schema validity for the IR step vocabulary as it grows past the v0
+  walking skeleton -- M1 adds :transfer and the optional
+  :force-placement authoring escape hatch (docs/operational-models.md)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [ehr-testing-sim.pathway :as pathway]))
+
+(deftest sample-admission-discharge-still-valid
+  (is (pathway/valid? pathway/sample-admission-discharge)))
+
+(deftest transfer-step-is-valid-ir
+  (is (pathway/valid? {:name "t" :steps [{:type :admission :location "Renal"}
+                                          {:type :transfer :location "Cardiology"}
+                                          {:type :discharge}]})))
+
+(deftest force-placement-is-valid-on-admission-and-transfer
+  (testing "admission"
+    (is (pathway/valid? {:name "t" :steps [{:type :admission :location "Renal"
+                                             :force-placement {:ward "Renal" :bed "RENAL-02"}}]})))
+  (testing "transfer"
+    (is (pathway/valid? {:name "t" :steps [{:type :admission :location "Renal"}
+                                            {:type :transfer :location "Cardiology"
+                                             :force-placement {:ward "Cardiology" :bed "CARDIOLOGY-01"}}]}))))
+
+(deftest transfer-without-location-is-invalid
+  (is (not (pathway/valid? {:name "t" :steps [{:type :transfer}]}))))
 
 ========== END FILE ==========
 
