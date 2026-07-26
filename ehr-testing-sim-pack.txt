@@ -1,9 +1,9 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T17:13:49Z
-HEAD: f7a29e08a80b65506fa9b73f20b8e712b4283807
+generated (UTC): 2026-07-26T18:07:50Z
+HEAD: aa1bb641822cc203289af338c106495eb10affb1
 git status --porcelain:
-?? .wsl_run.sh
+working tree clean
 elides: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
@@ -95,6 +95,153 @@ the regression suite.
 ========== END FILE ==========
 
 ========== FILE: ./.agents/plans/.gitkeep ==========
+
+========== END FILE ==========
+
+========== FILE: ./.agents/plans/roadmap.md ==========
+# Roadmap
+
+**Status: proposed.** ADR-0003 deferred writing a plan "until first
+real use" of `.agents/plans/`; this is that first use. Everything
+below — milestone order, scope, and the deliberate exclusions — is
+this session's proposal for the author to ratify, reorder, or veto,
+not a committed schedule. Each milestone names the
+[`sim-theory.edn`](../../docs/sim-theory.edn) stage(s) it advances and
+the invariants that must co-land with it (`AGENTS.md`'s co-landing
+convention: every new engine step type ships with its `check.clj`
+invariants in the same change).
+
+## M1 — Facility + providers models, transfer step, occupancy projection
+
+Advances **Execute** (`:built`, growing its step vocabulary) via its
+new `provider-pool` catalytic, plus the transfer step type (ADT^A02 in
+`EmitHL7`'s message-type-registry, once emitted).
+[`docs/operational-models.md`](../../docs/operational-models.md),
+reviewed this session, is this milestone's spec — nothing here
+redecides what that document already decided.
+
+Co-landing invariants: no bed holds two patients; an admitted patient
+occupies exactly one bed; a transfer's from-location matches the
+patient's current state; occupancy never exceeds ward capacity;
+surge placement only when earlier ladder rungs are exhausted (unless
+`:forced true`). Plus the occupancy board's own consistency law as a
+property test: board ≡ fold over patient locations.
+
+## M2 — Churn family
+
+Lands **InjectChurn** (currently `;; NEXT` in the theory, `:planned`):
+cancel-\*, \*-in-error, bed-swap, and merge step types, as the IR→IR
+transform the theory already names. Brings `churn-profile` in as real
+config rather than a named-but-unbuilt resource.
+
+Co-landing invariants: each new step type's own catalog entries
+(e.g. a cancelled event must reference an event it cancels; a merge
+must reference MRNs that both exist; a bed-swap preserves the
+occupancy invariants M1 established rather than bypassing them). The
+IR-endomorphism and clinical-steps-preserved laws already stated on
+`:churn` in the EDN become property tests here, not new claims.
+
+## M3 — Order profiles + order/result steps
+
+Advances **Execute** via its new `order-profiles` catalytic (added
+this session, target 3 — hashed US-units config): order and result
+step types, and ORM/ORU emission in `EmitHL7`. This is the milestone
+that repairs the capture gap named in this session's theory
+sync — Simulated Hospital's order profiles and the ORM/ORU cycle were
+discussed from the project's first session but, until now, lived in
+no planning artifact.
+
+Co-landing invariants: results reference orders that exist and
+precede them in time; order/result message types register in
+`message-type-registry` the same way ADT types already do.
+
+## M4 — Persona + demographics tables; payer sampling; PID/IN1 enrichment
+
+Lands **Persona** (`:planned`) for real: demographics sampling from
+vendored, hashed tables (`demographics-tables`, target 3), plus the
+`payer-pool` catalytic this session recorded as a comment-only forward
+reference on `:persona` — this is the milestone that turns that
+comment into a real `:catalytic` wire. PID gains demographic fields;
+IN1 lands as a segment for the first time, carrying the sampled payer
+(`docs/operational-models.md`'s payers model).
+
+Co-landing invariants: sampled demographics and payer are internally
+consistent with any age-linked rule (e.g. Medicare weighting at 65+
+is only checkable once age is a real field); schema round-trip tests
+for the new `persona` resource type.
+
+## M5 — GMF interpreter + module vendoring decision + CompileTrajectory
+
+Lands **RunModules** and **CompileTrajectory** (both `:planned`),
+which means finally resolving `sim-theory.md`'s open question #1: is
+`gmf-module-set` a pinned lockfile (target 1) or vendored-and-hashed
+(target 3)? This is ADR-0003's own named trigger ("adopt
+[a pinned-artifact/vendoring pattern] once Synthea modules... actually
+land in this repo") — this milestone is that landing, and the
+decision gets its own ADR when it's made, per that trigger.
+
+Co-landing invariants: code-passthrough (every coded concept in a
+trajectory event is carried verbatim from its source module, never
+invented or translated); glass-box traceability (every trajectory
+event cites the module id and state name that produced it);
+clinical-content-preserving compilation (every trajectory event maps
+to at least one IR step, none dropped or reordered against clinical
+causality).
+
+## M6 — EmitState (FHIR snapshots first); emitter-coherence property
+
+Lands **EmitState** (`:planned`): state-document rendering from
+`state-history`, FHIR resources before CDA. This is also the natural
+point to resolve `sim-theory.md`'s open question #3 — whether
+`state-history` is primitive or derived from `ground-truth-log` —
+since EmitState existing is exactly the precondition that question's
+own deferral names.
+
+Co-landing invariants: snapshot-at-instant (a state-document is a
+pure function of `state-history` at a queried instant, no access to
+the log, engine, or RNG); the cross-emitter **emitter-coherence**
+property — replaying `hl7v2-stream` reconstructs `state-history`, and
+a FHIR snapshot at instant *t* agrees with the state implied by
+messages up to *t* — becomes a real property test for the first time
+once there are two emitters to check against each other.
+
+## Later / triggers
+
+Not sequenced, because each is gated on a condition rather than on
+the milestone before it:
+
+- **Calibrate** (`:planned`, feedback stage) — waits on a real
+  `sim-corpus` and a site's `feed-statistics` to calibrate against;
+  premature before Package and a first external consumer exist.
+- **CI + integration validation** (independent-parser round-tripping
+  via NIST/HAPI, per `docs/third-party-sources.md` Tier 2) — triggers
+  once this repo has a public GitHub remote (ADR-0003's existing
+  trigger) or another CI-capable remote.
+- **Packs demotion** — `pack-push` stays the active session-end
+  ceremony (ADR-0006) until this repo's GitHub remote goes *public*;
+  demoting it to dormant, the way `ehr-testing-tools` did at its own
+  ADR-0008, is recorded as its own ADR when that happens, not folded
+  into this roadmap.
+
+## Deliberate exclusions
+
+Recorded so they read as decisions, not gaps someone might otherwise
+try to fill in:
+
+- **Lifelong birth-to-death records.** This simulator's scope is
+  hospital-operations traffic over an *encounter horizon* — one
+  admission through its discharge and immediate churn — not a
+  patient's full longitudinal history. Synthea already serves the
+  longitudinal need well (that's precisely why it's mined as a
+  tier-1 source rather than reimplemented); duplicating its scope
+  here would be redundant, not additive.
+- **CPT codes.** AMA-licensed; excluded by the standing constraint
+  (`docs/problem-statement.md` §3, `AGENTS.md` Constraints), not a
+  future milestone.
+- **Delivery/transport** (file, stream, MLLP pacing). Below this
+  theory's level of description — `sim-theory.md`'s own open question
+  #5 already names this as deliberately absent unless paced emission
+  ever acquires laws of its own.
 
 ========== END FILE ==========
 
@@ -589,13 +736,59 @@ testing EHR integrations: clinically plausible, operationally messy
 (ADT churn: transfers, cancellations, merges, corrections), US-coded
 patient event streams from minimal parameters — with a ground-truth
 trajectory log as a first-class output so test harnesses can assert
-against what *should* be true, independent of message parsing.
-
-**Status: pre-release walking skeleton.** The engine runs trivial
-pathways deterministically; the invariant catalog and CLI seams are
-real; HL7v2 emission and generative clinical modules are next. See
+against what *should* be true, independent of message parsing. See
 [`docs/problem-statement.md`](docs/problem-statement.md) for the full
 problem, constraints, black-box contract, and validation program.
+
+**Status: pre-release walking skeleton.** Built: the engine, the
+invariant catalog, and HL7v2 admission/discharge emission (below).
+
+## Pipeline: now / next / later
+
+<!-- Hand-derived from docs/sim-theory.edn's :status fields and its
+     ";; NEXT" marker (no generator reads status yet, unlike the full
+     diagram below) -- regenerate this block by hand whenever a stage
+     flips status or NEXT moves. External stages and the pathway-ir
+     union are omitted here to stay under ~12 nodes; see the detail
+     view for those. -->
+
+```mermaid
+flowchart LR
+    Persona["Persona"]:::planned
+    RunModules["RunModules"]:::planned
+    CompileTrajectory["CompileTrajectory"]:::planned
+    InjectChurn["InjectChurn"]:::next
+    Execute["Execute"]:::built
+    Check["Check"]:::built
+    EmitHL7["EmitHL7"]:::built
+    EmitState["EmitState"]:::planned
+    Package["Package"]:::planned
+    Calibrate["Calibrate"]:::planned
+
+    Persona --> RunModules --> CompileTrajectory --> InjectChurn --> Execute
+    Execute --> Check
+    Execute --> EmitHL7
+    Execute --> EmitState
+    EmitHL7 --> Package
+    Package --> Calibrate
+    Calibrate -.-> InjectChurn
+
+    classDef built fill:#1b5e20,stroke:#2e7d32,color:#c8e6c9,stroke-width:2px;
+    classDef next fill:#e65100,stroke:#ff9800,color:#fff3e0,stroke-width:3px;
+    classDef planned fill:#37474f,stroke:#78909c,color:#cfd8dc,stroke-width:1px,stroke-dasharray: 3 3;
+```
+
+**Now** (green): Execute, Check, EmitHL7 — property-tested and green
+(20 tests / 55 assertions). **Next** (amber): InjectChurn, growing the
+engine's step vocabulary starting with transfer. **Later** (dashed
+grey): everything else in the *want*.
+
+[`docs/sim-theory-diagram.md`](docs/sim-theory-diagram.md) is the full
+detail view (every resource wire, catalytic input, and the
+`pathway-ir` union) generated mechanically from
+[`docs/sim-theory.edn`](docs/sim-theory.edn). [`.agents/plans/roadmap.md`](.agents/plans/roadmap.md)
+is the milestone plan this diagram's *next*/*later* stages resolve
+into.
 
 ## Relation to the ehr-testing-* family
 
@@ -603,13 +796,11 @@ problem, constraints, black-box contract, and validation program.
   teaches the testing method.
 - [`ehr-testing-tools`](https://github.com/pragsmike/ehr-testing-tools)
   makes it runnable (corpus construction, conformance gating).
-- **ehr-testing-sim** (this repo) is the traffic source. It is usable
-  standalone, and ehr-testing-tools can mount it as the `ehr sim`
-  subcommand and ingest its runs as corpora — the embedding contract
-  is three exported values in `ehr-testing-sim.cli`
-  (see [`notes/ADRs.md`](notes/ADRs.md), ADR-0001).
-
-Dependency direction: tools → sim, never the reverse.
+- **ehr-testing-sim** (this repo) is the traffic source — usable
+  standalone, and mountable inside tools' `ehr` CLI as the `sim`
+  subcommand (three exported values in `ehr-testing-sim.cli`; see
+  [`notes/ADRs.md`](notes/ADRs.md) ADR-0001). Dependency direction:
+  tools → sim, never the reverse.
 
 ## Quick start
 
@@ -620,23 +811,24 @@ clojure -M:cli run --seed 42 | clojure -M:cli check   # self-check, exit 0
 clojure -M:cli help
 ```
 
-Same seed + config ⇒ byte-identical output, always. That's not a
-convenience; it's guarantee #1, enforced by property tests.
+Same seed + config ⇒ byte-identical output, always — guarantee #1,
+enforced by property tests.
 
 ## Design in three sentences
 
-Pathways are data (a common intermediate representation shared by
-hand-authored scripts and, later, trajectories generated from
-Synthea-style clinical modules); a seeded discrete-event engine
-executes them into a format-free ground-truth log. Wire formats
-(HL7v2 first; FHIR/CDA later) are emitters consuming that log. Codes
-(SNOMED CT, LOINC, RxNorm, ICD-10-CM) travel as data on the state, so
-every emitter renders them natively (ADR-0002).
+Pathways are data (a common IR shared by hand-authored scripts and,
+later, trajectories compiled from Synthea-style clinical modules); a
+seeded discrete-event engine executes them into a format-free
+ground-truth log. Wire formats (HL7v2 first; FHIR/CDA later) are
+emitters consuming that log, never the reverse. Codes (SNOMED CT,
+LOINC, RxNorm, ICD-10-CM) travel as data on patient state, so every
+emitter renders them natively (ADR-0002).
 
 Design lineage — what was mined from Google's Simulated Hospital
 (operational model, churn vocabulary, event queue) and Synthea
 (generative clinical modules, US demographics, embedded codes) — is
-recorded in [`.agents/memory/architecture.md`](.agents/memory/architecture.md).
+recorded in [`.agents/memory/architecture.md`](.agents/memory/architecture.md)
+and summarized in [`docs/third-party-sources.md`](docs/third-party-sources.md).
 
 ## License
 
@@ -695,6 +887,287 @@ MIT — see [LICENSE](LICENSE). No PHI anywhere, by construction.
 
 ========== END FILE ==========
 
+========== FILE: ./docs/operational-models.md ==========
+# Operational resource models
+
+This document specifies the design for the simulator's operational
+resource models — the things a hospital allocates to patients that
+aren't clinical content. It is the spec Milestone M1 of
+[`.agents/plans/roadmap.md`](../.agents/plans/roadmap.md) implements
+against, reviewed ahead of any code landing. It does not touch
+`src/`; it describes what M1's code should do.
+
+## The three-class resource taxonomy
+
+Three models land in this document — facility (beds), providers, and
+payers — but they are instances of only three *classes* of resource,
+and every future resource this simulator ever models (equipment,
+ORM/ORU order slots, transport, whatever comes after) will be one of
+these three. Naming the classes up front, rather than letting each
+model reinvent its own shape, is the point of writing this as one
+document instead of three.
+
+- **Exclusive resources** are occupancy-tracked, capacity-bounded, and
+  invariant-bearing. A unit of the resource is held by at most one
+  patient at a time; holding it is administratively meaningful (it
+  shows up in messages, it can be transferred, it can run out). Beds
+  are the instance in this document.
+- **Shared resources** are assigned, not consumed. One instance serves
+  many patients concurrently, with no capacity bound and no
+  double-booking invariant to enforce. Providers are the instance:
+  an attending has many patients at once, and nothing about that is a
+  conflict.
+- **Attribute pools** are sampled once at patient creation and carried
+  as ordinary patient state thereafter. They are never tracked as a
+  resource at all — there is no board, no assignment event, no
+  capacity. Payers are the instance: a patient's payer is a fact about
+  the patient, not a thing the hospital allocates.
+
+The taxonomy is a spectrum of *how much the engine cares*: exclusive
+resources need a projection and an invariant catalog; shared resources
+need only a sampling rule; attribute pools need only a sampling rule
+applied earlier and never touched again. Getting a future resource's
+class right up front avoids over-building (giving a payer an occupancy
+board nobody needs) or under-building (letting two patients silently
+share a bed because nobody wrote the invariant).
+
+## Facility model (beds — exclusive)
+
+**Config.** `sim-config` carries a `:facility` key: a facility id plus
+a vector of wards. Each ward is
+`{:id :name :beds N :surge-slots M :surge-format "%s-H%02d" :class :inpatient|:ed}`.
+Bed ids are *derived* from `:id` and `:beds` (e.g. a ward `:id :renal`
+with `:beds 12` derives `RENAL-01` … `RENAL-12`) — they are never
+enumerated in config, so growing a ward's capacity is a one-line edit,
+not a list-maintenance chore. The shipped default config is small on
+purpose: one ED ward and two inpatient wards, enough to exercise
+transfers and surge without asking a config author to model a whole
+hospital before the engine can run.
+
+Pathways name *wards* — `{:type :admission :location "Renal"}` is a
+statement of clinical intent, not an operational commitment. The
+engine assigns the actual *bed* at execution time; that assignment is
+an operational outcome, seeded like everything else. Bed choice among
+the free beds in the target ward is a uniform draw from the run's one
+RNG, same determinism law as every other stochastic choice in the
+theory.
+
+**Single source of truth.** The patient's own state carries its
+current location (bed or ward, depending on status — see boarding,
+below). The occupancy board — "what's in RENAL-04 right now" — is not
+a second authoritative structure the engine maintains in parallel; it
+is a **derived index**, a projection over the set of patient states,
+computed or incrementally maintained but never a place new facts get
+written first. The consistency law that makes this safe to state
+plainly: **board ≡ fold over patient locations** — recomputing the
+board from scratch by folding over every patient's current state must
+equal whatever board the engine is actually using, at every point in
+a run. This is a property test, not a code review claim. Every bed
+invariant below (no double-occupancy, capacity bound, transfer-from
+matches current state) is a check on the *projection*, not a
+separate thing the engine has to keep in sync by discipline.
+
+This is the house pattern, not a one-off for beds: **one authoritative
+record (the patient's own state), everything else a projection with a
+proven consistency law.** [`sim-theory.md`](sim-theory.md)'s open
+question #3 — whether `state-history` is primitive or derived from
+`ground-truth-log` — is the same question at the theory's own waist:
+if replaying the log reconstructs history, history is a projection
+too. The occupancy board is the concrete, near-term instance of the
+same shape; when open question #3 resolves, expect the same argument
+to apply almost verbatim.
+
+**Allocation ladder.** Placing a patient tries rungs in order, each
+rung's choice among its candidates seeded:
+
+1. **Home-ward licensed** — a free bed in the ward the pathway named.
+2. **Home-ward surge** — a free surge slot in that ward, once licensed
+   beds are full.
+3. **Other-ward licensed** — a free licensed bed in a different ward
+   (outlier placement). This is recorded distinctly from a home-ward
+   placement, since "medical patient boarding in a surgical bed" is
+   itself an operationally interesting fact a downstream consumer may
+   want to assert on.
+4. **Boarding** — physically occupying an ED surge slot while
+   administratively `:admitted` to the target ward. This is the rung
+   that motivates a real state-model distinction: a boarding patient's
+   *status* (admitted, to Renal) and *location* (physically, an ED
+   surge slot) diverge, and both are true at once. Nothing about the
+   occupancy projection breaks — the ED surge slot is occupied, and
+   the patient's state simply carries a location that isn't Renal
+   while its status says Renal.
+
+Boarding decouples status from location deliberately, because that
+decoupling is what makes the *next* piece of behavior possible without
+a redesign: a bed-ready transfer (the future `:transfer` step, ADT^A02)
+triggers when some *other* patient's discharge frees a bed in the
+target ward. Two patients' timelines couple through the occupancy
+projection — patient B's discharge event is what makes patient A's
+boarding-to-transfer event schedulable. This is exactly the kind of
+cross-patient coupling a pure per-patient fold doesn't give you for
+free, which is why the projection has to exist as a real (if derived)
+structure the engine consults, not just a debugging convenience.
+
+**Surge naming is config, not code.** Real hospitals name their
+overflow capacity in wildly site-specific ways — hallway slot numbers,
+pseudo-rooms, chair codes, "H01" for hallway bed 1. Baking one
+convention into code would make every generated corpus look like the
+same fictional hospital. `:surge-format` is a format string
+(`"%s-H%02d"` by default) applied to the ward id and slot number,
+so a config author picks their own site's idiom without touching the
+engine.
+
+**Placement is recorded on events.** Every admission or transfer event
+that allocates a bed carries `:placement :licensed` or `:placement
+:surge`, and `:forced true` when an authored pathway supplied a
+`:force-placement` hint. The hint exists for scriptable edge cases —
+an author who wants to force a specific, otherwise-improbable
+placement for a targeted test (e.g. "assert the merge-after-transfer
+scenario specifically when the patient is boarding") shouldn't have to
+fight the ladder to get there. A forced placement overrides the
+ladder outright and is exempt from the surge-only-when-full invariant
+below — recorded as an exemption, not silently allowed.
+
+**Invariants to co-land with implementation** (per the
+`check.clj` co-landing convention, `AGENTS.md`):
+
+- No bed holds two patients at once.
+- An admitted patient occupies exactly one bed (or is boarding — see
+  above — in which case it occupies exactly one *physical* slot while
+  its status names exactly one ward).
+- A transfer event's declared from-location matches the patient's
+  current state at the time of the event.
+- Occupancy never exceeds a ward's declared capacity (licensed +
+  surge slots).
+- Surge placement only occurs when the earlier rungs (home-ward
+  licensed, then home-ward surge before other-ward) are legitimately
+  exhausted — unless the placement is `:forced true`.
+
+**Deliberate non-invariant, recorded so it isn't rediscovered as a
+bug:** there is **no census floor for surge use**. A real hospital's
+surge-slot policy ("don't open the hallway beds below 90% census") is
+a *policy*, and policy violations are exactly the kind of operational
+noise this simulator exists to generate — future churn content, not a
+correctness law the engine enforces. Baking a census floor into the
+invariant catalog would make it impossible to ever generate the
+messy-but-real traffic of a hospital ignoring its own policy.
+
+## Providers model (shared)
+
+**Config.** `sim-config` carries a `:providers` pool:
+`{:id :name {:family :given} :role :attending|:consulting|:referring :specialty :wards [...]}`.
+Ids are deterministic synthetic identifiers generated from the run's
+seed, same as bed ids and MRNs — no provider is ever looked up outside
+this config-carried pool.
+
+**Identifier decision — synthetic NPIs.** Two options were on the
+table for provider identifiers:
+
+- **(a) Valid, Luhn-checkable synthetic NPIs.** A National Provider
+  Identifier is a 10-digit number whose check digit is computed by
+  the Luhn algorithm applied to the digits prefixed with the constant
+  `80840` (the CMS-assigned health-industry-number issuer prefix).
+  Generating candidate 9-digit bodies from the run's seeded RNG and
+  computing a correct check digit produces numbers that are
+  *structurally* valid NPIs — they would pass any downstream parser
+  or validator that checks NPI format — without being assigned to any
+  real provider.
+- **(b) An obviously-fake format** (e.g. a prefixed sentinel range
+  that no real NPI could occupy).
+
+**Decision: (a).** A generated 10-digit number that happens to
+coincide with a real NPPES-assigned NPI is possible (the space is
+10 billion minus check-digit constraints, NPPES has roughly a few
+million active assignments, so collision probability is low but
+non-zero) and **harmless**: NPPES is itself public data (the NPI
+Registry is a public lookup service), so a coincidental match reveals
+nothing not already public, and no PHI is implicated — an NPI
+identifies a *provider*, not a patient. Recommending (a) over (b)
+because realism is a stated product goal (`docs/problem-statement.md`
+constraint 2, US conventions) and a downstream system that validates
+NPI check digits (many EHR-adjacent systems do, since a malformed NPI
+is itself a common real-world data-quality bug worth testing against)
+should see a well-formed identifier, not a value it will reject before
+the rest of the message is even exercised. The caveat — coincidence
+with a real NPPES assignment is possible and understood to be
+harmless — is recorded here rather than left implicit.
+
+**Assignment.** At admission, an attending is sampled (seeded) from
+the providers whose `:wards` includes the admitting ward — "ward-
+eligible" providers. The chosen provider is carried as ordinary
+patient state (not a projection; nothing about a provider assignment
+needs a board) and rendered in PV1-7 as `id^family^given`, HL7's
+usual attending-doctor field shape. Providers serve many patients
+concurrently by construction: there is no occupancy invariant to
+write for a provider, because "attending has 40 patients at once" is
+never a bug.
+
+**Captured, not designed — open questions:**
+
+- **Attending reassignment on service transfer vs. location
+  transfer.** A patient moving wards (a location transfer) may or may
+  not imply a new attending (a service transfer); real hospitals do
+  both independently. This model doesn't yet decide whether/when
+  reassignment happens; it's flagged for whichever milestone lands
+  the transfer step family in earnest.
+- **Caseload as a realism knob.** Sampling uniformly among
+  ward-eligible providers ignores caseload — a config knob that
+  weights sampling by "how many patients does this provider already
+  have" would produce more realistic clustering (a few attendings
+  carrying most of a ward's census) but isn't designed here.
+
+## Payers model (attribute pool)
+
+**Config.** `sim-config` carries a `:payers` pool:
+`{:id :name :type :medicare|:medicaid|:commercial|:self-pay :weight}`,
+shipped with US-ish default weights (commercial and Medicare
+dominant, Medicaid and self-pay smaller shares, in line with the
+general shape of US payer-mix data).
+
+**Sampling.** A payer is sampled once, at patient creation, and never
+resampled or tracked thereafter — the defining property of an
+attribute pool. Age-linked weighting is applied where it's trivial to
+do so without inventing a distribution: Medicare dominance kicks in
+at 65+, mirroring real US payer mix (Medicare eligibility itself
+starts at 65). The distribution *idea* — payer selection correlated
+with age — is mined from Synthea's own payer-assignment logic, a
+tier-1 implementation source per
+[`docs/third-party-sources.md`](third-party-sources.md); this model
+does not claim to reproduce Synthea's exact tables, only the shape of
+the age-correlation.
+
+**Whose job this is.** Once `Persona` ([`sim-theory.edn`](sim-theory.edn))
+lands, payer sampling is Persona's — it belongs with the rest of
+per-patient attribute sampling (demographics, etc.), not with
+facility allocation. Until Persona exists, this model runs at engine
+patient-init time, as a stand-in that Persona subsumes rather than
+replaces.
+
+**Carried, rendered, never tracked.** The sampled payer rides on
+patient state like any other attribute and renders in the IN1 segment
+once that segment lands — a later milestone (M4 in the roadmap), not
+this document's near-term scope. It is never occupancy-tracked and
+never exclusive: two patients sharing "commercial" is not a
+resource conflict, it's just two patients with the same attribute
+value.
+
+## Summary of decisions and open questions
+
+Decisions made here, for the author to ratify or veto (see this
+session's closing summary): the three-class taxonomy and its names;
+bed ids as derived, never enumerated; the four-rung allocation ladder
+and boarding's status/location decoupling; surge naming as config;
+`:force-placement` as an invariant-exempting authoring escape hatch;
+the no-census-floor non-invariant; synthetic NPIs generated
+Luhn-valid (option a) with the NPPES-coincidence caveat; payer
+sampling as Persona's eventual job, age-linked at 65+ for Medicare.
+
+Open questions, recorded rather than silently decided: attending
+reassignment semantics on service vs. location transfer; caseload as
+a future realism knob for provider sampling.
+
+========== END FILE ==========
+
 ========== FILE: ./docs/problem-statement.md ==========
 # Synthetic Hospital Traffic for EHR Testing — Problem Statement
 
@@ -738,6 +1211,7 @@ The gap: **there is no way to turn a small set of parameters into an unbounded s
 7. **Reproducibility.** Identical parameters and seed produce identical output; any interesting stream can be pinned and replayed.
 8. **Format-agnostic core.** The simulation models patient state and events independently of any wire format; concrete formats are renderings. Event-based output (HL7v2) is required first; state-based outputs (FHIR, CDA) must be addable without altering the core.
 9. **Permissive licensing.** The library and its bundled content must be redistributable under open-source terms.
+10. **Encounter horizon.** The simulation's scope is hospital-operations traffic across a single encounter — admission through discharge and its immediate churn — not a patient's lifelong longitudinal history, which upstream generative tools like Synthea already serve.
 
 ## Black-Box Description
 
@@ -825,6 +1299,8 @@ flowchart LR
     hl7_parser_dep(["hl7-parser-dep"])
     invariant_catalog(["invariant-catalog"])
     message_type_registry(["message-type-registry"])
+    order_profiles(["order-profiles"])
+    provider_pool(["provider-pool"])
     sim_config(["sim-config"])
     snomed_icd10_map(["snomed-icd10-map"])
 
@@ -862,6 +1338,8 @@ flowchart LR
 
     %% Arrow 31: Execute
     InjectChurn -- operational-pathway --> Execute
+    provider_pool -. provider-pool .-> Execute
+    order_profiles -. order-profiles .-> Execute
 
     %% Arrow 33: Check
     Execute -- ground-truth-log --> Check
@@ -922,6 +1400,8 @@ flowchart LR
     style hl7_parser_dep fill:#f5f5f5,stroke:#999,color:#333
     style invariant_catalog fill:#f5f5f5,stroke:#999,color:#333
     style message_type_registry fill:#f5f5f5,stroke:#999,color:#333
+    style order_profiles fill:#f5f5f5,stroke:#999,color:#333
+    style provider_pool fill:#f5f5f5,stroke:#999,color:#333
     style sim_config fill:#f5f5f5,stroke:#999,color:#333
     style snomed_icd10_map fill:#f5f5f5,stroke:#999,color:#333
 ```
@@ -940,6 +1420,8 @@ flowchart LR
     hl7_parser_dep(["hl7-parser-dep"])
     invariant_catalog(["invariant-catalog"])
     message_type_registry(["message-type-registry"])
+    order_profiles(["order-profiles"])
+    provider_pool(["provider-pool"])
     sim_config(["sim-config"])
     snomed_icd10_map(["snomed-icd10-map"])
 
@@ -977,6 +1459,8 @@ flowchart LR
 
     %% Arrow 31: Execute
     InjectChurn -- operational-pathway --> Execute
+    provider_pool -. provider-pool .-> Execute
+    order_profiles -. order-profiles .-> Execute
 
     %% Arrow 33: Check
     Execute -- ground-truth-log --> Check
@@ -1037,6 +1521,8 @@ flowchart LR
     style hl7_parser_dep fill:#f5f5f5,stroke:#999,color:#333
     style invariant_catalog fill:#f5f5f5,stroke:#999,color:#333
     style message_type_registry fill:#f5f5f5,stroke:#999,color:#333
+    style order_profiles fill:#f5f5f5,stroke:#999,color:#333
+    style provider_pool fill:#f5f5f5,stroke:#999,color:#333
     style sim_config fill:#f5f5f5,stroke:#999,color:#333
     style snomed_icd10_map fill:#f5f5f5,stroke:#999,color:#333
 
@@ -1073,7 +1559,7 @@ clinical-trajectory → compiled-pathway  [CompileTrajectory]
 # planned: InjectChurn
 pathway-ir × churn-profile → operational-pathway  [InjectChurn]
 
-operational-pathway → ground-truth-log + state-history  [Execute]
+operational-pathway × provider-pool × order-profiles → ground-truth-log + state-history  [Execute]  {catalytic: provider-pool, order-profiles}
 
 ground-truth-log × invariant-catalog → pass + rejected  [Check]  {catalytic: invariant-catalog}
 
@@ -1114,7 +1600,13 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
 ;; prose, keeping the file loadable by tools' Pipeline Malli as-is.
 {:schema-version 1
  :stages
- [{:id :persona
+ [;; payer-pool (target 3, hashed config, docs/operational-models.md)
+  ;; binds here for payer sampling once Persona lands -- not added to
+  ;; :catalytic below because Persona itself is still :planned and the
+  ;; wire would be premature until the stage is real; until then,
+  ;; payer sampling runs at engine patient-init time, temporarily
+  ;; inside Execute's scope (see provider-pool's real binding there).
+  {:id :persona
    :label "Persona"
    :kind :transform
    :status :planned
@@ -1169,8 +1661,11 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
    :status :built
    :inputs ["operational-pathway"]
    :outputs ["ground-truth-log" "state-history"]
+   :catalytic ["provider-pool" "order-profiles"]
    :laws ["determinism: single seeded RNG, totally ordered event queue ([t seq-no] tiebreak) => byte-identical serialized output for identical inputs+seed -- property-tested (engine-test/determinism-holds-for-all-seeds, 100 trials green 2026-07-26)"
-          "pure fold: (state, due-event) -> (state', emitted-events); full per-patient state history is retained, which is what makes state-based emitters renderings rather than redesigns (ADR-0002)"]
+          "pure fold: (state, due-event) -> (state', emitted-events); full per-patient state history is retained, which is what makes state-based emitters renderings rather than redesigns (ADR-0002)"
+          "order-profiles catalytic (target 3, hashed US-units config, docs/operational-models.md): order and result step types land under Execute's existing :built contract as the engine's step vocabulary grows -- an EmitHL7-style co-landing addition, not a new stage (repairs the plan's earlier capture gap: order profiles and the ORM/ORU cycle were discussed from the first session but appeared in no planning artifact before this one)"
+          "provider-pool catalytic (target 3, hashed config, docs/operational-models.md): attending assignment at admission draws from the provider pool the same way bed assignment draws from facility config -- both are Execute-time allocations, not separate stages"]
    :contract "v0 scope: executes the walking-skeleton step set (:admission :delay :discharge) for staggered multi-patient arrivals; the WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"}
 
   {:id :check
@@ -1318,6 +1813,24 @@ Three structural facts the diagram makes visible at a glance:
    tools does with a corpus — only that a named resource crosses at a
    named point, in the mirrored manifest shape.
 
+## Three catalytics added for the operational resource models
+
+[`docs/operational-models.md`](operational-models.md) names three
+resources this composite was previously silent on, and the EDN now
+wires all three as catalytic inputs at the stage where each binds:
+`order-profiles` and `provider-pool` on `Execute` (target 3, hashed
+US-units config each — order/result step types and attending
+assignment both land under Execute's existing `:built` contract as
+the engine's step vocabulary grows, the same co-landing path
+`InjectChurn`'s churn family and `EmitHL7`'s message types already
+follow), and `payer-pool`, recorded as a comment at `Persona` rather
+than a real wire, since Persona itself is still `:planned` and payer
+sampling runs at engine patient-init time until it lands. Adding
+`order-profiles` repairs the plan's biggest capture gap to date:
+Simulated Hospital's order profiles and the ORM/ORU result cycle were
+discussed from this project's first session but, until this pass,
+named in no planning artifact.
+
 ## Resource type bindings
 
 Per the notation, every resource name binds to a type; an equation
@@ -1352,6 +1865,9 @@ targets; unresolved is a gap, not an oversight:
 | `hl7-parser-dep` | 2 — deps.edn | `org.clojars.cmiles74/clojure-hl7-parser 3.5.1` (facts-register) |
 | `message-type-registry` | 4 — in-repo code registry | event→message-type mapping (ADT^A01 …), the emitter's own catalog |
 | `snomed-icd10-map` | 1 — artifacts.lock | the pinned NLM map; the one sanctioned code translation in the theory |
+| `order-profiles` | 3 — hashed repo-authored config | US-units order/result profiles, binds at `Execute` (`docs/operational-models.md`) |
+| `provider-pool` | 3 — hashed repo-authored config | synthetic provider identities, binds at `Execute` (`docs/operational-models.md`) |
+| `payer-pool` | 3 — hashed repo-authored config | synthetic payer pool; binds at `Persona` once it lands — comment only today, no wire yet (`docs/operational-models.md`) |
 
 ## Global laws
 
@@ -1807,6 +2323,104 @@ retiring anything; `AUTHORS-GUIDE.md` section 2 is updated to name the
 three-step order. The demotion trigger from ADR-0003 remains open and
 unmet — a future session that flips this repo's visibility to public
 records that as its own ADR, exactly as ADR-0003 already anticipated.
+
+---
+
+## ADR-0007 — Three-class operational resource taxonomy; occupancy as a derived projection; encounter-horizon scope; payers as an attribute; synthetic NPIs are Luhn-valid
+
+**Status:** Proposed (2026-07-26) — pending author review, per this
+session's brief; see [`docs/operational-models.md`](../docs/operational-models.md)
+for the full design this ADR records the decisions from.
+
+**Context.** The theory (`docs/sim-theory.edn`) named facility,
+provider, and payer resources only implicitly — as config a stage
+would eventually need — with no design for how each behaves once
+patients start occupying, using, or carrying them. Three questions
+needed answers before Milestone M1 (`.agents/plans/roadmap.md`) could
+be specified: what kind of thing is a bed, versus a provider, versus a
+payer; where does the occupancy board live relative to patient state;
+and what identifier scheme do synthetic providers carry. A fourth,
+narrower question — how far into a patient's life this simulator's
+scope extends — surfaced while writing the roadmap's exclusions and is
+recorded here alongside the resource-model decisions since both are
+scope-shaping calls a reviewer should ratify together.
+
+**Decision.**
+
+1. **Three-class resource taxonomy**, naming a spectrum of how much
+   the engine must track a resource, not just today's three examples:
+   **exclusive** resources (occupancy-tracked, capacity-bounded,
+   invariant-bearing — beds), **shared** resources (assigned but not
+   consumed, no exclusivity invariant — providers), and **attribute
+   pools** (sampled once at patient creation, carried as state, never
+   tracked as a resource at all — payers). Every future resource this
+   simulator models is expected to be one of these three; getting a
+   new resource's class right up front is meant to prevent both
+   over-building (an occupancy board for something nobody contends
+   over) and under-building (a missing double-booking invariant).
+2. **Occupancy — and derived projections generally — as the house
+   pattern:** the patient's own state is the single authoritative
+   record of its location; the occupancy board is a derived index,
+   proven consistent by a property test (board ≡ fold over patient
+   locations), never a second place facts get written first. This is
+   the same shape as `sim-theory.md`'s open question #3 (whether
+   `state-history` is primitive or derivable from
+   `ground-truth-log`) — one authoritative record, everything else a
+   projection with a proven consistency law — applied now to the
+   nearer-term occupancy board rather than left as only a future
+   question about the log.
+3. **Encounter-horizon scope boundary:** this simulator generates
+   hospital-operations traffic across a single encounter — admission
+   through discharge and its immediate churn — not a patient's
+   lifelong longitudinal history. Recorded as constraint 10 in
+   `docs/problem-statement.md` and as a named exclusion in
+   `.agents/plans/roadmap.md`.
+4. **Payers are an attribute pool, not a tracked resource:** sampled
+   once (age-linked where trivial — Medicare weighted at 65+, the
+   distribution idea mined from Synthea per
+   `docs/third-party-sources.md` tier 1), carried as patient state,
+   rendered in IN1 once that segment lands (Milestone M4). No board,
+   no assignment event, no capacity — the point of naming payers as
+   the attribute-pool instance of the taxonomy rather than inventing
+   a fourth category for them.
+5. **Synthetic provider NPIs are Luhn-valid, not obviously fake.**
+   Generated as structurally valid 10-digit NPIs (correct Luhn check
+   digit over the `80840` health-industry-issuer prefix) from the
+   run's seed, rather than an obviously-fake sentinel format.
+   Coincidence with a real NPPES-assigned NPI is possible and
+   recorded as harmless: NPPES is itself public data, and an NPI
+   identifies a provider, not a patient, so no PHI is implicated.
+
+**Rejected.**
+
+- **A fourth resource class**, or per-resource bespoke design with no
+  shared taxonomy — rejected because it was the taxonomy itself, not
+  any one model, that was missing; three classes account for beds,
+  providers, and payers without strain, and forcing every future
+  resource through the same three-way question (tracked-exclusive?
+  tracked-shared? untracked-attribute?) is more useful than solving
+  each resource's design from scratch.
+- **Occupancy as a second authoritative structure**, updated directly
+  alongside patient state — rejected because it reintroduces exactly
+  the two-sources-of-truth failure mode `sim-theory.md`'s open
+  question #3 already flags as a risk for `state-history`; keeping
+  the pattern singular (one authoritative record) now avoids arguing
+  the same case twice.
+- **Obviously-fake NPI format** (option b in
+  `docs/operational-models.md`) — rejected because realism against
+  systems that validate NPI check digits is a stated product goal,
+  and the coincidence risk with a real assignment is both low and,
+  on inspection, harmless.
+
+**Consequences.** `docs/operational-models.md` becomes Milestone M1's
+spec; a future resource proposal (equipment, order slots, transport)
+is expected to state its class under this taxonomy before design
+work starts. The occupancy consistency law is a property test M1 must
+ship, not an optional nicety. `docs/problem-statement.md` gains
+constraint 10 (encounter horizon) as a one-sentence addition, per this
+session's own scope-minimality rule for touching that document. No
+code changes accompany this ADR — it is Proposed pending the author's
+review of `docs/operational-models.md`, per this session's brief.
 
 ========== END FILE ==========
 
