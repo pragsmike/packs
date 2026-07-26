@@ -1,0 +1,13 @@
+========== PACK HEADER ==========
+repo: ehr-testing-sim
+generated (UTC): 2026-07-26T15:55:12Z
+HEAD: 44d27ea3321f27210266e8c0e2e2d30c873eb316
+git status --porcelain:
+working tree clean
+includes only: .agents/skills, .agents/prompts/archive
+========== END PACK HEADER ==========
+
+========== FILE: ./.agents/skills/.gitkeep ==========
+
+========== END FILE ==========
+

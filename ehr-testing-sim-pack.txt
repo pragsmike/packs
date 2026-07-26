@@ -1,0 +1,1328 @@
+========== PACK HEADER ==========
+repo: ehr-testing-sim
+generated (UTC): 2026-07-26T15:55:12Z
+HEAD: 44d27ea3321f27210266e8c0e2e2d30c873eb316
+git status --porcelain:
+working tree clean
+elides: .agents/skills, .agents/prompts/archive
+========== END PACK HEADER ==========
+
+========== FILE: ./.agents/handoffs/.gitkeep ==========
+
+========== END FILE ==========
+
+========== FILE: ./.agents/memory/architecture.md ==========
+# Architecture lineage & mining record
+
+Durable knowledge for agent sessions. Facts below were verified by
+reading the upstream sources on 2026-07-26; re-verify before relying
+on details that may have moved.
+
+## Upstream sources
+
+**Google Simulated Hospital** (github.com/google/simhospital,
+archived, Apache-2.0, Go) — mined for the *operational* model:
+
+- `pkg/pathway`: ~30 scripted step types incl. ADT churn
+  (Transfer, BedSwap, TransferInError, Cancel*, Pending*, Merge,
+  DeleteVisit...). YAML pathways picked by `percentage_of_patients`
+  via a distribution manager. Our IR step vocabulary derives from
+  this list; churn realism is its key contribution.
+- `pkg/state` + `pkg/hospital`: discrete-event core — priority queue
+  of Event structs, patients map, `RunNextEventIfDue` loop. Our
+  `engine.clj` is its functional reduction (pure fold, retained
+  state history).
+- `configs/`: order profiles (lab panels with ref ranges/units —
+  codes admittedly synthetic), UK census names, locations, doctors.
+  UK-centric: NHS numbers, mmol/L units, London ethnicities. We do
+  NOT port UK config; US data comes from Synthea.
+- `pkg/hospital/messages.go` + `pkg/message`: event→HL7v2 mapping
+  (ADT^A01 etc.) — reference for our emitter, but emission is built
+  on the cmiles74 parser's structures instead.
+
+**Synthea** (github.com/synthetichealth/synthea, Apache-2.0, Java) —
+mined for the *generative clinical* layer and US data:
+
+- 85 disease modules as plain JSON (`src/main/resources/modules/`),
+  each a probabilistic state machine (Generic Module Framework:
+  Initial/Delay/Simple/ConditionOnset/MedicationOrder/Encounter...
+  with direct/distributed/conditional/complex transitions guarded on
+  age/sex/race/attributes). Verified: asthma module = 52 states.
+- Modules embed real codes inline: SNOMED (conditions), LOINC
+  (labs), RxNorm (meds). Apache-licensed → redistributable.
+- US-centric throughout: census demographics, geography, SSNs, US
+  units. This is our US data source.
+- Plan: port the GMF *interpreter* (documented spec on their wiki),
+  load their module JSON as data, compile module runs → our IR.
+  A Synthea module is a pathway generator; a simhospital pathway is
+  one sample from it.
+
+**HL7v2 in Clojure:** org.clojars.cmiles74/clojure-hl7-parser 3.5.1
+(verified from the project's project.clj). Group is
+`org.clojars.cmiles74`, artifact `clojure-hl7-parser` — NOT the
+GitHub repo name.
+
+## Terminology decisions
+
+- Concepts as `{:system :code :display}` in IR/log; emitters render
+  natively (HL7v2 CWE, FHIR CodeableConcept). Codes are state, not
+  format (ADR-0002).
+- Systems: SNOMED CT, LOINC, RxNorm, ICD-10-CM, CVX. **Never CPT**
+  (AMA-licensed). SNOMED→ICD-10-CM for DG1/billing via the NLM map,
+  or carry both codes where Synthea provides them.
+
+## Sibling-repo integration (ehr-testing-tools)
+
+Verified conventions we mirror (their `src/ehr_testing_tools/`):
+result-not-throw Result maps; thin printing CLI shell, `[group
+action]` dispatch with injectable `-fn` keys; EDN canonical/`--json`
+projection; exit codes 0/1/2/3 (their ADR-0004/0010); help data as
+`{:group :doc :verbs [{:verb :doc :flags [...]}]}`; corpus manifests
+ManifestV1_1 (`:stage :generator :seeds :engine-params :config
+:invocation :canonicalizers-applied :environment`). Our mirrors:
+`cli/help-group`, `manifest.clj`. Binding contract tests go in THEIR
+test-integration tree (ADR-0001 here).
+
+## Validation program
+
+`docs/problem-statement.md` §Validation & Evidence is the claims/
+proofs table (7 claims). Rows 1–3, 7 are CI-automatable now; the
+invariant catalog (`check.clj`) is claim #3's engine and doubles as
+the regression suite.
+
+========== END FILE ==========
+
+========== FILE: ./.agents/plans/.gitkeep ==========
+
+========== END FILE ==========
+
+========== FILE: ./.gitignore ==========
+.cpcache/
+.nrepl-port
+target/
+out/
+
+========== END FILE ==========
+
+========== FILE: ./AGENTS.md ==========
+# AGENTS.md
+
+> Primary instruction surface for AI coding agents working in this
+> repository. Read by tools that support the `AGENTS.md` convention
+> (Codex, OpenCode, and others). Claude Code users: see `CLAUDE.md`,
+> which points here.
+
+## Project overview
+
+**Project:** ehr-testing-sim — a deterministic, seeded generator of
+synthetic hospital traffic (patient event streams and, later,
+state-based records) for testing EHR integrations. Sibling of
+[`ehr-testing-tools`](https://github.com/pragsmike/ehr-testing-tools)
+(operational tooling: corpus construction and conformance gating) and
+[`ehr-testing-guide`](https://github.com/pragsmike/ehr-testing-guide)
+(the testing method). This repo is the *traffic source*: tools can
+mount it as the `ehr sim` subcommand and ingest its runs as corpora.
+**Language(s):** Clojure.
+**Status:** pre-release walking skeleton. Interfaces may move; nothing
+is published to Clojars/Maven yet.
+
+Read `docs/problem-statement.md` first — it is the reasoning-of-record
+for *what* this library must do (problem, audience, constraints,
+black-box contract, validation program). `notes/ADRs.md` records *how*
+and outranks your own inference about why something is organized a
+certain way. Never silently revert an Accepted ADR — supersede it with
+a new numbered record. Durable design lineage (what was mined from
+Simulated Hospital and Synthea, and why) lives in
+`.agents/memory/architecture.md`.
+
+## Quick start
+
+```bash
+# Run tests (same alias contract as the sibling repos)
+clojure -X:test
+
+# Standalone CLI
+clojure -M:cli run --seed 42 --patients 5
+clojure -M:cli run --seed 42 | clojure -M:cli check   # exit 0
+```
+
+## Architecture in one paragraph
+
+Pathways (data, EDN — `pathway.clj`) are executed by a seeded
+discrete-event engine (`engine.clj`) producing a **ground-truth event
+log**, the primary output; message formats (HL7v2 first) are emitters
+*consuming* that log, never the other way around. `check.clj` is the
+invariant catalog over logs; `manifest.clj` bridges runs into
+ehr-testing-tools' corpus provenance format; `cli.clj` is both the
+standalone `sim` shell and the mountable command group; `result.clj`
+is the (deliberately copied, see ADR-0001) result-not-throw
+vocabulary.
+
+## Code conventions
+
+- **Result-not-throw:** every capability function returns
+  `{:status :ok|:rejected|:error :category ... :payload ...}`.
+  Exceptions are for programmer error only. Only `cli.clj` prints.
+- **EDN is canonical output; `--json` is a projection**, never the
+  source of truth. Exit codes: 0 ok, 1 rejected, 2 operational error.
+- **Determinism is law:** all randomness flows from the single seeded
+  RNG in `engine/run`. No wall-clock, no hash-order dependence, no
+  unseeded entropy anywhere in the output path. If you add
+  randomness, thread the RNG; the property tests will catch you if
+  you don't.
+- **Every new engine step type lands with its invariants** in
+  `check.clj` and its tests, in the same change.
+- Schemas are malli; keep versions aligned with ehr-testing-tools.
+
+## Constraints
+
+- **Dependency direction:** ehr-testing-tools may depend on this repo;
+  this repo must NEVER depend on ehr-testing-tools (ADR-0001).
+  The manifest/help shapes here are *mirrors* with tripwire tests;
+  binding cross-repo contract tests belong in tools' integration tree.
+- **No PHI, no real-person data, ever** — including in test fixtures
+  and docs. Synthetic by construction is a core product claim.
+- **No CPT codes** (AMA-licensed). SNOMED CT, LOINC, RxNorm,
+  ICD-10-CM, CVX only.
+- **The embedding contract is public API:** `cli/cli-spec`,
+  `cli/help-group`, `cli/dispatch-action` are what ehr-testing-tools
+  mounts. Changing their shapes is a breaking change; treat
+  accordingly (ADR + version note).
+- Do not invent facts about upstream sources (Simulated Hospital,
+  Synthea); `.agents/memory/architecture.md` records what was
+  verified and when.
+
+## Skills
+
+Repo-local skills live in `.agents/skills/` (none yet). Handoffs in
+`.agents/handoffs/`, plans in `.agents/plans/`, durable knowledge in
+`.agents/memory/`.
+
+========== END FILE ==========
+
+========== FILE: ./CLAUDE.md ==========
+# CLAUDE.md
+
+Canonical agent instructions for this repository live in
+[`AGENTS.md`](AGENTS.md) — read that. This file exists so Claude Code
+picks up the pointer automatically; do not add instructions here.
+
+========== END FILE ==========
+
+========== FILE: ./LICENSE ==========
+MIT License
+
+Copyright (c) 2026 Mike Gallaher
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+========== END FILE ==========
+
+========== FILE: ./Makefile ==========
+# ehr-testing-sim Makefile
+#
+# Pack format and recipes mirror ehr-testing-tools' Makefile verbatim
+# (same header block, same file markers, same elide-pattern mechanism),
+# so packs from all sibling repos read identically and any parser
+# anchored to line-start markers works across them. See tools'
+# AUTHORS-GUIDE.md section 2 for the pack ritual's full reasoning.
+#
+# One deliberate difference from tools: pack-push here is ACTIVE, not
+# dormant. This repo has no GitHub remote yet, so the pragsmike/packs
+# transport is the ONLY way a chat session can read it -- the same
+# arrangement tools used before it went public (its ADR-0008). When
+# ehr-testing-sim gets a public GitHub repo, demote pack-push to
+# dormant the same way tools did, and update this comment.
+
+REPO_NAME := ehr-testing-sim
+PACK_OUTPUT := $(shell echo $$HOME)/ehr-testing-sim-pack.txt
+PACK_SKILLS_OUTPUT := $(shell echo $$HOME)/ehr-testing-sim-skills-pack.txt
+
+# Local clone of https://github.com/pragsmike/packs -- clone it once by
+# hand if absent; pack-push checks for it and refuses to run without it.
+PACKS_REPO_DIR := $(shell echo $$HOME)/.packs
+
+# Same elision as tools: skills are large and change rarely. Today this
+# repo's .agents/skills/ is empty and .agents/prompts/archive/ doesn't
+# exist, so the pattern elides nothing -- kept anyway so the pack
+# format (and its header's elides line) stays identical across repos
+# and nothing changes when skills arrive.
+PACK_ELIDE_PATTERN := ^\.agents/skills/|^\.agents/prompts/archive/
+
+.PHONY: help test run pack pack-skills pack-push
+
+help:
+	@echo "Targets:"
+	@echo "  test         - clojure -X:test"
+	@echo "  run          - demo run: clojure -M:cli run --seed 42 --patients 5"
+	@echo "  pack         - concatenate tracked files (except .agents/skills, .agents/prompts/archive) into $(PACK_OUTPUT)"
+	@echo "  pack-skills  - concatenate only .agents/skills + .agents/prompts/archive into $(PACK_SKILLS_OUTPUT)"
+	@echo "  pack-push    - pack + pack-skills, then publish both to the pragsmike/packs repo ($(PACKS_REPO_DIR)) -- ACTIVE while this repo has no GitHub remote"
+
+test:
+	clojure -X:test
+
+run:
+	clojure -M:cli run --seed 42 --patients 5
+
+# Concatenates most git-tracked files in the repo into one pack file, for
+# pasting into a chat UI that can't read the filesystem directly. Leads
+# with a header (repo name, UTC generation timestamp, HEAD commit,
+# working-tree status, elision note) so staleness is a one-glance check
+# instead of a manual diff across files. File markers match the sibling
+# repos' pack format exactly.
+#
+# NOTE: this repo has no commits yet at scaffold time -- `git ls-files`
+# is empty until the initial `git add`. Run pack only after the initial
+# commit (the header's HEAD line will say 'no commits yet' otherwise,
+# which is your staleness signal).
+pack:
+	@echo "Creating $(PACK_OUTPUT)..."
+	@{ \
+		echo "========== PACK HEADER =========="; \
+		echo "repo: $(REPO_NAME)"; \
+		echo "generated (UTC): $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+		echo "HEAD: $$(git rev-parse HEAD 2>/dev/null || echo 'no commits yet')"; \
+		echo "git status --porcelain:"; \
+		st="$$(git status --porcelain)"; \
+		if [ -z "$$st" ]; then echo "working tree clean"; else echo "$$st"; fi; \
+		echo "elides: .agents/skills, .agents/prompts/archive"; \
+		echo "========== END PACK HEADER =========="; \
+		echo ""; \
+	} > $(PACK_OUTPUT)
+	@git ls-files | grep -Ev '$(PACK_ELIDE_PATTERN)' | sort | while read -r file; do \
+		echo "========== FILE: ./$$file =========="; \
+		cat "$$file"; \
+		echo ""; \
+		echo "========== END FILE =========="; \
+		echo ""; \
+	done >> $(PACK_OUTPUT)
+	@echo "Done! Created $(PACK_OUTPUT)"
+
+# The complement of pack: exactly .agents/skills/** and
+# .agents/prompts/archive/**. Empty until this repo grows skills;
+# kept for cross-repo symmetry so pack-push's two-file contract is
+# uniform across siblings.
+pack-skills:
+	@echo "Creating $(PACK_SKILLS_OUTPUT)..."
+	@{ \
+		echo "========== PACK HEADER =========="; \
+		echo "repo: $(REPO_NAME)"; \
+		echo "generated (UTC): $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+		echo "HEAD: $$(git rev-parse HEAD 2>/dev/null || echo 'no commits yet')"; \
+		echo "git status --porcelain:"; \
+		st="$$(git status --porcelain)"; \
+		if [ -z "$$st" ]; then echo "working tree clean"; else echo "$$st"; fi; \
+		echo "includes only: .agents/skills, .agents/prompts/archive"; \
+		echo "========== END PACK HEADER =========="; \
+		echo ""; \
+	} > $(PACK_SKILLS_OUTPUT)
+	@git ls-files | grep -E '$(PACK_ELIDE_PATTERN)' | sort | while read -r file; do \
+		echo "========== FILE: ./$$file =========="; \
+		cat "$$file"; \
+		echo ""; \
+		echo "========== END FILE =========="; \
+		echo ""; \
+	done >> $(PACK_SKILLS_OUTPUT)
+	@echo "Done! Created $(PACK_SKILLS_OUTPUT)"
+
+# ACTIVE (unlike tools', which went dormant when it went public): this
+# is currently the only transport by which a chat session can read this
+# repo. Publishes the freshly generated pack AND skills pack to the
+# pragsmike/packs repo (local clone at $(PACKS_REPO_DIR), pushed to
+# GitHub), fetchable at
+#   raw.githubusercontent.com/pragsmike/packs/main/ehr-testing-sim-pack.txt
+#
+# Ordering caveat (same as tools): run pack-push LAST in a session, not
+# mid-session, so the header's clean-tree line stays meaningful -- a
+# pushed pack showing a dirty tree is a real signal something was left
+# uncommitted.
+pack-push: pack pack-skills
+	@if [ ! -d "$(PACKS_REPO_DIR)/.git" ]; then \
+		echo "error: $(PACKS_REPO_DIR) is not a git clone of pragsmike/packs -- clone it first"; \
+		exit 1; \
+	fi
+	@cp $(PACK_OUTPUT) $(PACKS_REPO_DIR)/$(REPO_NAME)-pack.txt
+	@cp $(PACK_SKILLS_OUTPUT) $(PACKS_REPO_DIR)/$(REPO_NAME)-skills-pack.txt
+	@head="$$(git rev-parse HEAD 2>/dev/null || echo 'no commits yet')"; \
+	cd $(PACKS_REPO_DIR) && \
+	git add $(REPO_NAME)-pack.txt $(REPO_NAME)-skills-pack.txt && \
+	if git diff --cached --quiet; then \
+		echo "No pack changes to push (packs repo already up to date)"; \
+	else \
+		git commit -m "$(REPO_NAME) @ $$head" > /dev/null && \
+		git push -u origin main && \
+		echo "Packs pushed to pragsmike/packs ($(REPO_NAME) @ $$head)"; \
+	fi
+
+========== END FILE ==========
+
+========== FILE: ./README.md ==========
+# ehr-testing-sim
+
+Deterministic, seeded generation of synthetic hospital traffic for
+testing EHR integrations: clinically plausible, operationally messy
+(ADT churn: transfers, cancellations, merges, corrections), US-coded
+patient event streams from minimal parameters — with a ground-truth
+trajectory log as a first-class output so test harnesses can assert
+against what *should* be true, independent of message parsing.
+
+**Status: pre-release walking skeleton.** The engine runs trivial
+pathways deterministically; the invariant catalog and CLI seams are
+real; HL7v2 emission and generative clinical modules are next. See
+[`docs/problem-statement.md`](docs/problem-statement.md) for the full
+problem, constraints, black-box contract, and validation program.
+
+## Relation to the ehr-testing-* family
+
+- [`ehr-testing-guide`](https://github.com/pragsmike/ehr-testing-guide)
+  teaches the testing method.
+- [`ehr-testing-tools`](https://github.com/pragsmike/ehr-testing-tools)
+  makes it runnable (corpus construction, conformance gating).
+- **ehr-testing-sim** (this repo) is the traffic source. It is usable
+  standalone, and ehr-testing-tools can mount it as the `ehr sim`
+  subcommand and ingest its runs as corpora — the embedding contract
+  is three exported values in `ehr-testing-sim.cli`
+  (see [`notes/ADRs.md`](notes/ADRs.md), ADR-0001).
+
+Dependency direction: tools → sim, never the reverse.
+
+## Quick start
+
+```bash
+clojure -X:test                                  # run the suite
+clojure -M:cli run --seed 42 --patients 5        # a run, as EDN
+clojure -M:cli run --seed 42 | clojure -M:cli check   # self-check, exit 0
+clojure -M:cli help
+```
+
+Same seed + config ⇒ byte-identical output, always. That's not a
+convenience; it's guarantee #1, enforced by property tests.
+
+## Design in three sentences
+
+Pathways are data (a common intermediate representation shared by
+hand-authored scripts and, later, trajectories generated from
+Synthea-style clinical modules); a seeded discrete-event engine
+executes them into a format-free ground-truth log. Wire formats
+(HL7v2 first; FHIR/CDA later) are emitters consuming that log. Codes
+(SNOMED CT, LOINC, RxNorm, ICD-10-CM) travel as data on the state, so
+every emitter renders them natively (ADR-0002).
+
+Design lineage — what was mined from Google's Simulated Hospital
+(operational model, churn vocabulary, event queue) and Synthea
+(generative clinical modules, US demographics, embedded codes) — is
+recorded in [`.agents/memory/architecture.md`](.agents/memory/architecture.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE). No PHI anywhere, by construction.
+
+========== END FILE ==========
+
+========== FILE: ./deps.edn ==========
+{:paths ["src" "resources"]
+
+ :deps {org.clojure/clojure {:mvn/version "1.12.5"}
+        ;; Schemas for config, the intermediate pathway representation,
+        ;; the ground-truth log, and the manifest bridge. Same version
+        ;; as ehr-testing-tools so a host process never sees two mallis.
+        metosin/malli {:mvn/version "0.20.1"}
+        ;; CLI parsing -- same lib and version as ehr-testing-tools'
+        ;; `ehr` entrypoint, so mounting `sim` as an `ehr` subcommand
+        ;; introduces no second CLI stack.
+        org.babashka/cli {:mvn/version "0.12.79"}
+        org.clojure/data.json {:mvn/version "2.5.2"}
+        ;; HL7v2 parse/emit (ER7). Verified coordinates from the
+        ;; project's own project.clj (org.clojars.cmiles74 group).
+        org.clojars.cmiles74/clojure-hl7-parser {:mvn/version "3.5.1"}}
+
+ :aliases
+ {;; Test runner. Same coordinates and pin as ehr-testing-tools' and
+  ;; ehr-testing-guide/companion's :test aliases, so `clojure -X:test`
+  ;; means the same thing in all three repos. test.check is test-only:
+  ;; the determinism and invariant properties live in test/, never in
+  ;; the shipped library.
+  :test {:extra-paths ["test"]
+         :extra-deps {io.github.cognitect-labs/test-runner
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                      org.clojure/test.check {:mvn/version "1.1.3"}
+                      org.slf4j/slf4j-nop {:mvn/version "2.0.17"}}
+         :exec-fn cognitect.test-runner.api/test}
+
+  ;; Standalone CLI: `clojure -M:cli run --seed 42 ...`.
+  ;; The same dispatch surface is exported for embedding as
+  ;; `ehr sim <verb>` -- see ehr-testing-sim.cli's docstring and
+  ;; notes/ADRs.md ADR-0001.
+  :cli {:main-opts ["-m" "ehr-testing-sim.cli"]}}}
+
+========== END FILE ==========
+
+========== FILE: ./docs/problem-statement.md ==========
+# Synthetic Hospital Traffic for EHR Testing — Problem Statement
+
+## The Problem
+
+Teams that build, integrate, or test EHR-adjacent systems need realistic hospital message traffic to develop against, and they cannot get it.
+
+Real production feeds are the gold standard of realism but are effectively unusable: they contain protected health information, so access is gated by HIPAA compliance, business associate agreements, and de-identification processes that are slow, expensive, and legally risky. Even when access is granted, production data cannot be freely shared across teams, checked into repositories, or published in bug reports.
+
+The common fallback — hand-crafted test messages — fails in the opposite direction. Manually written messages are sparse, static, and unrealistically clean. They exercise the happy path and miss precisely the phenomena that break real systems: administrative corrections, cancellations, patient-record merges, bed moves, out-of-order events, duplicate registrations, and the sheer volume and interleaving of concurrent patient journeys. A test suite built from a folder of sample messages gives false confidence.
+
+Existing synthetic-data approaches each cover only part of the need. Some produce clinically rich but operationally sterile records — complete patient histories with no admit/discharge/transfer traffic, no message-level realism, and no operational noise. Others produce realistic operational message flows but require every clinical scenario to be scripted by hand, so generating varied traffic at scale demands proportional manual authoring effort. None combine clinical plausibility, operational messiness, US coding and identifier conventions, and minimal-input generation in one tool.
+
+The gap: **there is no way to turn a small set of parameters into an unbounded stream of clinically coherent, operationally realistic, properly coded, safely shareable hospital events.**
+
+## Audience
+
+- **Integration engineers** building or configuring interface engines, message routers, and transformation pipelines who need continuous, varied HL7 traffic to develop and load-test against.
+- **EHR and health-IT developers** implementing inbound interfaces (ADT consumers, results ingestion, patient-index/merge logic) who need adversarially messy input, not clean samples.
+- **QA and test-automation teams** who need reproducible scenarios — including rare edge cases like merge-after-transfer-in-error — that can be pinned by seed and replayed in CI.
+- **Health-data platform and analytics teams** who need populated pipelines and databases without touching PHI.
+- **Standards and interoperability developers** validating conformance of parsers, validators, and converters.
+- Secondarily: **researchers and ML practitioners** needing synthetic longitudinal patient event data.
+
+## Environment Expectations
+
+- Runs as a library or standalone process on the JVM; usable from Clojure and, by extension, any JVM language.
+- Operates entirely offline and self-contained: no connection to real clinical systems, no terminology-server dependency at runtime, no network requirement.
+- Suitable for laptops and CI runners alike; no special hardware.
+- Output is consumed by systems under test through ordinary channels — files, streams, or network delivery (e.g., MLLP) — and by test harnesses as data structures.
+- Contains no real patient data by construction, so artifacts can be committed, shared, and published without review.
+
+## Constraints
+
+1. **No PHI, ever.** All persons, identifiers, and clinical content are synthetic by construction, not by de-identification.
+2. **US conventions.** US demographics and geography; US identifier schemes (MRN, SSN); US units of measure; US coding systems.
+3. **Standard terminology.** Clinical concepts carry real codes from freely usable systems — SNOMED CT, LOINC, RxNorm, ICD-10-CM, CVX. No AMA-licensed CPT content.
+4. **Clinical plausibility.** Generated trajectories must be medically coherent: conditions onset with realistic incidence by age/sex/demographics; orders, results, and medications follow from conditions; values fall in plausible ranges with plausible abnormals.
+5. **Operational realism.** Traffic must include the administrative churn of real hospitals — transfers, bed swaps, corrections, cancellations, error-entries, merges — at configurable rates.
+6. **Minimal input.** A useful stream must be obtainable from a small parameter set; realism must not require hand-authoring scenarios. Hand-authored scenarios remain possible for targeted edge-case testing.
+7. **Reproducibility.** Identical parameters and seed produce identical output; any interesting stream can be pinned and replayed.
+8. **Format-agnostic core.** The simulation models patient state and events independently of any wire format; concrete formats are renderings. Event-based output (HL7v2) is required first; state-based outputs (FHIR, CDA) must be addable without altering the core.
+9. **Permissive licensing.** The library and its bundled content must be redistributable under open-source terms.
+
+## Black-Box Description
+
+### Inputs
+
+A configuration (data, not code) specifying:
+
+- **Population & time:** number of patients or arrival rate; simulated time window (historical batch, real-time paced, or accelerated).
+- **Demographics:** distribution parameters for age, sex, ethnicity, geography (defaults provided).
+- **Clinical content selection:** which disease/care modules are active and their relative weights (defaults provided).
+- **Facility model:** wards, bed capacities, departments, provider pool (defaults provided).
+- **Churn profile:** probabilities for operational-noise events — transfers, corrections, cancellations, merges, bed swaps.
+- **Output selection:** which formats/message families to emit and delivery target (file, stream, network).
+- **Random seed.**
+
+Optionally: hand-authored scenario scripts for specific patients, in the same representation the generator produces.
+
+### Outputs
+
+- **A time-ordered stream of HL7v2 messages** (ADT, ORM/OMG, ORU, and related families) representing interleaved patient journeys across the facility — syntactically valid, internally consistent (identifiers, encounter numbers, and timestamps cohere across a patient's messages), and carrying standard terminology codes.
+- **A ground-truth trajectory log:** for each patient, the canonical sequence of state changes and events that produced the messages — enabling test assertions ("the system under test should now believe patient X is in bed Y with condition Z") independent of message parsing.
+- *(Later, same core:)* **state-based renderings** — FHIR resources or CDA documents representing any patient's state at any simulated moment.
+
+### Guarantees
+
+- Same inputs + seed ⇒ byte-identical output.
+- Every emitted message is derivable from the ground-truth log, and vice versa.
+- No output artifact contains information about any real person.
+
+## Validation & Evidence
+
+A skeptical domain expert — an interface analyst, clinical informaticist, or QA lead deciding whether to trust this traffic — is entitled to proof for each claim the tool makes. Each claim below has a distinct proof strategy; together they form the validation program.
+
+| # | Claim | What the skeptic asks | Proof strategy |
+|---|-------|----------------------|----------------|
+| 1 | **Syntactic validity** | "Do these messages actually parse?" | Validate the emitted corpus with independent tooling not written by us: NIST HL7v2 conformance tools and the HAPI parser. Round-trip through at least one parser other than our own emitter's counterpart. Publish the conformance report per release. |
+| 2 | **Terminology correctness** | "Are these real codes, used correctly?" | Automated cross-check of every emitted coded element against official code-system releases (LOINC table, SNOMED CT RF2, RxNorm, ICD-10-CM, CVX): code exists, display text matches, units are valid for the analyte, reference ranges match. Plus provenance: codes originate in clinically-reviewed upstream modules, not invention. |
+| 3 | **Internal consistency** | "Does the stream contradict itself?" | Property-based testing over the ground-truth log: define invariants (identifier stability, no discharge-before-admit, results follow orders, merges reference existing MRNs, timestamps monotone per patient, encounter numbers cohere) and machine-check them across millions of generated events under randomized configurations. Report the invariant catalog and event volumes checked. |
+| 4 | **Clinical plausibility** | "Would a clinician find these trajectories credible?" | Provenance to established prior art: clinical content derives from Synthea's Generic Module Framework modules, peer-reviewed (Walonoski et al., JAMIA 2018) and publicly scrutinized for years — we inherit that validation rather than re-arguing it. Supplement with statistical comparison of output distributions (demographics, condition incidence by age/sex, lab value distributions) against public references: census data, CDC prevalence statistics. |
+| 5 | **Operational realism** | "Does this look like a real ADT feed?" | Weakest provenance available anywhere, addressed three ways: (a) pedigree — the operational event vocabulary derives from Simulated Hospital, built by Google Health against real NHS deployment experience; (b) anchoring — length-of-stay, admission-mix, and throughput parameters tied to published data (AHRQ/HCUP, ED throughput studies); (c) calibration — churn rates and event mixes are configurable, so a site can tune the generator to match statistics observed on its own feed, replacing "trust our defaults" with "match your hospital." |
+| 6 | **Fitness as a test instrument** | "Does passing against this traffic predict surviving production?" | Ecological validation: run the output through established open-source consumers (interface engines, HAPI-based pipelines), document what it exercises and what it breaks, and publish case studies of real defects surfaced — especially by churn sequences (merge after transfer-in-error, cancelled discharge) that hand-crafted test data never contains. |
+| 7 | **Safety (no PHI)** | "Could any of this be a real person?" | Proof by construction: the generator is deterministic rules plus public statistical tables, with no real patient records anywhere in its inputs or training. Unlike ML-based synthetic data, memorization or leakage of real records is structurally impossible, not merely improbable. |
+
+### Cross-Cutting Arguments
+
+**Provenance.** The two load-bearing knowledge sources are established, reviewed prior art: Synthea (clinical content and coding; MITRE; peer-reviewed and widely used in research and industry) and Simulated Hospital (operational model; Google Health). The novel contribution — composing a generative clinical layer with an operational messaging layer — adds orchestration, not new clinical claims, so the surface requiring fresh validation is deliberately small.
+
+**Glass-box auditability.** All clinical content is inspectable data, not opaque code or model weights: an expert can open the asthma module and read its SNOMED codes, incidence probabilities, and state transitions directly. The engine is deterministic and seeded, so any output event is traceable to the module state and random draw that produced it. "Don't trust us — read the data" is a stronger posture than any black-box generator can offer.
+
+**Reproducibility as evidence.** Because identical config + seed yields byte-identical output, every validation artifact — conformance reports, invariant checks, distribution comparisons — is independently re-runnable by the skeptic on their own machine. Validation is not a claim about past testing; it is a standing, repeatable demonstration.
+
+========== END FILE ==========
+
+========== FILE: ./notes/ADRs.md ==========
+# Architecture Decision Records — ehr-testing-sim
+
+Numbered, append-only. Never silently revert an Accepted ADR;
+supersede it with a new numbered record.
+
+---
+
+## ADR-0001 — Standalone library with a mountable CLI group; dependency arrow points tools → sim only
+
+**Status:** Accepted (2026-07-26)
+
+**Context.** This repo must be usable independently (own `sim` CLI)
+and mountable inside ehr-testing-tools' `ehr` CLI as the `sim`
+subcommand, without either repo forking the other's conventions.
+Tools' CLI architecture (its ADR-0004): thin printing shell over pure
+capability functions following the result-not-throw doctrine, `[group
+action]` dispatch with injectable `-fn` keys, EDN canonical with
+`--json` projection, exit codes 0/1/2(/3).
+
+**Decision.**
+1. **Dependency direction:** ehr-testing-tools may depend on
+   ehr-testing-sim; ehr-testing-sim never depends on
+   ehr-testing-tools.
+2. **Embedding contract:** `ehr-testing-sim.cli` exports three public
+   values — `cli-spec` (babashka.cli coercions, mergeable),
+   `help-group` (one entry in tools' help-data shape), and
+   `dispatch-action` (`(fn [action opts]) → Result`). A host mounts
+   the group with one dispatch arm plus a spec merge and a help-group
+   registration.
+3. **Standalone = embedded:** the standalone `sim` shell wraps the
+   same `dispatch-action`, so the two modes cannot drift.
+4. **Copied, not shared, result vocabulary:** the ~30-line
+   result-not-throw ns is duplicated (own namespace, identical
+   structure). Result maps are structurally typed, so hosts consume
+   them regardless of constructing namespace. A shared microlib is
+   deferred until a third consumer exists.
+5. **Mirrors carry tripwires, contracts live with the host:** shapes
+   this repo must match (tools' manifest schema, help-data shape) are
+   mirrored here with validating tests as tripwires; the *binding*
+   cross-repo contract tests belong in tools' integration tree, where
+   both codebases share a classpath.
+
+**Consequences.** Sim stays independently useful and testable; tools'
+tests can stub the whole sim group via the injectable `-fn` pattern
+without loading the engine; schema drift between the repos surfaces as
+a failing test in tools, not a runtime surprise.
+
+---
+
+## ADR-0002 — Ground-truth log is primary; wire formats are emitters; pathways are a common intermediate representation
+
+**Status:** Accepted (2026-07-26)
+
+**Context.** The library composes two mined designs: Google Simulated
+Hospital's operational model (scripted pathway steps incl. ADT churn,
+discrete-event queue, HL7v2 messaging) and Synthea's generative
+clinical modules (probabilistic state machines with embedded SNOMED/
+LOINC/RxNorm codes). See `.agents/memory/architecture.md` for the
+mining record and `docs/problem-statement.md` for the black-box
+contract.
+
+**Decision.**
+1. **Intermediate pathway representation (IR):** hand-authored
+   scenario scripts and generated trajectories (later: compiled from
+   Synthea-GMF-style modules) share one EDN pathway format; the engine
+   executes only the IR and cannot distinguish the sources.
+2. **Ground-truth log is the primary output:** the engine emits a
+   format-free, time-ordered event log. HL7v2 messages (and later
+   FHIR/CDA state renderings) are emitters consuming the log. Test
+   assertions and the invariant catalog target the log.
+3. **Codes are state, not format:** clinical concepts ride the IR and
+   log as `{:system :code :display}` triplets; each emitter renders
+   them natively.
+4. **Determinism:** all randomness flows from one seeded RNG with a
+   totally ordered event queue; same config + seed ⇒ byte-identical
+   serialized output. Enforced by property tests.
+5. **Invariants co-land with steps:** every step type added to the
+   engine ships with its invariants in the catalog in the same change.
+
+**Consequences.** State-based emitters become renderings over retained
+state history rather than a redesign; the validation program's
+internal-consistency claims are cheaply machine-checkable at scale;
+churn injection (operational noise) becomes an IR-to-IR transform,
+cleanly separated from clinical trajectory generation.
+
+========== END FILE ==========
+
+========== FILE: ./resources/.gitkeep ==========
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/check.clj ==========
+(ns ehr-testing-sim.check
+  "The invariant catalog: internal-consistency claims about a
+  ground-truth log, machine-checkable (validation program, claim #3 in
+  docs/problem-statement.md). Runs standalone as `sim check` and in CI
+  as the regression suite; the property tests in test/ drive the same
+  functions over generated runs, so the catalog does double duty.
+
+  Each invariant is a named function (ground-truth) -> seq of violation
+  maps (empty = holds). `check-all` aggregates to a Result: :ok when
+  every invariant holds, :rejected (:category :invariant-violation)
+  otherwise -- the check ran and the answer is no, which is exactly
+  what the result-not-throw doctrine's :rejected arm is for.
+
+  v0 catalog is minimal; every new step type added to the engine MUST
+  land with its invariants here in the same change."
+  (:require [ehr-testing-sim.result :as result]))
+
+(defn- by-patient [ground-truth]
+  (group-by :mrn ground-truth))
+
+(defn timestamps-monotone
+  "Within a patient, event times never decrease (log order is emission
+  order, which the engine guarantees is time order)."
+  [ground-truth]
+  (for [[mrn events] (by-patient ground-truth)
+        [a b] (partition 2 1 events)
+        :when (> (:t a) (:t b))]
+    {:invariant :timestamps-monotone :mrn mrn :at [(:t a) (:t b)]}))
+
+(defn discharge-follows-admission
+  "No patient is discharged without a prior admission, and not twice."
+  [ground-truth]
+  (for [[mrn events] (by-patient ground-truth)
+        :let [kinds (mapv :event events)
+              first-admit (.indexOf ^java.util.List kinds :admission)
+              discharges (keep-indexed #(when (= :discharge %2) %1) kinds)]
+        d discharges
+        :when (or (neg? first-admit) (< d first-admit))]
+    {:invariant :discharge-follows-admission :mrn mrn :at d}))
+
+(def catalog
+  "The full invariant catalog, in reporting order."
+  [#'timestamps-monotone
+   #'discharge-follows-admission])
+
+(defn check-all
+  "Runs every invariant in the catalog over a ground-truth log."
+  [ground-truth]
+  (let [violations (into [] (mapcat #(% ground-truth)) catalog)]
+    (if (empty? violations)
+      (result/ok {:invariants-checked (mapv (comp :name meta) catalog)
+                  :events (count ground-truth)})
+      (result/rejected :invariant-violation {:violations violations}))))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/cli.clj ==========
+(ns ehr-testing-sim.cli
+  "The `sim` entrypoint AND the mountable command group -- the only
+  namespace here that prints. Mirrors ehr-testing-tools' cli.clj shell
+  (ADR-0004 there): parse, dispatch to a capability function, render
+  EDN (with --json projection), map Result to exit code 0/1/2.
+
+  The embedding contract (ADR-0001 here) is three public values:
+
+    cli-spec        babashka.cli coercions, mergeable into a host's spec
+    help-group      one entry in the shape ehr-testing-tools'
+                    cli.help/cli-spec :groups vector expects
+    dispatch-action (fn [action opts] ...) -> Result, covering the verbs
+
+  A host mounts the whole group with one dispatch arm:
+      \"sim\" (sim-cli/dispatch-action action opts)
+  plus (merge host-spec sim-cli/cli-spec) and appending help-group to
+  its help data. The standalone `sim` binary (main! / -main below) is a
+  thin wrapper over the very same dispatch-action, so standalone and
+  embedded behavior cannot drift."
+  (:require [babashka.cli :as cli]
+            [clojure.data.json :as json]
+            [clojure.edn :as edn]
+            [ehr-testing-sim.result :as result]
+            [ehr-testing-sim.check :as check]
+            [ehr-testing-sim.run :as run])
+  (:gen-class))
+
+(def cli-spec
+  {:seed {:coerce :long}
+   :patients {:coerce :long}
+   :arrival-gap {:coerce :long}
+   :json {:coerce :boolean}
+   :help {:coerce :boolean}})
+
+(def help-group
+  "This group's help metadata, in the shape ehr-testing-tools'
+  cli.help/cli-spec uses for its :groups entries, so `ehr help sim`
+  renders through the host's existing help machinery unchanged."
+  {:group "sim"
+   :doc "Generate synthetic hospital traffic (deterministic, seeded). See docs/problem-statement.md."
+   :verbs
+   [{:verb "run"
+     :doc "Run a simulation: config + seed -> ground-truth event log (+ manifest)."
+     :flags [{:flag "--seed" :doc "RNG seed (required; same config+seed => identical output)"}
+             {:flag "--patients" :doc "number of patients" :default "1"}
+             {:flag "--arrival-gap" :doc "max minutes between arrivals" :default "60"}]}
+    {:verb "check"
+     :doc "Run the invariant catalog over a ground-truth log (EDN on stdin)."
+     :flags []}]})
+
+(defn parse
+  [raw-args]
+  (cli/parse-args raw-args {:spec cli-spec}))
+
+(defn- check-command
+  "Reads a ground-truth log as EDN from *in* and runs the catalog."
+  [_opts]
+  (let [log (try (edn/read {:eof ::eof} (java.io.PushbackReader. *in*))
+                 (catch Exception _e ::unreadable))]
+    (cond
+      (= ::eof log) (result/error :empty-input {:message "expected a ground-truth EDN vector on stdin"})
+      (= ::unreadable log) (result/error :unreadable-input {:message "stdin was not readable EDN"})
+      (not (vector? log)) (result/error :malformed-input {:message "expected a vector of event maps"})
+      :else (check/check-all log))))
+
+(defn- unknown-action
+  [action]
+  (result/error :unknown-command
+                {:message (str "unknown sim action: " (pr-str action))
+                 :known (mapv :verb (:verbs help-group))}))
+
+(defn dispatch-action
+  "The mountable dispatch: [action opts] -> Result. The -fn keys are
+  injectable for tests (same pattern as tools' dispatch)."
+  ([action opts] (dispatch-action action opts {}))
+  ([action opts {:keys [run-fn check-fn]
+                 :or {run-fn run/run-command
+                      check-fn check-command}}]
+   (case action
+     "run" (run-fn opts)
+     "check" (check-fn opts)
+     (unknown-action action))))
+
+;; --- standalone shell -------------------------------------------------
+
+(defn result->exit-code
+  "0 = ran and passed; 1 = ran and legitimately rejected; 2 =
+  operational error. Same contract as ehr-testing-tools' ADR-0004
+  mapping (the no-verdict arm doesn't apply here yet)."
+  [r]
+  (cond
+    (result/ok? r) 0
+    (result/rejected? r) 1
+    :else 2))
+
+(defn render
+  [r json?]
+  (if json? (json/write-str r) (pr-str r)))
+
+(defn- help-text []
+  (str "sim -- synthetic hospital traffic generator\n\n"
+       (:doc help-group) "\n\n"
+       (apply str
+              (for [{:keys [verb doc flags]} (:verbs help-group)]
+                (str "  sim " verb "  " doc "\n"
+                     (apply str (for [{:keys [flag doc default]} flags]
+                                  (str "      " flag "  " doc
+                                       (when default (str " (default " default ")")) "\n"))))))
+       "\nGlobal: --json (project EDN result to JSON), --help\n"
+       "Exit codes: 0 ok, 1 rejected, 2 operational error\n"))
+
+(defn main!
+  "Testable main: parse, dispatch, print, exit-code. Injectable
+  println/exit for tests, same pattern as tools' main!."
+  ([raw-args] (main! raw-args {}))
+  ([raw-args {:keys [println-fn exit-fn]
+              :or {println-fn println exit-fn (fn [code] (System/exit code))}}]
+   (let [{:keys [args opts]} (parse raw-args)
+         [action] args]
+     (if (or (:help opts) (nil? action) (= "help" action))
+       (do (println-fn (help-text)) (exit-fn 0))
+       (let [r (dispatch-action action opts)]
+         (println-fn (render r (:json opts)))
+         (exit-fn (result->exit-code r)))))))
+
+(defn -main
+  [& raw-args]
+  (main! raw-args))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/engine.clj ==========
+(ns ehr-testing-sim.engine
+  "The discrete-event simulation core: a priority queue of pending
+  events ordered by simulated time, a map of patient states, and a
+  step-transition function. Architecture mined from Google's Simulated
+  Hospital (pkg/state WrappedQueue + pkg/hospital RunNextEventIfDue),
+  reduced to its functional essence: where the Go original mutates
+  patient structs in place, this engine is a pure fold --
+  (state, due-event) -> (state', emitted-events) -- so full state
+  history per patient is retained, which is what will later make
+  state-based emitters (FHIR/CDA snapshots at any simulated instant)
+  a rendering concern rather than a redesign.
+
+  Determinism doctrine: ALL randomness flows from the single
+  java.util.Random seeded in `run`. No other entropy source (wall
+  clock, hash ordering, nondeterministic seq realization) may
+  influence output. Same config + seed => identical output, byte for
+  byte once serialized. This is guarantee #1 of the problem statement
+  and is enforced by property tests, not by review alone.
+
+  The v0 skeleton executes :admission/:delay/:discharge pathways for a
+  configured number of patients with staggered arrivals, producing the
+  ground-truth trajectory log. Emission to HL7v2 is a separate
+  namespace consuming this log -- events here are format-free."
+  (:require [ehr-testing-sim.pathway :as pathway])
+  (:import [java.util Random]))
+
+(defn- rand-int-in
+  "Uniform integer in [lo, hi] from the seeded RNG."
+  [^Random rng lo hi]
+  (+ lo (.nextInt rng (inc (- hi lo)))))
+
+(defmulti transition
+  "Applies one pathway step to one patient's state at simulated time t
+  (minutes from epoch of the run). Returns
+  {:patient <patient'> :events [<ground-truth event>...] :advance <minutes>}.
+  Pure given the RNG (the RNG is the only stateful argument, and its
+  consumption order is fixed by the deterministic event ordering)."
+  (fn [_rng _t _patient step] (:type step)))
+
+(defmethod transition :admission
+  [_rng t patient {:keys [location reason]}]
+  {:patient (assoc patient :status :admitted :location location)
+   :events [{:event :admission :t t :mrn (:mrn patient)
+             :location location :reason reason}]
+   :advance 0})
+
+(defmethod transition :delay
+  [rng _t patient {:keys [from to]}]
+  {:patient patient
+   :events []
+   :advance (rand-int-in rng from to)})
+
+(defmethod transition :discharge
+  [_rng t patient _step]
+  {:patient (assoc patient :status :discharged :location nil)
+   :events [{:event :discharge :t t :mrn (:mrn patient)}]
+   :advance 0})
+
+(defn- pop-min
+  "Removes and returns the earliest queue entry. Queue is a sorted-map
+  keyed by [t seq-no] -- the seq-no tiebreak makes ordering total, so
+  RNG consumption order (and thus output) is fully determined."
+  [queue]
+  (let [[k v] (first queue)]
+    [k v (dissoc queue k)]))
+
+(defn run
+  "Runs the simulation. config:
+    :seed        long (required)
+    :patients    number of patients (default 1)
+    :pathway     a pathway IR map (default pathway/sample-admission-discharge)
+    :arrival-gap max minutes between successive patient arrivals
+                 (default 60; actual gaps sampled from the seeded RNG)
+
+  Returns {:ground-truth [event ...]} where events are format-free maps
+  ordered by [t seq-no]. Emitters consume this log; test assertions
+  target it directly (it is a first-class output, per the problem
+  statement)."
+  [{:keys [seed patients pathway arrival-gap]
+    :or {patients 1
+         pathway pathway/sample-admission-discharge
+         arrival-gap 60}}]
+  {:pre [(some? seed) (pathway/valid? pathway)]}
+  (let [rng (Random. ^long seed)
+        ;; Stagger arrivals; consume RNG in patient order (fixed).
+        arrivals (vec (reductions + 0 (repeatedly (dec patients)
+                                                  #(rand-int-in rng 0 arrival-gap))))
+        init-queue (into (sorted-map)
+                         (map-indexed
+                          (fn [i arrival-t]
+                            [[arrival-t i]
+                             {:patient {:mrn (format "MRN%06d" (inc i)) :status :new}
+                              :steps (:steps pathway)}])
+                          arrivals))]
+    (loop [queue init-queue
+           seq-no patients
+           ground-truth (transient [])]
+      (if (empty? queue)
+        {:ground-truth (persistent! ground-truth)}
+        (let [[[t _] {:keys [patient steps]} queue'] (pop-min queue)
+              [step & remaining] steps
+              {p' :patient evs :events adv :advance} (transition rng t patient step)
+              ground-truth' (reduce conj! ground-truth evs)]
+          (if (seq remaining)
+            (recur (assoc queue' [(+ t adv) seq-no] {:patient p' :steps (vec remaining)})
+                   (inc seq-no)
+                   ground-truth')
+            (recur queue' seq-no ground-truth')))))))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/manifest.clj ==========
+(ns ehr-testing-sim.manifest
+  "The corpus-manifest bridge: a `sim run` emits a provenance manifest
+  shaped for ehr-testing-tools' corpus conventions (its
+  corpus/manifest.clj ManifestV1_1: :stage, :generator, :seeds,
+  :engine-params, :config, :invocation, :canonicalizers-applied,
+  :environment), so `ehr corpus intake` can ingest a sim run like any
+  other pinned-input corpus.
+
+  The authoritative schema lives in ehr-testing-tools; this namespace
+  mirrors the *shape* without depending on it (dependency arrow points
+  tools -> sim only, ADR-0001). The mirrored schema here is a tripwire,
+  not the contract: the binding contract test belongs in
+  ehr-testing-tools' test-integration tree, where both codebases are on
+  the classpath and drift becomes a failing test rather than a latent
+  incompatibility."
+  (:require [malli.core :as m]))
+
+(def MirroredManifest
+  "Structural mirror of tools' ManifestV1_1 (verified against its
+  source 2026-07-26; re-verify on tools schema changes)."
+  [:map
+   [:stage :keyword]
+   [:generator [:map
+                [:name :string]
+                [:version :string]
+                [:sha256 [:re #"^[0-9a-f]{64}$"]]]]
+   [:seeds [:map-of :keyword :int]]
+   [:engine-params [:map-of :keyword :any]]
+   [:config [:map
+             [:path :string]
+             [:sha256 [:re #"^[0-9a-f]{64}$"]]]]
+   [:invocation :map]
+   [:canonicalizers-applied [:vector [:tuple :keyword :string]]]
+   [:environment [:map
+                  [:locale :string]
+                  [:timezone :string]
+                  [:jvm-version :string]]]])
+
+(defn environment
+  []
+  {:locale (str (java.util.Locale/getDefault))
+   :timezone (str (java.time.ZoneId/systemDefault))
+   :jvm-version (System/getProperty "java.version")})
+
+(defn build
+  "Builds a tools-ingestible manifest for a sim run.
+  Required: :seed, :engine-params (the run config), :config
+  {:path :sha256}, :invocation. :version should be this library's
+  release version; :sha256 the release artifact digest (placeholders
+  acceptable pre-release, but the fields are mandatory so nothing
+  downstream learns to tolerate their absence)."
+  [{:keys [seed engine-params config invocation version sha256]}]
+  {:stage :simulated
+   :generator {:name "ehr-testing-sim"
+               :version (or version "0.0.0-SNAPSHOT")
+               :sha256 (or sha256 (apply str (repeat 64 "0")))}
+   :seeds {:primary seed}
+   :engine-params (or engine-params {})
+   :config config
+   :invocation invocation
+   :canonicalizers-applied []
+   :environment (environment)})
+
+(defn valid? [manifest] (m/validate MirroredManifest manifest))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/pathway.clj ==========
+(ns ehr-testing-sim.pathway
+  "The intermediate pathway representation (IR): the single format that
+  both hand-authored scenario scripts and generated trajectories
+  compile to, and the only format the engine executes.
+
+  Lineage: the step vocabulary derives from Google's Simulated Hospital
+  pathway steps (operational events: admission, transfer, discharge,
+  churn like bed swaps, cancellations, merges); the *generation* of
+  pathways from probabilistic clinical modules (Synthea GMF) is a
+  separate, later layer that compiles down to this IR. Scripted and
+  generated trajectories are therefore indistinguishable to the engine.
+
+  A pathway is data (EDN), never code. Concepts are carried as coded
+  triplets {:system :code :display} so every emitter (HL7v2 now,
+  FHIR/CDA later) renders codes natively with no re-mapping -- codes
+  are properties of patient state, not of wire formats.
+
+  The v0 step set is deliberately tiny (walking skeleton): :admission,
+  :delay, :discharge. The full Simulated-Hospital-derived vocabulary
+  (transfer, bed-swap, *-in-error, cancel-*, merge, order, result, ...)
+  lands step by step, each with its engine transition and its
+  invariants in ehr-testing-sim.check."
+  (:require [malli.core :as m]))
+
+(def Concept
+  "A coded clinical or administrative concept. :system is a keyword
+  naming the code system (:snomed :loinc :rxnorm :icd10cm :cvx ...)."
+  [:map
+   [:system :keyword]
+   [:code :string]
+   [:display {:optional true} :string]])
+
+(def Step
+  [:multi {:dispatch :type}
+   [:admission [:map
+                [:type [:= :admission]]
+                [:location :string]
+                [:reason {:optional true} [:or :string Concept]]]]
+   [:delay [:map
+            [:type [:= :delay]]
+            ;; minutes; the engine samples uniformly in [from, to]
+            ;; from its own seeded RNG (determinism guarantee).
+            [:from :int]
+            [:to :int]]]
+   [:discharge [:map
+                [:type [:= :discharge]]]]])
+
+(def Pathway
+  [:map
+   [:name :string]
+   [:steps [:vector Step]]])
+
+(defn valid? [pathway] (m/validate Pathway pathway))
+
+(defn explain [pathway] (m/explain Pathway pathway))
+
+(def sample-admission-discharge
+  "The walking-skeleton pathway: admit, dwell, discharge. Mirrors
+  Simulated Hospital's `simple_admission` example in spirit."
+  {:name "simple-admission"
+   :steps [{:type :admission :location "Renal" :reason "Kidney problems"}
+           {:type :delay :from 60 :to 240}
+           {:type :discharge}]})
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/result.clj ==========
+(ns ehr-testing-sim.result
+  "The result-not-throw doctrine, copied (not depended upon) from
+  ehr-testing-tools: every capability function returns one of
+  :ok / :rejected / :error rather than throwing. :rejected is a
+  legitimate, expected outcome (the check ran and the answer is no);
+  :error is an operational failure (the check couldn't run at all).
+  Exceptions remain reserved for programmer error.
+
+  This is a deliberate ~30-line copy rather than a shared dependency:
+  the dependency arrow between the repos must point tools -> sim only
+  (ehr-testing-tools mounts sim as a subcommand; sim knows nothing of
+  tools), and the Result maps are structurally typed, so a host built
+  on tools' result ns consumes these maps without caring which
+  namespace constructed them. If a third repo ever needs the doctrine,
+  extract a shared microlib then -- not before. See ADR-0001."
+  (:require [malli.core :as m]))
+
+(def Result
+  [:map
+   [:status [:enum :ok :rejected :error]]
+   [:category {:optional true} :keyword]
+   [:payload :any]])
+
+(defn ok
+  "A successful result. No category -- there is nothing to classify."
+  [payload]
+  {:status :ok :payload payload})
+
+(defn rejected
+  "A legitimate, expected non-success: the check ran and rejected."
+  [category payload]
+  {:status :rejected :category category :payload payload})
+
+(defn error
+  "An operational failure: the operation could not run at all."
+  [category payload]
+  {:status :error :category category :payload payload})
+
+(defn ok? [r] (= :ok (:status r)))
+(defn rejected? [r] (= :rejected (:status r)))
+(defn error? [r] (= :error (:status r)))
+
+(defn valid? [r] (m/validate Result r))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/run.clj ==========
+(ns ehr-testing-sim.run
+  "The `sim run` capability: config -> {simulation output + manifest},
+  wrapped in the Result vocabulary. Never prints (only the CLI shell
+  prints); never throws for expected failures.
+
+  v0 returns the ground-truth log directly in the payload. Message
+  emission (HL7v2 via the ER7 emitter over org.clojars.cmiles74/
+  clojure-hl7-parser structures) attaches here as an output stage
+  consuming the log -- the log is primary, messages are a rendering."
+  (:require [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.check :as check]
+            [ehr-testing-sim.manifest :as manifest]
+            [ehr-testing-sim.result :as result]))
+
+(defn run-command
+  "opts: :seed (required, long), :patients (long), plus engine options.
+  Runs the simulation, self-checks the invariant catalog over its own
+  output (a run that violates its own invariants is an :error -- a bug
+  in us, not a legitimate rejection), and returns
+  {:ground-truth [...] :manifest {...} :summary {...}}."
+  [{:keys [seed patients] :as opts}]
+  (if (nil? seed)
+    (result/error :missing-required-opt
+                  {:message "--seed is required (determinism is a feature, not a default)"
+                   :opt :seed})
+    (let [engine-params (select-keys opts [:patients :arrival-gap])
+          {:keys [ground-truth]} (engine/run (merge {:seed seed} engine-params))
+          checked (check/check-all ground-truth)]
+      (if-not (result/ok? checked)
+        (result/error :self-check-failed (:payload checked))
+        (result/ok
+         {:ground-truth ground-truth
+          :manifest (manifest/build {:seed seed
+                                     :engine-params engine-params
+                                     :config {:path "(inline)"
+                                              :sha256 (apply str (repeat 64 "0"))}
+                                     :invocation {:verb "run" :opts opts}})
+          :summary {:patients (or patients 1)
+                    :events (count ground-truth)}})))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/cli_test.clj ==========
+(ns ehr-testing-sim.cli-test
+  "The embedding contract's behavior: dispatch-action routes verbs to
+  capability functions (injectable, so no simulation runs here), the
+  Result->exit-code mapping matches the host's, and help-group is
+  well-formed for the host's help machinery."
+  (:require [clojure.test :refer [deftest is testing]]
+            [ehr-testing-sim.cli :as cli]
+            [ehr-testing-sim.check :as check]
+            [ehr-testing-sim.result :as result]))
+
+(deftest dispatch-routes-run
+  (let [seen (atom nil)
+        r (cli/dispatch-action "run" {:seed 1}
+                               {:run-fn (fn [opts] (reset! seen opts) (result/ok :ran))})]
+    (is (result/ok? r))
+    (is (= {:seed 1} @seen))))
+
+(deftest dispatch-rejects-unknown-verb
+  (let [r (cli/dispatch-action "explode" {})]
+    (is (result/error? r))
+    (is (= :unknown-command (:category r)))
+    (is (= ["run" "check"] (:known (:payload r))))))
+
+(deftest run-requires-seed
+  (let [r (cli/dispatch-action "run" {})]
+    (is (result/error? r))
+    (is (= :missing-required-opt (:category r)))))
+
+(deftest exit-code-contract
+  (is (= 0 (cli/result->exit-code (result/ok :x))))
+  (is (= 1 (cli/result->exit-code (result/rejected :why :x))))
+  (is (= 2 (cli/result->exit-code (result/error :why :x)))))
+
+(deftest help-group-shape
+  (testing "the shape ehr-testing-tools' help machinery walks"
+    (is (string? (:group cli/help-group)))
+    (is (string? (:doc cli/help-group)))
+    (doseq [{:keys [verb doc flags]} (:verbs cli/help-group)]
+      (is (string? verb))
+      (is (string? doc))
+      (is (vector? flags)))))
+
+(deftest main!-prints-and-exits
+  (let [printed (atom []) exited (atom nil)]
+    (cli/main! ["run" "--seed" "3"]
+               {:println-fn #(swap! printed conj %)
+                :exit-fn #(reset! exited %)})
+    (is (= 0 @exited))
+    (is (= 1 (count @printed)))
+    ;; canonical output is readable EDN
+    (is (map? (read-string (first @printed))))))
+
+(deftest check-catches-planted-violation
+  (let [bad [{:event :discharge :t 0 :mrn "MRN000001"}
+             {:event :admission :t 5 :mrn "MRN000001" :location "Renal"}]
+        r (check/check-all bad)]
+    (is (result/rejected? r))
+    (is (= :invariant-violation (:category r)))
+    (is (some #(= :discharge-follows-admission (:invariant %))
+              (:violations (:payload r))))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/engine_test.clj ==========
+(ns ehr-testing-sim.engine-test
+  "Determinism and invariants over the engine. The properties here are
+  the executable form of the problem statement's Guarantees section:
+  same inputs + seed => identical output; every run satisfies the
+  invariant catalog."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.check :as check]
+            [ehr-testing-sim.result :as result]))
+
+(deftest same-seed-same-output
+  (testing "byte-identical reruns"
+    (let [config {:seed 42 :patients 5}]
+      (is (= (engine/run config) (engine/run config)))
+      ;; identical after serialization too -- the guarantee is about
+      ;; the artifact, not just the in-memory value
+      (is (= (pr-str (engine/run config)) (pr-str (engine/run config)))))))
+
+(deftest different-seed-different-output
+  ;; Not guaranteed for ALL seed pairs in principle, but for this
+  ;; config the delay sampling makes collision practically impossible;
+  ;; a failure here means the seed isn't actually reaching the RNG.
+  (is (not= (engine/run {:seed 1 :patients 5})
+            (engine/run {:seed 2 :patients 5}))))
+
+(deftest walking-skeleton-shape
+  (let [{:keys [ground-truth]} (engine/run {:seed 7 :patients 3})]
+    (testing "each patient admits then discharges, in time order"
+      (is (= 6 (count ground-truth)))
+      (is (= #{"MRN000001" "MRN000002" "MRN000003"}
+             (set (map :mrn ground-truth))))
+      (is (apply <= (map :t ground-truth))))))
+
+(defspec every-run-satisfies-invariant-catalog 200
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 20)]
+    (let [{:keys [ground-truth]} (engine/run {:seed seed :patients patients})]
+      (result/ok? (check/check-all ground-truth)))))
+
+(defspec determinism-holds-for-all-seeds 100
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 10)]
+    (= (engine/run {:seed seed :patients patients})
+       (engine/run {:seed seed :patients patients}))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/manifest_test.clj ==========
+(ns ehr-testing-sim.manifest-test
+  "Tripwire for the corpus-manifest bridge: what `build` produces
+  validates against the mirrored schema. The BINDING contract test --
+  validating against ehr-testing-tools' actual ManifestV1_1 -- lives in
+  that repo's test-integration tree, where both codebases share a
+  classpath (see ehr-testing-sim.manifest's docstring)."
+  (:require [clojure.test :refer [deftest is]]
+            [ehr-testing-sim.manifest :as manifest]))
+
+(deftest built-manifest-validates
+  (let [m (manifest/build {:seed 42
+                           :engine-params {:patients 5}
+                           :config {:path "config.edn"
+                                    :sha256 (apply str (repeat 64 "a"))}
+                           :invocation {:verb "run" :opts {:seed 42}}})]
+    (is (manifest/valid? m))
+    (is (= :simulated (:stage m)))
+    (is (= {:primary 42} (:seeds m)))
+    (is (= "ehr-testing-sim" (get-in m [:generator :name])))))
+
+========== END FILE ==========
+
