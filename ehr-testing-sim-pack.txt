@@ -1,9 +1,9 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T21:00:50Z
-HEAD: ea8ddf3d8dd78acfb23c31c374254af5b14c8e2b
+generated (UTC): 2026-07-26T22:16:01Z
+HEAD: 2ceca40947ce42de70c8fc6a1740f55a77a04016
 git status --porcelain:
-working tree clean
+?? docs/research/
 elides: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
@@ -173,28 +173,46 @@ tests must stay green across the rename, not just for new step types;
 `:participants` becomes a real field on every event (single-element
 vector for today's step types) with its own schema round-trip test.
 
-## M2b — Churn family
+## M2b — Churn family — **landed**
 
-Lands **InjectChurn** (currently `;; NEXT` in the theory, `:planned`):
-cancel-\*, \*-in-error, bed-swap, and merge step types, as the IR→IR
-transform the theory already names, built against M2a's
-`:patient-id`/`:participants` shape rather than the pre-M2a one. Brings
-`churn-profile` in as real config rather than a named-but-unbuilt
-resource. `docs/patient-state-model.md`'s conditional validity rows
-(status × event-class × attribute-conditions, added this session) name
-two further candidate step families for this milestone or immediately
-after, as **stretch/candidate steps, not core M2b scope**: leave-of-
-absence (A21/A22) and observation/inpatient class-flip (A06/A07), both
-from `docs/clinical-realities.md`'s stub catalog.
+Lands **InjectChurn** (`:built` in the theory; `;; NEXT` moved to
+`Execute`'s own further growth, M3): cancel-admit/cancel-transfer/
+cancel-discharge (A11/A12/A13), transfer-in-error (A02+A12, in-error
+marked), bed-swap (A17, genuinely two-participant), and merge (A40,
+the identity payoff) — 134 tests / 318 assertions green, coverage
+94.76%/97.25% (up from the M2a baseline 91.72%/94.69%). `churn-profile`
+is real config (`ehr-testing-sim.churn/ChurnProfile`) rather than a
+named-but-unbuilt resource, wired into `sim run` via `--churn` or an
+explicit `:churn-profile`. Task 0's two ratified items landed alongside:
+the durations rule (one line, `docs/patient-state-model.md`) and
+result-not-throw capacity exhaustion (`ehr-testing-sim.facility/allocate`
+no longer throws; `run-command` surfaces `:error :capacity-exhausted`),
+plus an ED-diversion/waiting-room-boarding stub entry in
+`docs/clinical-realities.md`. `docs/patient-state-model.md`'s conditional
+validity rows (status × event-class × attribute-conditions, added M2a)
+name two further candidate step families for a future milestone, as
+**stretch/candidate steps, not landed this session**: leave-of-absence
+(A21/A22) and observation/inpatient class-flip (A06/A07), both from
+`docs/clinical-realities.md`'s stub catalog.
 
-Co-landing invariants: each new step type's own catalog entries
-(e.g. a cancelled event must reference an event it cancels; a merge
-must reference patient-ids that both exist; a bed-swap preserves the
-occupancy invariants M1 established rather than bypassing them, and
-both invariants are now expressible as `:participants` cross-
-participant coherence checks per ADR-0010). The IR-endomorphism and
-clinical-steps-preserved laws already stated on `:churn` in the EDN
-become property tests here, not new claims.
+Co-landing invariants, landed: `cancel-references-existing-uncancelled-event`
+(a cancelled event must reference an event it cancels, of the right
+type, not already cancelled), `bed-swap-both-admitted-before-swap`,
+`merge-survivor-absorbs-merged-mrns`, `no-events-after-merged-terminal`
+— all expressed as `:participants` cross-participant coherence checks
+per ADR-0010. The IR-endomorphism, clinical-steps-preserved, and
+zero-probability-identity laws stated on `:churn` in the EDN are now
+property tests (`churn-test`), not just claims. One design decision
+surfaced only by property-testing InjectChurn against the full
+invariant catalog, recorded here rather than in an ADR since it's an
+internal robustness fix, not a wire/contract change: a churn-inserted
+step that is STATICALLY legal (per the applicability oracle) can still
+be REJECTED at execution time by live world state InjectChurn has no
+visibility into (e.g. a bed a cancel-discharge would reinstate into was
+reclaimed by someone else's admission in the meantime) — such a
+rejection is a no-op for that one step, not a run-halting condition,
+and InjectChurn's own state model treats `:cancel-discharge`
+conservatively (never assumes it succeeds) for exactly this reason.
 
 ## M3 — Order profiles + order/result steps
 
@@ -859,10 +877,12 @@ against what *should* be true, independent of message parsing. See
 problem, constraints, black-box contract, and validation program.
 
 **Status: pre-release walking skeleton.** Built: the engine, the
-invariant catalog, and HL7v2 admission/discharge/transfer emission
-(below); the facility and providers models (beds, the allocation
-ladder, boarding, bed-ready transfers, synthetic attendings —
-docs/operational-models.md).
+invariant catalog, HL7v2 ADT emission (admission/discharge/transfer
+plus the full churn family — below), the facility and providers
+models (beds, the allocation ladder, boarding, bed-ready transfers,
+synthetic attendings — docs/operational-models.md), and InjectChurn
+(cancel-admit/cancel-transfer/cancel-discharge, transfer-in-error,
+bed-swap, merge — docs/patient-state-model.md).
 
 ## Pipeline: now / next / later
 
@@ -878,8 +898,8 @@ flowchart LR
     Persona["Persona"]:::planned
     RunModules["RunModules"]:::planned
     CompileTrajectory["CompileTrajectory"]:::planned
-    InjectChurn["InjectChurn"]:::next
-    Execute["Execute"]:::built
+    InjectChurn["InjectChurn"]:::built
+    Execute["Execute"]:::next
     Check["Check"]:::built
     EmitHL7["EmitHL7"]:::built
     EmitState["EmitState"]:::planned
@@ -899,10 +919,13 @@ flowchart LR
     classDef planned fill:#37474f,stroke:#78909c,color:#cfd8dc,stroke-width:1px,stroke-dasharray: 3 3;
 ```
 
-**Now** (green): Execute, Check, EmitHL7 — property-tested and green
-(73 tests / 156 assertions). **Next** (amber): InjectChurn, growing the
-engine's step vocabulary starting with transfer. **Later** (dashed
-grey): everything else in the *want*.
+**Now** (green): Execute, Check, EmitHL7, and, as of Milestone M2b,
+InjectChurn — property-tested and green (134 tests / 318 assertions).
+**Next** (amber): Execute's own further step-vocabulary growth —
+Milestone M3's order/result step types and the ORM/ORU cycle, landed
+under Execute's existing contract the same way M2b's churn family was
+(no new stage). **Later** (dashed grey): everything else in the
+*want*.
 
 [`docs/sim-theory-diagram.md`](docs/sim-theory-diagram.md) is the full
 detail view (every resource wire, catalytic input, and the
@@ -1151,6 +1174,35 @@ message pair most integration engines have never been tested against.
 occupancy question (held vs released bed) the projection can express
 either way. Rarely-exercised message types are exactly what a
 conformance gate should see at least once.
+
+---
+
+## ED diversion / waiting-room boarding *(stub)*
+
+**The reality.** When a facility has no bed anywhere it can legally
+place a new admission — every rung of the allocation ladder
+exhausted, including ED surge — real hospitals don't crash; they
+divert incoming ambulance traffic to another facility, or hold the
+patient in the ED waiting room (not yet a bed of any kind) until
+capacity frees up.
+
+**The wire truth.** Diversion status is typically a site-operational
+signal (bed-board systems, sometimes a Z-segment or an external
+feed), not a patient-level ADT message; a waiting-room-held patient
+generates no ADT^A01 at all until a bed is actually assigned —
+registration may still occur, but admission does not.
+
+**Our model / why testers care.** This session's ladder exhaustion
+(`ehr-testing-sim.facility/allocate`) is deliberately a **result, not
+a state**: it stops the run with a structured `:capacity-exhausted`
+outcome rather than throwing, but does not yet model a *waiting*
+patient who eventually gets placed once a bed frees up — that needs a
+real `Pending`-family status (the validity table's `:pending-*` row
+already anticipates it). Modeling the wait-then-place sequence is
+M3+; a downstream consumer whose interface silently drops or
+mishandles diversion/boarding signals is exactly the kind of
+capacity-pressure edge case this simulator should eventually be able
+to generate on purpose.
 
 ---
 
@@ -1697,6 +1749,14 @@ ladder, the taxonomy, the NPI decision); this one is authoritative on
 the literal *shape* of the thing pathway generation and churn validity
 will read and write.
 
+## Durations rule (ratified)
+
+All authored durations — pathway IR (`:delay`'s `:from`/`:to`) and
+engine config (`:arrival-gap`, and any future churn-profile duration)
+alike — are minutes; the engine's own clock is seconds (ADR-0011);
+conversion happens exactly once, at the boundary where a minute-
+denominated draw becomes a clock advance (decide-time).
+
 ## Design inputs: mined from upstream
 
 Before formalizing the schema, two upstream sources were read
@@ -1909,6 +1969,42 @@ each other only by `:placement`.
 | 2. Home-ward surge | `:surge` | equal |
 | 3. Other-ward licensed (outlier) | `:licensed` | differ; `:location.ward` is `:inpatient`-class |
 | 4. Boarding | `:surge` | differ; `:location.ward` is `:ed`-class |
+
+## The deterministic event id (M2b)
+
+Cancel-family events (`:cancel-admit`, `:cancel-transfer`,
+`:cancel-discharge`) reference the event they cancel. Two shapes were
+on the table: a stamped `[patient-id seq-no]` tuple on every event, or
+using the event's own **ordinal position in the ground-truth log**
+(its 0-based index) as the id, computed rather than stored.
+
+**Decision: the log-position index, stamped on nothing.** The
+ground-truth log is already an immutable, append-only, totally
+ordered vector (ADR-0008) — its own index IS a deterministic, unique,
+stable identifier for every event it contains, for the lifetime of a
+run, with zero schema change to existing event types. A cancel event
+carries one new field of its own, `:cancels-event-id` (the target
+event's index into `ground-truth`); the event being cancelled is
+untouched. This was chosen over stamping an id onto every event
+specifically to keep the M2a-pinned regression fixture
+(`pinned_seed_42_patients_5.edn`) byte-identical: churn is opt-in
+(ADR roadmap M2b), so a config with no churn steps must produce
+*exactly* the same log it did before this milestone, and a global
+`:event-id` field added to every event would perturb that fixture for
+a reason that has nothing to do with churn actually running. Two-
+participant events (`:bed-swap`, `:merge`) are identified the same
+way — by their own log position — which is also what
+`docs/patient-state-model.md`'s emitter-derivability law now keys on
+for those types (a single MRN no longer uniquely identifies a
+message, since both carry two).
+
+`ehr-testing-sim.engine/decide` methods that need this (the cancel
+family, `:transfer-in-error`) read it off `world`'s new `:ground-truth`
+key — a persistent mirror of the log-so-far threaded through `world`
+specifically so `decide` can query it directly (`nth`/`filter`/
+`keep-indexed`), the same "query the log, no shadow field" move
+`:transfer-in-error`'s prior-location lookup already makes (see the
+worked example below).
 
 ## States and transitions
 
@@ -2206,46 +2302,46 @@ flowchart LR
     %% Arrow 26: CompileTrajectory
     RunModules -- clinical-trajectory --> CompileTrajectory
 
-    %% Arrow 29: InjectChurn
+    %% Arrow 28: InjectChurn
     UnionPathwayIr -- pathway-ir --> InjectChurn
     Calibrate -- churn-profile --> InjectChurn
 
-    %% Arrow 31: Execute
+    %% Arrow 30: Execute
     InjectChurn -- operational-pathway --> Execute
     provider_pool -. provider-pool .-> Execute
     order_profiles -. order-profiles .-> Execute
 
-    %% Arrow 33: Check
+    %% Arrow 32: Check
     Execute -- ground-truth-log --> Check
     invariant_catalog -. invariant-catalog .-> Check
 
-    %% Arrow 35: EmitHL7
+    %% Arrow 34: EmitHL7
     Execute -- ground-truth-log --> EmitHL7
     hl7_parser_dep -. hl7-parser-dep .-> EmitHL7
     message_type_registry -. message-type-registry .-> EmitHL7
     snomed_icd10_map -. snomed-icd10-map .-> EmitHL7
 
-    %% Arrow 38: EmitState
+    %% Arrow 37: EmitState
     Execute -- state-history --> EmitState
 
-    %% Arrow 41: Package
+    %% Arrow 40: Package
     EmitHL7 -- hl7v2-stream --> Package
     Execute -- ground-truth-log --> Package
 
-    %% Arrow 44: Calibrate
+    %% Arrow 43: Calibrate
     Package -- sim-corpus --> Calibrate
     feed_statistics -- feed-statistics --> Calibrate
     Calibrate -- churn-profile --> Calibrate
     Calibrate -- churn-profile --> churn_profile
 
-    %% Arrow 47: UnionPathwayIr
+    %% Arrow 46: UnionPathwayIr
     CompileTrajectory -- compiled-pathway --> UnionPathwayIr
     authored_pathway -- authored-pathway --> UnionPathwayIr
 
-    %% Arrow 50: SystemUnderTest
+    %% Arrow 49: SystemUnderTest
     EmitHL7 -- hl7v2-stream --> SystemUnderTest
 
-    %% Arrow 51: ToolsCorpusIntake
+    %% Arrow 50: ToolsCorpusIntake
     Package -- sim-corpus --> ToolsCorpusIntake
 
     %% --- Styling ---
@@ -2327,46 +2423,46 @@ flowchart LR
     %% Arrow 26: CompileTrajectory
     RunModules -- clinical-trajectory --> CompileTrajectory
 
-    %% Arrow 29: InjectChurn
+    %% Arrow 28: InjectChurn
     UnionPathwayIr -- pathway-ir --> InjectChurn
     Calibrate -- churn-profile --> InjectChurn
 
-    %% Arrow 31: Execute
+    %% Arrow 30: Execute
     InjectChurn -- operational-pathway --> Execute
     provider_pool -. provider-pool .-> Execute
     order_profiles -. order-profiles .-> Execute
 
-    %% Arrow 33: Check
+    %% Arrow 32: Check
     Execute -- ground-truth-log --> Check
     invariant_catalog -. invariant-catalog .-> Check
 
-    %% Arrow 35: EmitHL7
+    %% Arrow 34: EmitHL7
     Execute -- ground-truth-log --> EmitHL7
     hl7_parser_dep -. hl7-parser-dep .-> EmitHL7
     message_type_registry -. message-type-registry .-> EmitHL7
     snomed_icd10_map -. snomed-icd10-map .-> EmitHL7
 
-    %% Arrow 38: EmitState
+    %% Arrow 37: EmitState
     Execute -- state-history --> EmitState
 
-    %% Arrow 41: Package
+    %% Arrow 40: Package
     EmitHL7 -- hl7v2-stream --> Package
     Execute -- ground-truth-log --> Package
 
-    %% Arrow 44: Calibrate
+    %% Arrow 43: Calibrate
     Package -- sim-corpus --> Calibrate
     feed_statistics -- feed-statistics --> Calibrate
     Calibrate -- churn-profile --> Calibrate
     Calibrate -- churn-profile --> churn_profile
 
-    %% Arrow 47: UnionPathwayIr
+    %% Arrow 46: UnionPathwayIr
     CompileTrajectory -- compiled-pathway --> UnionPathwayIr
     authored_pathway -- authored-pathway --> UnionPathwayIr
 
-    %% Arrow 50: SystemUnderTest
+    %% Arrow 49: SystemUnderTest
     EmitHL7 -- hl7v2-stream --> SystemUnderTest
 
-    %% Arrow 51: ToolsCorpusIntake
+    %% Arrow 50: ToolsCorpusIntake
     Package -- sim-corpus --> ToolsCorpusIntake
 
     %% --- Styling ---
@@ -2430,7 +2526,6 @@ persona × gmf-module-set × gmf-interpreter → clinical-trajectory  [RunModule
 # planned: CompileTrajectory
 clinical-trajectory → compiled-pathway  [CompileTrajectory]
 
-# planned: InjectChurn
 pathway-ir × churn-profile → operational-pathway  [InjectChurn]
 
 operational-pathway × provider-pool × order-profiles → ground-truth-log + state-history  [Execute]  {catalytic: provider-pool, order-profiles}
@@ -2511,24 +2606,23 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
           "appends provenance: each compiled step cites the trajectory event it realizes"]
    :contract "the novel layer -- neither mined source has this stage (Simulated Hospital has no trajectory generation; Synthea has no operational compilation), so its laws carry fresh validation burden rather than inherited provenance (docs/problem-statement.md, Cross-Cutting Arguments)"}
 
-  ;; NEXT -- InjectChurn is next: the engine's step-vocabulary growth
-  ;; (transfer first, then bed-swap, *-in-error, merge -- the
-  ;; Simulated-Hospital-derived churn family, docs/third-party-sources.md)
-  ;; happens under Execute's existing :built contract on the way there
-  ;; (each new step type co-lands with its check.clj invariants, the
-  ;; standing AGENTS.md convention; Execute's contract note already
-  ;; names this as the v0->want growth path). The author may re-aim
-  ;; NEXT; this is the default per the roadmap.
   {:id :churn
    :label "InjectChurn"
    :kind :transform
-   :status :planned
+   :status :built
    :inputs ["pathway-ir" "churn-profile"]
    :outputs ["operational-pathway"]
-   :laws ["IR endomorphism: operational-pathway is itself valid pathway IR -- churn injection is IR -> IR, so the engine needs no knowledge that churn exists"
-          "clinical-steps invariant: only inserts operational-noise steps (transfers, bed swaps, cancels, *-in-error, merges); never removes, reorders, or alters clinical steps"
-          "all stochastic choices draw from the run's single seeded RNG"]}
+   :laws ["IR endomorphism: operational-pathway is itself valid pathway IR -- churn injection is IR -> IR, so the engine needs no knowledge that churn exists -- property-tested (churn-test/inject-always-produces-valid-ir, 100 trials green 2026-07-26)"
+          "clinical-steps invariant: only inserts operational-noise steps (cancel-admit/cancel-transfer/cancel-discharge, transfer-in-error, bed-swap, merge); never removes, reorders, or alters clinical steps -- property-tested as its own converse (churn-test/strip-of-inject-recovers-the-input-for-any-profile-and-seed, 100 trials green 2026-07-26): stripping every churn-insertable step type back out of a churned pathway recovers the original exactly"
+          "all stochastic choices draw from the run's single seeded RNG: `inject` takes engine/run's OWN java.util.Random, never a derived/isolated stream (ADR-0009's own NPI-generation reasoning, extended)"
+          "zero-probability identity: an all-zero churn-profile is the identity transform, for ANY seed -- property-tested (churn-test/zero-profile-is-the-identity-transform-for-any-seed, 100 trials green 2026-07-26), not merely assumed from the RNG-consumption law"]
+   :contract "v1 scope (M2b, docs/patient-state-model.md's event-validity table as InjectChurn's applicability oracle, ehr-testing-sim.churn): six step types (cancel-admit/cancel-transfer/cancel-discharge -> A11/A12/A13, transfer-in-error -> A02+A12, bed-swap -> A17, merge -> A40), each co-landed with check.clj invariants and message-type-registry entries in the same change (AGENTS.md's co-landing convention, extended to this stage). Applicability is tracked as a small type-level state machine over the pathway's own step sequence (no facility/occupancy visibility at injection time) -- decide still independently re-validates against LIVE world state at execution time and rejects (not throws) when a statically-legal insertion turns out to collide with something only runtime knows about (e.g. a bed a cancel-discharge would reinstate into has since been reclaimed); a rejected step is a no-op, not a run-halting condition. Wired into ehr-testing-sim.run/run-command via `:churn` (a modest built-in sample-profile) or an explicit `:churn-profile` map. The WANT is InjectChurn choosing insertion points from real operational realism data (site profiles, Calibrate feedback) rather than flat per-gap probabilities -- not this session's scope."}
 
+  ;; NEXT -- Execute's own further step-vocabulary growth: M3's
+  ;; order/result steps and the ORM/ORU cycle (order-profiles catalytic,
+  ;; below) is what's next under Execute's existing :built contract, now
+  ;; that InjectChurn itself has landed :built. The author may re-aim
+  ;; NEXT; this is the default per the roadmap.
   {:id :execute
    :label "Execute"
    :kind :transform
@@ -2540,7 +2634,7 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
           "decide/evolve split (ADR-0008): decide (rng, t, world, mrn, step) -> {:events :advance} consults world-so-far and the RNG but never mutates; evolve (world, event) -> world' is the ONLY function that changes patient state, pure and total, folding one event at a time -- so state-history is DERIVED (reduce evolve over a log prefix), not a second output the engine must keep in sync with the log by discipline; this is what makes state-based emitters renderings rather than redesigns (ADR-0002)"
           "order-profiles catalytic (target 3, hashed US-units config, docs/operational-models.md): order and result step types land under Execute's existing :built contract as the engine's step vocabulary grows -- an EmitHL7-style co-landing addition, not a new stage (repairs the plan's earlier capture gap: order profiles and the ORM/ORU cycle were discussed from the first session but appeared in no planning artifact before this one)"
           "provider-pool catalytic (target 3, hashed config, docs/operational-models.md): attending assignment at admission draws from the provider pool the same way bed assignment draws from facility config -- both are Execute-time allocations, not separate stages"]
-   :contract "v1 scope (Milestone M1, docs/operational-models.md): the walking-skeleton step set (:admission :delay :discharge) plus :transfer, engine-assigned via the allocation ladder and provider sampling -- provider-pool is a real catalytic now (synthetic Luhn-valid NPIs materialized once per run, ehr-testing-sim.config), not just a declared wire. M2a (ADR-0010, ADR-0011): patient-id is the fold/queue key, :mrn moved into state as {:mrns :active-mrn}, every event carries :participants, the clock is seconds (pathway IR's :delay stays minutes, converted at decide-time), and a configurable warm-up window marks early events -- all landed under this SAME :built contract, no new input/output/catalytic (docs/sim-theory.md records why this needed no diagram regeneration). The WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"}
+   :contract "v1 scope (Milestone M1, docs/operational-models.md): the walking-skeleton step set (:admission :delay :discharge) plus :transfer, engine-assigned via the allocation ladder and provider sampling -- provider-pool is a real catalytic now (synthetic Luhn-valid NPIs materialized once per run, ehr-testing-sim.config), not just a declared wire. M2a (ADR-0010, ADR-0011): patient-id is the fold/queue key, :mrn moved into state as {:mrns :active-mrn}, every event carries :participants, the clock is seconds (pathway IR's :delay stays minutes, converted at decide-time), and a configurable warm-up window marks early events. M2b: the churn family (cancel-admit/cancel-transfer/cancel-discharge/transfer-in-error/bed-swap/merge, landed as :execute step types the SAME way :transfer was -- :churn, above, is what decides WHERE to insert them into a pathway, this stage is what runs them) plus result-not-throw capacity-exhaustion (a structured {:exhausted ...} outcome, never a thrown exception, when the allocation ladder is fully exhausted). All of this landed under this SAME :built contract, no new input/output/catalytic (docs/sim-theory.md records why this needed no diagram regeneration). The WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"}
 
   {:id :check
    :label "Check"
@@ -2563,7 +2657,7 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
    :catalytic ["hl7-parser-dep" "message-type-registry" "snomed-icd10-map"]
    :laws ["bidirectional derivability: every emitted message is derivable from the log, and every message is traceable back to the log event that produced it (problem-statement Guarantees) -- the property that makes the corpus a test instrument rather than mere traffic -- property-tested (emit-hl7-test/bidirectional-derivability, 100 trials green 2026-07-26)"
           "native code rendering: concept triplets render as coded fields (CWE etc.) in their own system; the ONE sanctioned translation is SNOMED->ICD-10-CM for billing segments (DG1), via the pinned NLM map (catalytic target 1), or code pairs carried from the module where provided"]
-   :contract "v0 scope: ADT^A01 (admission) and ADT^A03 (discharge) only, MSH/EVN/PID/PV1 populated minimally, on org.clojars.cmiles74/clojure-hl7-parser's structures (the emitter's only runtime dependency, docs/third-party-sources.md). Timestamps render from a pinned :reference-date run-config input (ehr-testing-sim.emit-hl7/default-reference-date), never wall-clock. ORU/ORM and the churn-family message types (transfer, bed-swap, cancel, merge, ...) land alongside their step types as the engine's step vocabulary grows past :admission/:delay/:discharge -- each a message-type-registry addition, not a redesign of this stage."}
+   :contract "v0 scope was ADT^A01 (admission) and ADT^A03 (discharge) only; M1 added A02 (transfer); M2b adds the full churn family -- A11/A12/A13 (cancel-admit/cancel-transfer/cancel-discharge), A17 (bed-swap, ONE message carrying both patients' PID/PV1 pairs -- the real HL7v2 A17 shape), and A40 (merge, PID carries the surviving MRN, MRG-1 the prior/merged-away one). MSH/EVN/PID/PV1(/MRG) populated minimally, on org.clojars.cmiles74/clojure-hl7-parser's structures (the emitter's only runtime dependency, docs/third-party-sources.md). Timestamps render from a pinned :reference-date run-config input (ehr-testing-sim.emit-hl7/default-reference-date), never wall-clock. ORU/ORM lands alongside M3's order/result step types -- each a message-type-registry addition, not a redesign of this stage."}
 
   {:id :emit-state
    :label "EmitState"
@@ -2634,15 +2728,16 @@ One file describes three systems:
 - **want** — the whole theory: every stage, law, and wire. Our best
   current guess at the envisioned system; it will change, and changes
   land as edits to the EDN with ADRs where they're structural.
-- **now** — the `:status :built` subset: **Execute**, **Check**, and
-  **EmitHL7** (each walking-skeleton or v0-slice scope, per their
-  `:contract` notes), plus the manifest component inside Package that
-  shipped ahead of its stage. Everything the *now* claims is
-  property-tested and green (20 tests / 55 assertions, 2026-07-26).
-- **next** — the single stage marked `;; NEXT` in the EDN:
-  **InjectChurn**, growing the engine's step vocabulary (transfer
-  first) under Execute's existing contract on the way to the full
-  Simulated-Hospital-derived churn family.
+- **now** — the `:status :built` subset: **Execute**, **Check**,
+  **EmitHL7**, and, as of Milestone M2b, **InjectChurn** (each
+  walking-skeleton, v1-slice, or v0-slice scope, per their `:contract`
+  notes), plus the manifest component inside Package that shipped
+  ahead of its stage. Everything the *now* claims is property-tested
+  and green (134 tests / 318 assertions, 2026-07-26).
+- **next** — the single stage marked `;; NEXT` in the EDN: **Execute**
+  itself, growing further under its own existing contract toward
+  Milestone M3's order/result step types and the ORM/ORU cycle
+  (`order-profiles`, already a declared catalytic).
 
 No schema keys were invented for this convention — it lives in
 comments and here, keeping the EDN loadable by tools' Pipeline Malli
@@ -2744,7 +2839,8 @@ whose name binds to nothing is malformed. Bindings, with build status:
 | `state-document` | FHIR JSON or CDA XML (format dispatch) | planned |
 | `run-manifest` | Malli, `ehr-testing-sim.manifest/MirroredManifest` (tools' ManifestV1_1 mirror) | built |
 | `sim-corpus` | directory layout + manifest, planned | planned |
-| `churn-profile`, `feed-statistics` | Malli, planned; `feed-statistics` is site-supplied summary statistics — never raw feed content (see global laws) | planned |
+| `churn-profile` | Malli, `ehr-testing-sim.churn/ChurnProfile` — step-type → per-insertion-point probability | v1 built |
+| `feed-statistics` | Malli, planned; site-supplied summary statistics — never raw feed content (see global laws) | planned |
 | `invariant-catalog` | not a wire resource — catalytic, see below | v0 built |
 
 ## Catalytic resolution
@@ -4001,7 +4097,8 @@ M2a scope.
   participant's own sequence, not just one. M2a (ADR-0011) adds the
   warm-up-mark invariant (config/check-warm-up.clj docstring companion
   below)."
-  (:require [ehr-testing-sim.config :as config]
+  (:require [clojure.set]
+            [ehr-testing-sim.config :as config]
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.facility :as facility]
             [ehr-testing-sim.result :as result]))
@@ -4173,6 +4270,85 @@ M2a scope.
                                                   (get-in event [:location :ward]))))]
     {:invariant :surge-only-when-earlier-rungs-exhausted :patient-id patient-id :at (:t event)}))
 
+;; --- M2b: churn family (docs/patient-state-model.md's event-validity
+;; table's cancel-*/bed-swap/merge rows; ADR-0010's cross-participant
+;; coherence) -------------------------------------------------------------
+
+(def ^:private cancel-target-type
+  "Cancel event type -> the event type it must reference."
+  {:cancel-admit :admission :cancel-transfer :transfer :cancel-discharge :discharge})
+
+(defn cancel-references-existing-uncancelled-event
+  "The event-validity table's cancel-* row: the event class being
+  cancelled must exist in this patient's log, be the RIGHT class, and
+  not already be cancelled by an earlier cancel of the same kind.
+  Structural -- checks any log directly, independent of whether decide
+  itself already enforces this (docs/patient-state-model.md)."
+  [ground-truth]
+  (let [indexed (vec ground-truth)]
+    (for [[idx event] (map-indexed vector indexed)
+          :when (contains? cancel-target-type (:event event))
+          :let [target-idx (:cancels-event-id event)
+                target (get indexed target-idx)
+                expected-type (get cancel-target-type (:event event))
+                patient-id (:patient-id (first (:participants event)))
+                cancelled-earlier? (some (fn [[i2 ev2]]
+                                           (and (< i2 idx)
+                                                (= (:event event) (:event ev2))
+                                                (= target-idx (:cancels-event-id ev2))))
+                                         (map-indexed vector indexed))]
+          :when (or (nil? target)
+                    (not= expected-type (:event target))
+                    (not (some #(= patient-id (:patient-id %)) (:participants target)))
+                    cancelled-earlier?)]
+      {:invariant :cancel-references-existing-uncancelled-event :patient-id patient-id :at (:t event)})))
+
+(defn bed-swap-both-admitted-before-swap
+  "Both bed-swap participants were :admitted immediately beforehand
+  (docs/operational-models.md's own admitted-when-placed rule, extended
+  to the genuinely-two-participant case -- ADR-0010)."
+  [ground-truth]
+  (for [{:keys [event world-before]} (engine/replay ground-truth)
+        :when (= :bed-swap (:event event))
+        {:keys [patient-id]} (:participants event)
+        :let [before (get world-before patient-id)]
+        :when (not= :admitted (:status before))]
+    {:invariant :bed-swap-both-admitted-before-swap :patient-id patient-id :at (:t event)}))
+
+(defn merge-survivor-absorbs-merged-mrns
+  "docs/patient-state-model.md's identity payoff: the merge's stated
+  surviving MRN must be one the survivor already answered to (not an
+  arbitrary string); the survivor's post-merge :active-mrn is exactly
+  that; and the survivor's post-merge :mrns is a superset of what the
+  merged patient answered to beforehand (retired, not discarded)."
+  [ground-truth]
+  (for [{:keys [event world-before world-after]} (engine/replay ground-truth)
+        :when (= :merge (:event event))
+        :let [{:keys [participants surviving-mrn]} event
+              survivor-id (:patient-id (first (filter #(= :survivor (:role %)) participants)))
+              merged-id (:patient-id (first (filter #(= :merged (:role %)) participants)))
+              survivor-before (get world-before survivor-id)
+              merged-before (get world-before merged-id)
+              survivor-after (get world-after survivor-id)]
+        :when (not (and (contains? (:mrns survivor-before) surviving-mrn)
+                        (= surviving-mrn (:active-mrn survivor-after))
+                        (clojure.set/subset? (:mrns merged-before) (:mrns survivor-after))))]
+    {:invariant :merge-survivor-absorbs-merged-mrns :patient-id survivor-id :at (:t event)}))
+
+(defn no-events-after-merged-terminal
+  "The merged patient-id's stream ends with its own merge event -- no
+  later event in the log names it as a participant (docs/patient-
+  state-model.md, ADR-0010)."
+  [ground-truth]
+  (let [indexed (vec ground-truth)]
+    (for [[merge-idx event] (map-indexed vector indexed)
+          :when (= :merge (:event event))
+          :let [merged-id (:patient-id (first (filter #(= :merged (:role %)) (:participants event))))]
+          [later-idx later-event] (map-indexed vector indexed)
+          :when (and (> later-idx merge-idx)
+                    (some #(= merged-id (:patient-id %)) (:participants later-event)))]
+      {:invariant :no-events-after-merged-terminal :patient-id merged-id :at (:t later-event)})))
+
 (def catalog
   "The full invariant catalog needing only a ground-truth log, in
   reporting order."
@@ -4184,7 +4360,11 @@ M2a scope.
    #'transfer-only-when-admitted
    #'transfer-from-matches-state
    #'no-double-occupancy
-   #'admitted-occupies-one-slot])
+   #'admitted-occupies-one-slot
+   #'cancel-references-existing-uncancelled-event
+   #'bed-swap-both-admitted-before-swap
+   #'merge-survivor-absorbs-merged-mrns
+   #'no-events-after-merged-terminal])
 
 (def facility-catalog
   "Invariants that need the facility config, not just the log (checked
@@ -4219,6 +4399,207 @@ M2a scope.
                                             (into (mapv (comp :name meta) warmup-catalog)))
                    :events (count ground-truth)})
        (result/rejected :invariant-violation {:violations violations})))))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/churn.clj ==========
+(ns ehr-testing-sim.churn
+  "InjectChurn (docs/sim-theory.edn): the pathway-ir x churn-profile ->
+  operational-pathway transform. M2b's second half -- Task 1 landed the
+  churn STEP TYPES the engine can execute; this namespace decides WHERE
+  to insert them into an authored pathway, before the engine ever sees
+  it, per the theory's own stage laws:
+
+  - IR endomorphism: the output validates as pathway IR, same as the
+    input -- the engine needs no knowledge that churn exists at all.
+  - clinical-steps invariant: only INSERTS operational-noise steps
+    (docs/patient-state-model.md's churn family); the original steps
+    are never removed, reordered, or altered. `strip` is the converse
+    made executable: filtering every churn-insertable step type back
+    out of a churned pathway recovers the original exactly.
+  - all stochastic choices draw from the run's single seeded RNG:
+    `inject` takes the run's own `java.util.Random` (the SAME instance
+    ehr-testing-sim.engine/run already threads through decide, not a
+    derived or isolated stream) -- the same reasoning ADR-0009 gives
+    for NPI generation, extended here.
+
+  Applicability oracle: docs/patient-state-model.md's event-validity
+  table is what decides whether a given churn step type is legal at a
+  given point in the pathway (e.g. no :cancel-discharge before any
+  :discharge exists yet). Since InjectChurn works at the IR level, with
+  no patient state or facility to consult, this is tracked here as a
+  small type-level state machine over the step TYPES seen so far --
+  admitted?/has-uncancelled-{admission,transfer,discharge}?/
+  last-location -- the same predicate shape check.clj's own invariants
+  ask of a real log, asked instead of a pathway's step-type sequence.
+
+  RNG consumption is fixed regardless of the profile's VALUES or the
+  pathway's applicability state at any point (ADR-0009's own rejected-
+  alternative reasoning: making consumption depend on content is worse
+  than a fixed, occasionally-discarded draw) -- every churn step type
+  draws exactly one `.nextDouble` at every insertion point (`gap`),
+  always, in a fixed order; the draw is discarded (no insertion) when
+  either the probability isn't cleared or the type isn't currently
+  applicable. A zero-probability profile therefore never inserts
+  anything, for ANY sequence of draws -- the identity-transform
+  property this stage's `zero-profile-is-the-identity-transform`
+  property test confirms directly, not merely by inspection."
+  (:require [ehr-testing-sim.pathway :as pathway]
+            [malli.core :as m])
+  (:import [java.util Random]))
+
+(def ^:private churn-step-types
+  #{:cancel-admit :cancel-transfer :cancel-discharge :transfer-in-error :bed-swap :merge})
+
+(def ChurnProfile
+  "Step type -> per-insertion-point probability in [0.0, 1.0]. Task 0's
+  durations rule doesn't apply here -- v1's churn step types carry no
+  authored duration of their own (cancel-*/transfer-in-error/bed-swap/
+  merge all fire instantaneously in `decide`), so this profile is
+  probabilities only, no minutes-authored fields."
+  (into [:map]
+        (map (fn [step-type] [step-type {:optional true} [:double {:min 0.0 :max 1.0}]]))
+        churn-step-types))
+
+(defn valid-churn-profile? [profile] (m/validate ChurnProfile profile))
+
+(def default-churn-profile
+  "All-zero: churn OFF. The merge base for a caller-supplied partial
+  profile (docs/patient-state-model.md's `run`-wiring note) and the
+  profile the zero-probability-identity property is stated against."
+  (into {} (map (fn [step-type] [step-type 0.0])) churn-step-types))
+
+(def sample-profile
+  "A modest, illustrative nonzero profile -- what a bare `--churn` flag
+  turns on when the caller wants churn without hand-tuning every rate.
+  Each probability is per GAP (an insertion point around an authored
+  step), not per patient or per run, so these are deliberately small."
+  {:cancel-admit 0.01 :cancel-transfer 0.02 :cancel-discharge 0.01
+   :transfer-in-error 0.02 :bed-swap 0.03 :merge 0.01})
+
+(def ^:private step-type-order
+  "Fixed roll order at every gap -- see the namespace docstring's RNG-
+  consumption note. Order itself is arbitrary; FIXEDNESS is the law."
+  [:cancel-admit :cancel-transfer :cancel-discharge :transfer-in-error :bed-swap :merge])
+
+(def ^:private initial-applicability-state
+  {:admitted? false
+   :has-uncancelled-admission? false
+   :has-uncancelled-transfer? false
+   :has-uncancelled-discharge? false
+   :last-location nil})
+
+(defn- applicable?
+  "docs/patient-state-model.md's event-validity table, asked of the
+  type-level state accumulated over the pathway's steps so far (the
+  applicability-oracle role that table promises InjectChurn).
+
+  `at-end?` (no original steps remain after this gap) additionally
+  gates :cancel-admit specifically: reverting a patient to :new
+  strands any ORIGINAL step still ahead that assumes they stay
+  admitted (v0/M1's :discharge and :transfer decide methods don't
+  themselves re-check current status -- that's check.clj's job, by
+  design, for the core step types) -- InjectChurn must never insert a
+  step that makes an EXISTING, untouched authored step incoherent, so
+  :cancel-admit is only ever inserted after the pathway's own steps are
+  already exhausted. The other churn types never strand a later
+  original step this way (cancel-transfer/cancel-discharge reinstate a
+  still-legal prior location; bed-swap/merge/transfer-in-error don't
+  change :admitted? at all), so only :cancel-admit needs this extra
+  gate."
+  [state step-type at-end?]
+  (case step-type
+    :cancel-admit (and at-end? (:has-uncancelled-admission? state))
+    :cancel-transfer (:has-uncancelled-transfer? state)
+    :cancel-discharge (:has-uncancelled-discharge? state)
+    :transfer-in-error (and (:admitted? state) (some? (:last-location state)))
+    :bed-swap (:admitted? state)
+    :merge (:admitted? state)))
+
+(defn- advance-state
+  "Folds one step (authored OR churn-inserted -- both are ordinary
+  pathway steps once emitted) into the applicability state.
+
+  :cancel-discharge is deliberately NOT modeled as reliably restoring
+  :admitted? true here, even though a SUCCESSFUL one really does
+  (engine/evolve's own :cancel-discharge sets :status :admitted).
+  Unlike every other churn type, :cancel-discharge can be REJECTED at
+  decide-time for a reason InjectChurn has no way to predict statically
+  -- the bed it would reinstate into may have been legitimately
+  reclaimed by someone else's admission by the time it actually runs
+  (ehr-testing-sim.engine's bed-reoccupied-by-someone-else? guard).
+  Optimistically assuming success and chaining a further :admitted?-
+  requiring insertion (a :transfer-in-error/:bed-swap/:merge) after it
+  would produce an ILLEGAL step whenever that rejection actually fires
+  at runtime -- conservatively treating the patient as no-longer-
+  reliably-admitted after a :cancel-discharge is what keeps InjectChurn
+  a true applicability oracle rather than an optimistic guess."
+  [state {:keys [type location]}]
+  (case type
+    :admission (assoc state :admitted? true :has-uncancelled-admission? true :last-location location)
+    :transfer (assoc state :has-uncancelled-transfer? true :last-location location)
+    :discharge (assoc state :admitted? false :has-uncancelled-discharge? true)
+    :cancel-admit (assoc state :admitted? false :has-uncancelled-admission? false)
+    :cancel-transfer (assoc state :has-uncancelled-transfer? false)
+    :cancel-discharge (assoc state :has-uncancelled-discharge? false)
+    ;; :delay, :transfer-in-error (self-cancelling, nets to no change),
+    ;; :bed-swap, :merge: no applicability-relevant change.
+    state))
+
+(defn- churn-step
+  [step-type last-location]
+  (case step-type
+    :cancel-admit {:type :cancel-admit}
+    :cancel-transfer {:type :cancel-transfer}
+    :cancel-discharge {:type :cancel-discharge}
+    :transfer-in-error {:type :transfer-in-error :location last-location}
+    :bed-swap {:type :bed-swap}
+    :merge {:type :merge}))
+
+(defn- roll-gap
+  "Rolls every step type in `step-type-order`, in order, against
+  `churn-profile`, ALWAYS drawing one `.nextDouble` per type regardless
+  of applicability (the fixed-consumption law) -- returns [state'
+  inserted-steps], folding each accepted insertion into the
+  applicability state immediately (so two churn steps landing in the
+  SAME gap see each other, not a stale pre-gap snapshot)."
+  [^Random rng churn-profile state at-end?]
+  (reduce (fn [[state acc] step-type]
+            (let [draw (.nextDouble rng)
+                  probability (get churn-profile step-type 0.0)]
+              (if (and (< draw probability) (applicable? state step-type at-end?))
+                (let [step (churn-step step-type (:last-location state))]
+                  [(advance-state state step) (conj acc step)])
+                [state acc])))
+          [state []]
+          step-type-order))
+
+(defn inject
+  "The IR->IR transform: `pathway` (valid pathway IR) x `churn-profile`
+  (step-type -> probability, see ChurnProfile) x `rng` (the run's own
+  seeded java.util.Random) -> a new, still-valid pathway with churn
+  steps spliced in at legal points. n original steps have n+1 gaps
+  (before the first, between each pair, after the last); every gap
+  rolls the full `step-type-order` (see `roll-gap`). Pure given `rng`;
+  never removes, reorders, or alters the input's own steps."
+  [pathway churn-profile rng]
+  {:pre [(pathway/valid? pathway)]}
+  (loop [steps (:steps pathway) state initial-applicability-state out (transient [])]
+    (let [[state' inserted] (roll-gap rng churn-profile state (empty? steps))
+          out' (reduce conj! out inserted)]
+      (if (empty? steps)
+        (assoc pathway :steps (persistent! out'))
+        (let [[step & remaining] steps]
+          (recur remaining (advance-state state' step) (conj! out' step)))))))
+
+(defn strip
+  "The clinical-steps invariant's converse, executable: removing every
+  churn-insertable step type from a churned pathway recovers the
+  ORIGINAL exactly, because `inject` never removes, reorders, or
+  alters the steps it was given -- a pure filter, not a
+  reconstruction."
+  [pathway]
+  (update pathway :steps (fn [steps] (into [] (remove (comp churn-step-types :type)) steps))))
 
 ========== END FILE ==========
 
@@ -4258,6 +4639,7 @@ M2a scope.
    :reference-date {:coerce :string}
    :utc-offset {:coerce :string}
    :warm-up-seconds {:coerce :long}
+   :churn {:coerce :boolean}
    :json {:coerce :boolean}
    :help {:coerce :boolean}})
 
@@ -4276,7 +4658,8 @@ M2a scope.
              {:flag "--emit" :doc "render messages into the payload (\"hl7\" for ADT^A01/A03)"}
              {:flag "--reference-date" :doc "ISO date anchoring HL7 timestamps (pinned input)" :default "2024-01-01"}
              {:flag "--utc-offset" :doc "fixed ISO offset suffixed onto HL7 timestamps (pinned input, no DST)" :default "+00:00"}
-             {:flag "--warm-up-seconds" :doc "events before this mark :warm-up true (log stays complete)" :default "0"}]}
+             {:flag "--warm-up-seconds" :doc "events before this mark :warm-up true (log stays complete)" :default "0"}
+             {:flag "--churn" :doc "activate InjectChurn with a modest sample profile (cancel-*/transfer-in-error/bed-swap/merge)"}]}
     {:verb "check"
      :doc "Run the invariant catalog over a ground-truth log (EDN on stdin)."
      :flags []}]})
@@ -4567,7 +4950,15 @@ M2a scope.
   consumer downstream of this stage)."
   {:admission {:type "ADT" :trigger "A01"}
    :discharge {:type "ADT" :trigger "A03"}
-   :transfer {:type "ADT" :trigger "A02"}})
+   :transfer {:type "ADT" :trigger "A02"}
+   ;; M2b churn family. :transfer-in-error has no entry of its own -- its
+   ;; decide emits ordinary :transfer + :cancel-transfer events (already
+   ;; registered), never a distinct ground-truth :event value.
+   :cancel-admit {:type "ADT" :trigger "A11"}
+   :cancel-transfer {:type "ADT" :trigger "A12"}
+   :cancel-discharge {:type "ADT" :trigger "A13"}
+   :bed-swap {:type "ADT" :trigger "A17"}
+   :merge {:type "ADT" :trigger "A40"}})
 
 (def ^:private hl7-timestamp-formatter
   (java.time.format.DateTimeFormatter/ofPattern "yyyyMMddHHmmss"))
@@ -4648,6 +5039,14 @@ M2a scope.
   [providers id]
   (first (filter #(= id (:id %)) providers)))
 
+(defn- mrg-segment
+  "MRG-1: the prior (merged-away) patient identifier -- A40's own carrier
+  for 'what mrn did this patient answer to before' (docs/patient-state-
+  model.md's identity payoff). PID (built via pid-segment, same as every
+  other type) carries the SURVIVING mrn."
+  [merged-mrn]
+  (parser/create-segment "MRG" (parser/create-field [merged-mrn])))
+
 (defn- pv1-segment
   "PV1-6 (prior location) is read directly off the CURRENT event's own
   :from -- present only on :transfer events -- never a separately
@@ -4665,9 +5064,14 @@ M2a scope.
    (location-field facility-name from)
    (provider-field provider)))
 
-(defn event->message
-  "Renders one ground-truth event to an ER7 string, or nil when the
-  event's :event isn't in `message-type-registry`."
+(defn- single-subject-message
+  "Renders one single-participant ground-truth event to an ER7 string,
+  or nil when the event's :event isn't in `message-type-registry`. Every
+  type this covers (:admission/:discharge/:transfer and M2b's cancel-*
+  family) carries its own :active-mrn/:location/:from/:attending
+  directly -- cancel events reinstate these AT DECIDE-TIME by querying
+  the log (docs/patient-state-model.md), so this renderer needs no
+  event-type-specific branching to show the reinstated facts."
   [reference-date utc-offset facility providers
    {:keys [event t active-mrn location from attending]}]
   (when-let [type+trigger (message-type-registry event)]
@@ -4682,6 +5086,63 @@ M2a scope.
         (evn-segment (:trigger type+trigger) ts)
         (pid-segment active-mrn)
         (pv1-segment facility-name location from provider))))))
+
+(defn- bed-swap-message
+  "A17 (swap patients): ONE message per ground-truth event, carrying
+  BOTH patients' PID/PV1 pairs -- the real HL7v2 A17 shape, and why the
+  emitter-derivability law now keys on the event's own log position
+  rather than a single :active-mrn (a bed-swap message has two)."
+  [reference-date utc-offset facility providers {:keys [t participants swap]}]
+  (let [type+trigger (message-type-registry :bed-swap)
+        ts (hl7-timestamp reference-date t utc-offset)
+        facility-name (name (:id facility))
+        [p1 p2] (mapv :patient-id participants)
+        {mrn1 :active-mrn from1 :from to1 :to att1 :attending} (get swap p1)
+        {mrn2 :active-mrn from2 :from to2 :to att2 :attending} (get swap p2)
+        control-id (str mrn1 "+" mrn2 "-" (:trigger type+trigger) "-" t)]
+    (parser/str-message
+     (parser/create-message
+      parser/DEFAULT-DELIMITERS
+      (msh-segment type+trigger control-id ts)
+      (evn-segment (:trigger type+trigger) ts)
+      (pid-segment mrn1)
+      (pv1-segment facility-name to1 from1 (provider-by-id providers att1))
+      (pid-segment mrn2)
+      (pv1-segment facility-name to2 from2 (provider-by-id providers att2))))))
+
+(defn- merge-message
+  "A40 (merge patient): PID carries the SURVIVING mrn, MRG-1 carries the
+  prior (merged-away) one (docs/patient-state-model.md's identity
+  payoff) -- ONE message per merge event."
+  [reference-date utc-offset facility _providers {:keys [t surviving-mrn merged-mrn]}]
+  (let [type+trigger (message-type-registry :merge)
+        ts (hl7-timestamp reference-date t utc-offset)
+        facility-name (name (:id facility))
+        control-id (str surviving-mrn "-" (:trigger type+trigger) "-" t)]
+    (parser/str-message
+     (parser/create-message
+      parser/DEFAULT-DELIMITERS
+      (msh-segment type+trigger control-id ts)
+      (evn-segment (:trigger type+trigger) ts)
+      (pid-segment surviving-mrn)
+      (pv1-segment facility-name nil nil nil)
+      (mrg-segment merged-mrn)))))
+
+(defn event->messages
+  "Renders one ground-truth event to a vector of 0+ ER7 message strings
+  -- most types render exactly one message; M2b's genuinely two-
+  participant types (:bed-swap A17, :merge A40) still render exactly
+  ONE message (both patients' data in one message, the real HL7 shape),
+  so this is 0-or-1 for every type today, but returns a vector (not a
+  single nilable message) since a future many-messages-per-event type
+  is now a shape this stage already accommodates. Events outside
+  `message-type-registry` render an empty vector, not an error."
+  [reference-date utc-offset facility providers {:keys [event] :as ev}]
+  (cond
+    (not (message-type-registry event)) []
+    (= :bed-swap event) [(bed-swap-message reference-date utc-offset facility providers ev)]
+    (= :merge event) [(merge-message reference-date utc-offset facility providers ev)]
+    :else [(single-subject-message reference-date utc-offset facility providers ev)]))
 
 (def ^:private default-providers
   "A fixed, arbitrary reference-seed provider pool -- purely a fallback
@@ -4706,7 +5167,7 @@ M2a scope.
   ([ground-truth reference-date utc-offset]
    (emit ground-truth reference-date utc-offset config/default-facility default-providers))
   ([ground-truth reference-date utc-offset facility providers]
-   (into [] (keep (partial event->message reference-date utc-offset facility providers)) ground-truth)))
+   (into [] (mapcat (partial event->messages reference-date utc-offset facility providers)) ground-truth)))
 
 ========== END FILE ==========
 
@@ -4774,6 +5235,7 @@ M2a scope.
   log -- events here are format-free."
   (:require [ehr-testing-sim.pathway :as pathway]
             [ehr-testing-sim.config :as config]
+            [ehr-testing-sim.churn :as churn]
             [ehr-testing-sim.facility :as facility]
             [malli.core :as m])
   (:import [java.util Random]))
@@ -4793,7 +5255,7 @@ M2a scope.
    [:patient-id :string]
    [:mrns [:set :string]]
    [:active-mrn :string]
-   [:status [:enum :new :admitted :discharged]]
+   [:status [:enum :new :admitted :discharged :merged]]
    [:class {:optional true} [:enum :inpatient :emergency :outpatient
                               :preadmit :recurring :obstetrics]]
    [:home-ward {:optional true} [:maybe :string]]
@@ -4875,18 +5337,31 @@ M2a scope.
   deterministic event ordering)."
   (fn [_rng _t _world _patient-id step] (:type step)))
 
+(defn- exhausted-outcome
+  "Task 0: result-not-throw for allocation-ladder exhaustion --
+  facility/allocate no longer throws, so decide translates its
+  structured {:exhausted true} into a decide-level outcome the run loop
+  halts on and run-command (ehr-testing-sim.run) surfaces as :error
+  :capacity-exhausted, payload {:patient-id :ward :census}."
+  [patient-id home-ward-name facility board]
+  {:events [] :advance 0
+   :exhausted {:patient-id patient-id :ward home-ward-name
+               :census (facility/ward-census facility board)}})
+
 (defmethod decide :admission
   [rng t world patient-id {:keys [location reason force-placement]}]
   (let [{:keys [facility providers patients]} world
         board (facility/occupancy-board patients)
-        {:keys [home-ward] :as alloc} (facility/allocate rng facility board location force-placement)
-        ward-id (:id (facility/ward-by-name facility home-ward))
-        attending (facility/choose-attending rng providers ward-id)
-        active-mrn (get-in patients [patient-id :active-mrn])]
-    {:events [(merge {:event :admission :t t :active-mrn active-mrn :reason reason :attending attending
-                      :participants [{:patient-id patient-id :role :subject}]}
-                     alloc)]
-     :advance 0}))
+        alloc (facility/allocate rng facility board location force-placement)]
+    (if (:exhausted alloc)
+      (exhausted-outcome patient-id location facility board)
+      (let [ward-id (:id (facility/ward-by-name facility (:home-ward alloc)))
+            attending (facility/choose-attending rng providers ward-id)
+            active-mrn (get-in patients [patient-id :active-mrn])]
+        {:events [(merge {:event :admission :t t :active-mrn active-mrn :reason reason :attending attending
+                          :participants [{:patient-id patient-id :role :subject}]}
+                         alloc)]
+         :advance 0}))))
 
 (defmethod decide :delay
   [rng _t _world _patient-id {:keys [from to]}]
@@ -4903,11 +5378,13 @@ M2a scope.
         board (facility/occupancy-board patients)
         patient (get patients patient-id)
         alloc (facility/allocate rng facility board location force-placement)]
-    {:events [(merge {:event :transfer :t t :active-mrn (:active-mrn patient) :from (:location patient)
-                      :attending (:attending patient) :bed-ready false
-                      :participants [{:patient-id patient-id :role :subject}]}
-                     alloc)]
-     :advance 0}))
+    (if (:exhausted alloc)
+      (exhausted-outcome patient-id location facility board)
+      {:events [(merge {:event :transfer :t t :active-mrn (:active-mrn patient) :from (:location patient)
+                        :attending (:attending patient) :bed-ready false
+                        :participants [{:patient-id patient-id :role :subject}]}
+                       alloc)]
+       :advance 0})))
 
 (defmethod decide :discharge
   [_rng t world patient-id _step]
@@ -4938,6 +5415,131 @@ M2a scope.
                       :participants [{:patient-id waiting-id :role :subject}]}))
      :advance 0}))
 
+;; --- M2b: churn family (docs/patient-state-model.md's event-validity
+;; table; docs/event-sourcing.md's shadow-field dissolution) ---------------
+
+(defn- last-uncancelled-index
+  "Index into `ground-truth` of the most recent `event-type` event
+  naming `patient-id` that is NOT already the target of an earlier
+  `cancel-type` event -- the applicability query the event-validity
+  table's cancel-* row asks ('the event class being cancelled must
+  exist in this patient's log and not already be cancelled'). nil when
+  no such event exists, which decide turns into a structured rejection
+  rather than a throw."
+  [ground-truth patient-id event-type cancel-type]
+  (let [already-cancelled (into #{}
+                                (comp (filter #(= cancel-type (:event %)))
+                                      (map :cancels-event-id))
+                                ground-truth)]
+    (last (keep-indexed (fn [i ev]
+                          (when (and (= event-type (:event ev))
+                                     (some #(= patient-id (:patient-id %)) (:participants ev))
+                                     (not (already-cancelled i)))
+                            i))
+                        ground-truth))))
+
+(defn- rejected-outcome
+  [reason patient-id extra]
+  {:events [] :advance 0 :rejected (merge {:reason reason :patient-id patient-id} extra)})
+
+(defmethod decide :cancel-admit
+  [_rng t world patient-id _step]
+  (let [ground-truth (:ground-truth world)
+        idx (last-uncancelled-index ground-truth patient-id :admission :cancel-admit)]
+    (if (nil? idx)
+      (rejected-outcome :illegal-cancel-admit patient-id nil)
+      (let [patient (get-in world [:patients patient-id])]
+        {:events [{:event :cancel-admit :t t :active-mrn (:active-mrn patient)
+                   :cancels-event-id idx
+                   :participants [{:patient-id patient-id :role :subject}]}]
+         :advance 0}))))
+
+(defmethod decide :transfer-in-error
+  [rng t world patient-id {:keys [location force-placement]}]
+  (let [{:keys [facility patients ground-truth]} world
+        board (facility/occupancy-board patients)
+        patient (get patients patient-id)
+        alloc (facility/allocate rng facility board location force-placement)]
+    (if (:exhausted alloc)
+      (exhausted-outcome patient-id location facility board)
+      ;; Both events are decided ATOMICALLY, in the same decide call --
+      ;; the transfer, then its own immediate correction (A12, in-error).
+      ;; The cancel's reinstated home-ward/location come straight off the
+      ;; CURRENT (pre-transfer) patient state, not a log query: there is
+      ;; no intervening event for anything to have queried yet.
+      (let [transfer-idx (count ground-truth)
+            transfer-event (merge {:event :transfer :t t :active-mrn (:active-mrn patient) :from (:location patient)
+                                    :attending (:attending patient) :bed-ready false
+                                    :participants [{:patient-id patient-id :role :subject}]}
+                                   alloc)
+            cancel-event {:event :cancel-transfer :t t :active-mrn (:active-mrn patient)
+                          :cancels-event-id transfer-idx :in-error true
+                          :home-ward (:home-ward patient) :location (:location patient)
+                          :participants [{:patient-id patient-id :role :subject}]}]
+        {:events [transfer-event cancel-event] :advance 0}))))
+
+(defn- uniform-choice
+  [^Random rng candidates]
+  (nth candidates (.nextInt rng (count candidates))))
+
+(defmethod decide :bed-swap
+  [rng t world patient-id {:keys [with]}]
+  (let [{:keys [patients]} world
+        self (get patients patient-id)
+        eligible (->> patients
+                     (remove (fn [[pid _]] (= pid patient-id)))
+                     (filter (fn [[_ p]] (and (= :admitted (:status p)) (some? (:location p)))))
+                     (mapv first))
+        peer-id (cond
+                  with with
+                  (seq eligible) (uniform-choice rng eligible)
+                  :else nil)
+        peer (get patients peer-id)]
+    (if (or (nil? peer-id) (nil? peer) (not= :admitted (:status peer)) (nil? (:location peer)))
+      (rejected-outcome :illegal-bed-swap patient-id {:with with})
+      {:events [{:event :bed-swap :t t
+                 :participants [{:patient-id patient-id :role :subject}
+                                {:patient-id peer-id :role :subject}]
+                 :swap {patient-id {:active-mrn (:active-mrn self) :from (:location self)
+                                    :to (:location peer) :attending (:attending self)}
+                        peer-id {:active-mrn (:active-mrn peer) :from (:location peer)
+                                :to (:location self) :attending (:attending peer)}}}]
+       :advance 0})))
+
+(defmethod decide :merge
+  [rng t world patient-id {:keys [with]}]
+  (let [{:keys [patients ground-truth]} world
+        survivor (get patients patient-id)
+        ;; :new (never admitted -- no :admission event exists yet for
+        ;; participant-ids-exist-in-run to find) and :merged (already
+        ;; merged away) are never legal merge targets, dynamically
+        ;; picked OR explicitly named via :with.
+        never-mergeable? (fn [p] (#{:new :merged} (:status p)))
+        eligible (->> patients
+                     (remove (fn [[pid _]] (= pid patient-id)))
+                     (remove (fn [[_ p]] (never-mergeable? p)))
+                     (mapv first))
+        merged-id (cond
+                    with with
+                    (seq eligible) (uniform-choice rng eligible)
+                    :else nil)
+        merged (get patients merged-id)
+        already-merged? (some (fn [ev]
+                                (and (= :merge (:event ev))
+                                     (some #(and (= :merged (:role %)) (= merged-id (:patient-id %)))
+                                           (:participants ev))))
+                              ground-truth)]
+    (if (or (nil? merged-id) (= patient-id merged-id) (nil? merged)
+            (never-mergeable? merged) already-merged?)
+      (rejected-outcome :illegal-merge patient-id {:with with})
+      {:events [{:event :merge :t t
+                 :participants [{:patient-id patient-id :role :survivor}
+                                {:patient-id merged-id :role :merged}]
+                 :surviving-mrn (:active-mrn survivor)
+                 :merged-mrn (:active-mrn merged)
+                 :merged-mrns (:mrns merged)}]
+       :advance 0})))
+
 (defmulti evolve
   "Folds one ground-truth event into ONE patient it names:
   (patient-state, event) -> patient-state'. Pure and total: no RNG, no
@@ -4966,6 +5568,31 @@ M2a scope.
 (defmethod evolve :discharge
   [patient _event]
   (assoc patient :status :discharged :location nil))
+
+;; --- M2b: churn family evolves -------------------------------------------
+
+(defmethod evolve :cancel-admit
+  [patient _event]
+  (-> patient (assoc :status :new) (dissoc :class :home-ward :location :attending :admitted-at)))
+
+(defmethod evolve :cancel-transfer
+  [patient {:keys [home-ward location]}]
+  (assoc patient :home-ward home-ward :location location))
+
+(defmethod evolve :cancel-discharge
+  [patient {:keys [home-ward location attending]}]
+  (assoc patient :status :admitted :home-ward home-ward :location location :attending attending))
+
+(defmethod evolve :bed-swap
+  [patient {:keys [swap]}]
+  (assoc patient :location (get-in swap [(:patient-id patient) :to])))
+
+(defmethod evolve :merge
+  [patient {:keys [participants surviving-mrn merged-mrns]}]
+  (let [role (:role (first (filter #(= (:patient-id patient) (:patient-id %)) participants)))]
+    (case role
+      :survivor (-> patient (update :mrns into merged-mrns) (assoc :active-mrn surviving-mrn))
+      :merged (assoc patient :status :merged))))
 
 (defn replay
   "Replays `ground-truth` through `evolve`, returning a parallel seq of
@@ -4997,6 +5624,57 @@ M2a scope.
                (conj! acc {:event event :patient-id subject-id
                            :before (get patients subject-id) :after (get patients' subject-id)
                            :world-before patients :world-after patients'}))))))
+
+;; --- M2b cancel-transfer/cancel-discharge: defined here, AFTER `replay`,
+;; because their decide methods query it directly (docs/patient-state-
+;; model.md's shadow-field dissolution: the reinstated prior state is
+;; QUERIED FROM THE LOG at decide-time, never a field the accumulator
+;; carries for this purpose alone).
+
+(defn- bed-reoccupied-by-someone-else?
+  "Whether `location`'s bed is CURRENTLY held by a patient other than
+  `patient-id` -- the reinstatement guard cancel-transfer/cancel-
+  discharge both need: the log-derived prior location was free WHEN it
+  was vacated, but time has passed since, and another patient's own
+  allocation (a later admission, a bed-ready transfer) may have
+  legitimately claimed it in the meantime. Reinstating into an
+  occupied bed would violate no-double-occupancy, so this is checked
+  against the LIVE occupancy board (world, not the log) at decide-time
+  -- the same board :admission/:transfer already consult."
+  [world patient-id location]
+  (when-let [bed (:bed location)]
+    (let [occupant (get (facility/occupancy-board (:patients world)) bed)]
+      (and (some? occupant) (not= occupant patient-id)))))
+
+(defmethod decide :cancel-transfer
+  [_rng t world patient-id _step]
+  (let [ground-truth (:ground-truth world)
+        idx (last-uncancelled-index ground-truth patient-id :transfer :cancel-transfer)]
+    (if (nil? idx)
+      (rejected-outcome :illegal-cancel-transfer patient-id nil)
+      (let [patient (get-in world [:patients patient-id])
+            {:keys [home-ward location]} (:before (nth (replay ground-truth) idx))]
+        (if (bed-reoccupied-by-someone-else? world patient-id location)
+          (rejected-outcome :illegal-cancel-transfer-bed-reoccupied patient-id {:location location})
+          {:events [{:event :cancel-transfer :t t :active-mrn (:active-mrn patient)
+                     :cancels-event-id idx :home-ward home-ward :location location
+                     :participants [{:patient-id patient-id :role :subject}]}]
+           :advance 0})))))
+
+(defmethod decide :cancel-discharge
+  [_rng t world patient-id _step]
+  (let [ground-truth (:ground-truth world)
+        idx (last-uncancelled-index ground-truth patient-id :discharge :cancel-discharge)]
+    (if (nil? idx)
+      (rejected-outcome :illegal-cancel-discharge patient-id nil)
+      (let [patient (get-in world [:patients patient-id])
+            {:keys [home-ward location attending]} (:before (nth (replay ground-truth) idx))]
+        (if (bed-reoccupied-by-someone-else? world patient-id location)
+          (rejected-outcome :illegal-cancel-discharge-bed-reoccupied patient-id {:location location})
+          {:events [{:event :cancel-discharge :t t :active-mrn (:active-mrn patient)
+                     :cancels-event-id idx :home-ward home-ward :location location :attending attending
+                     :participants [{:patient-id patient-id :role :subject}]}]
+           :advance 0})))))
 
 (defn- pop-min
   "Removes and returns the earliest queue entry. Queue is a sorted-map
@@ -5034,6 +5712,20 @@ M2a scope.
     :facility         facility config (default config/default-facility)
     :providers        provider templates (default config/default-provider-templates;
                        NPIs are generated from THIS run's seed -- ADR-0007)
+    :churn-profile    ehr-testing-sim.churn/ChurnProfile map (default nil
+                       -- churn OFF). M2b: when present, InjectChurn runs
+                       ONCE PER PATIENT (in arrival-ordinal order, a fixed
+                       point in the draw sequence) against THIS run's own
+                       `rng` -- not a derived/isolated stream, same
+                       reasoning ADR-0009 gives for NPI generation --
+                       between building each patient's step queue and the
+                       main loop. Absent entirely (not merely all-zero),
+                       this stage never runs and consumes no RNG: the
+                       reason a config with no :churn-profile key
+                       reproduces byte-identical pre-M2b output (the
+                       pinned fixture; churn is opt-in, ADR-0009's
+                       accept-and-record policy doesn't even apply here
+                       since nothing about this path changed).
 
   Returns {:ground-truth [event ...] :state-history {patient-id [state
   ...]} :facility .. :providers [materialized-provider ...]}. The
@@ -5051,7 +5743,7 @@ M2a scope.
   rather than assumed; the engine computes it as a byproduct of the
   loop below because decide needs live world state to make its next
   decision, not because it's a second source of truth."
-  [{:keys [seed patients pathway arrival-gap warm-up-seconds facility providers]
+  [{:keys [seed patients pathway arrival-gap warm-up-seconds facility providers churn-profile]
     :or {patients 1
          pathway pathway/sample-admission-discharge
          arrival-gap 60
@@ -5073,47 +5765,95 @@ M2a scope.
                                                   #(* 60 (rand-int-in rng 0 arrival-gap)))))
         mrn-for (fn [i] (format "MRN%06d" (inc i)))
         pid-for (fn [i] (patient-id-for seed i))
+        ;; InjectChurn (M2b): ONLY when :churn-profile is actually
+        ;; present does this stage run at all -- absent, `steps-for` is
+        ;; a no-op and consumes no RNG (see the docstring's fixture note).
+        steps-for (if churn-profile
+                    (fn [_i] (:steps (churn/inject pathway churn-profile rng)))
+                    (fn [_i] (:steps pathway)))
         init-queue (into (sorted-map)
                          (map-indexed
                           (fn [i arrival-t]
                             [[arrival-t i]
-                             {:patient-id (pid-for i) :steps (:steps pathway)}])
+                             {:patient-id (pid-for i) :steps (steps-for i)}])
                           arrivals))
         init-world {:patients (into {} (map-indexed (fn [i _] [(pid-for i) (initial-patient (pid-for i) (mrn-for i))]))
                                     arrivals)
                     :facility facility
-                    :providers materialized-providers}
-        mark-warmup (fn [ev] (assoc ev :warm-up (< (:t ev) warm-up-seconds)))]
+                    :providers materialized-providers
+                    ;; Task 1 (M2b): cancel-family/transfer-in-error decide
+                    ;; methods query the log directly for the event they
+                    ;; reinstate from (docs/patient-state-model.md's
+                    ;; shadow-field dissolution) -- a PERSISTENT mirror of
+                    ;; the log-so-far, kept alongside (not instead of) the
+                    ;; transient `ground-truth` accumulator below so decide
+                    ;; can `nth`/`filter`/`keep-indexed` over it (transients
+                    ;; aren't seqable). Always a prefix of the final log.
+                    :ground-truth []}
+        mark-warmup (fn [ev] (assoc ev :warm-up (< (:t ev) warm-up-seconds)))
+        final-result (fn [ground-truth state-history extra]
+                       (merge {:ground-truth (persistent! ground-truth)
+                               :state-history state-history
+                               :facility facility
+                               :providers materialized-providers}
+                              extra))]
     (loop [queue init-queue
            seq-no patients
            world init-world
            ground-truth (transient [])
            state-history {}]
       (if (empty? queue)
-        {:ground-truth (persistent! ground-truth)
-         :state-history state-history
-         :facility facility
-         :providers materialized-providers}
+        (final-result ground-truth state-history nil)
         (let [[[t _] {:keys [patient-id steps]} queue'] (pop-min queue)
-              [step & remaining] steps
-              {:keys [events advance]} (decide rng t world patient-id step)
-              events (mapv mark-warmup events)
-              world' (reduce (fn [w ev]
-                                (reduce (fn [w2 {:keys [patient-id]}]
-                                          (update-in w2 [:patients patient-id] evolve ev))
-                                        w (:participants ev)))
-                              world events)
-              ground-truth' (reduce conj! ground-truth events)
-              state-history' (reduce (fn [sh ev]
-                                        (reduce (fn [sh2 {:keys [patient-id]}]
-                                                  (update sh2 patient-id (fnil conj [])
-                                                          (get-in world' [:patients patient-id])))
-                                                sh (:participants ev)))
-                                      state-history events)]
-          (if (seq remaining)
-            (recur (assoc queue' [(+ t advance) seq-no] {:patient-id patient-id :steps (vec remaining)})
-                   (inc seq-no) world' ground-truth' state-history')
-            (recur queue' seq-no world' ground-truth' state-history')))))))
+              [step & remaining] steps]
+          (if (= :merged (get-in world [:patients patient-id :status]))
+            ;; M2b: a merge (decided while processing a DIFFERENT
+            ;; patient's step -- the survivor's) can end this patient-
+            ;; id's stream mid-pathway, asynchronously to their own
+            ;; queue. "The merged patient-id's stream ends with a
+            ;; terminal merged-into event" (docs/patient-state-model.md)
+            ;; means exactly this: their own remaining queued steps are
+            ;; abandoned here, never decided, never emitting further
+            ;; events -- the run loop's own enforcement of
+            ;; no-events-after-merged-terminal, not just a check.clj
+            ;; invariant asserted after the fact.
+            (recur queue' seq-no world ground-truth state-history)
+            (let [{:keys [events advance exhausted]} (decide rng t world patient-id step)]
+              ;; A :rejected decide outcome (an illegal cancel/bed-swap/
+              ;; merge -- Task 1's validity-table enforcement) is NOT a
+              ;; run-halting condition, unlike :exhausted: it means THIS
+              ;; one step doesn't happen (already :events [] :advance 0),
+              ;; not that the simulation can no longer proceed at all.
+              ;; This matters for InjectChurn (M2b): a churned step can be
+              ;; legal when INSERTED (per the applicability oracle, a
+              ;; static analysis) yet collide with live world state by
+              ;; the time it actually executes (e.g. a bed a cancel-
+              ;; discharge would reinstate into has since been reclaimed
+              ;; by someone else's admission) -- that step is simply
+              ;; skipped, and the patient's OWN remaining steps proceed
+              ;; normally. check.clj remains the independent safety net
+              ;; for any log, authored or generated.
+              (cond
+                exhausted (final-result ground-truth state-history {:exhausted exhausted})
+                :else
+            (let [events (mapv mark-warmup events)
+                  world' (reduce (fn [w ev]
+                                    (reduce (fn [w2 {:keys [patient-id]}]
+                                              (update-in w2 [:patients patient-id] evolve ev))
+                                            w (:participants ev)))
+                                  world events)
+                  world'' (assoc world' :ground-truth (into (:ground-truth world) events))
+                  ground-truth' (reduce conj! ground-truth events)
+                  state-history' (reduce (fn [sh ev]
+                                            (reduce (fn [sh2 {:keys [patient-id]}]
+                                                      (update sh2 patient-id (fnil conj [])
+                                                              (get-in world' [:patients patient-id])))
+                                                    sh (:participants ev)))
+                                          state-history events)]
+              (if (seq remaining)
+                (recur (assoc queue' [(+ t advance) seq-no] {:patient-id patient-id :steps (vec remaining)})
+                       (inc seq-no) world'' ground-truth' state-history')
+                (recur queue' seq-no world'' ground-truth' state-history')))))))))))
 
 ========== END FILE ==========
 
@@ -5193,11 +5933,33 @@ M2a scope.
     :else (throw (ex-info "force-placement bed is not a valid id for this ward"
                           {:ward (:name ward) :bed bed}))))
 
+(defn ward-census
+  "A snapshot of every ward's occupancy against its declared capacity
+  (licensed + surge), keyed by ward name -- the diagnostic payload
+  Task 0's capacity-exhausted outcome carries (result-not-throw:
+  ehr-testing-tools' allocate no longer throws when every ladder rung
+  is exhausted, docs/clinical-realities.md's ED-diversion stub)."
+  [facility board]
+  (into {}
+        (map (fn [ward]
+               (let [slots (into #{} (concat (licensed-bed-ids ward) (surge-slot-ids ward)))]
+                 [(:name ward)
+                  {:occupied (count (filter slots (keys board)))
+                   :capacity (+ (:beds ward) (:surge-slots ward))}])))
+        (:wards facility)))
+
 (defn allocate
   "The four-rung allocation ladder (docs/operational-models.md), seeded
   within each rung. `force-placement` (optional `{:ward :bed}`)
   overrides the ladder outright and draws no RNG. Returns
-  {:home-ward :location {:ward :bed :placement} :forced}."
+  {:home-ward :location {:ward :bed :placement} :forced}, or, when
+  every rung is legitimately exhausted, {:exhausted true :home-ward
+  home-ward-name} -- result-not-throw (Task 0): callers (engine/decide)
+  turn this into a structured outcome rather than catching an
+  exception. No RNG draw occurs on the exhausted path, same as the
+  exception it replaces -- exhaustion is discovered before any `choose`
+  call, so this change does not alter RNG consumption for any run that
+  doesn't actually exhaust the facility."
   [rng facility board home-ward-name force-placement]
   (if force-placement
     (let [{:keys [ward bed]} force-placement
@@ -5237,8 +5999,7 @@ M2a scope.
                   {:home-ward home-ward-name
                    :location {:ward (:name w) :bed b :placement :surge}
                    :forced false})
-                (throw (ex-info "facility exhausted: no bed available at any ladder rung"
-                                {:home-ward home-ward-name}))))))))))
+                {:exhausted true :home-ward home-ward-name}))))))))
 
 (defn choose-attending
   "Seeded uniform sample among providers eligible for `ward-id` (a
@@ -5379,7 +6140,32 @@ M2a scope.
    [:transfer [:map
                [:type [:= :transfer]]
                [:location :string]
-               [:force-placement {:optional true} ForcePlacement]]]])
+               [:force-placement {:optional true} ForcePlacement]]]
+   ;; --- M2b churn family (docs/patient-state-model.md's event-validity
+   ;; table; ADR-0010's :participants). Cancel-* steps name no target
+   ;; explicitly -- decide finds the most recent uncancelled event of the
+   ;; class being cancelled in THIS patient's own log (docs/patient-
+   ;; state-model.md's deterministic-event-id section), the same way
+   ;; :discharge's bed-ready coupling already finds its target implicitly
+   ;; rather than being told.
+   [:cancel-admit [:map [:type [:= :cancel-admit]]]]
+   [:cancel-transfer [:map [:type [:= :cancel-transfer]]]]
+   [:cancel-discharge [:map [:type [:= :cancel-discharge]]]]
+   ;; A transfer immediately followed by its own A12, in-error marked
+   ;; (docs/patient-state-model.md) -- one IR step, decide emits both
+   ;; events atomically.
+   [:transfer-in-error [:map
+                        [:type [:= :transfer-in-error]]
+                        [:location :string]
+                        [:force-placement {:optional true} ForcePlacement]]]
+   ;; Genuinely two-participant (ADR-0010). `:with` is the scripted-
+   ;; authoring escape hatch (same precedent as :force-placement) naming
+   ;; the peer patient-id explicitly; omitted, decide picks a uniformly
+   ;; seeded eligible peer from `world` -- the same "decide resolves the
+   ;; target dynamically" shape the bed-ready transfer already uses, so
+   ;; InjectChurn (M2b) can insert these without knowing patient-ids.
+   [:bed-swap [:map [:type [:= :bed-swap]] [:with {:optional true} :string]]]
+   [:merge [:map [:type [:= :merge]] [:with {:optional true} :string]]]])
 
 (def Pathway
   [:map
@@ -5475,6 +6261,7 @@ M2a scope.
   was actually generated with."
   (:require [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.check :as check]
+            [ehr-testing-sim.churn :as churn]
             [ehr-testing-sim.emit-hl7 :as emit-hl7]
             [ehr-testing-sim.manifest :as manifest]
             [ehr-testing-sim.result :as result]))
@@ -5490,8 +6277,18 @@ M2a scope.
   its own output (a run that violates its own invariants is an :error
   -- a bug in us, not a legitimate rejection), and returns
   {:ground-truth [...] :manifest {...} :summary {...}
-   :messages [...]}} (:messages present only when :emit is \"hl7\")."
-  [{:keys [seed patients emit reference-date utc-offset warm-up-seconds] :as opts}]
+   :messages [...]}} (:messages present only when :emit is \"hl7\").
+
+  M2b: `:churn` (bare boolean, \"turn churn on with sensible defaults\"
+  -- ehr-testing-sim.churn/sample-profile) or `:churn-profile` (an
+  explicit ehr-testing-sim.churn/ChurnProfile map, merged OVER
+  churn/default-churn-profile so a caller only needs to name the rates
+  they want to change) activates InjectChurn between IR and execution
+  (ehr-testing-sim.engine/run's own :churn-profile wiring). Neither
+  key present -- the default -- means no :churn-profile reaches
+  engine/run at all, the opt-in path Task 0's pinned-fixture
+  expectation depends on."
+  [{:keys [seed patients emit reference-date utc-offset warm-up-seconds churn churn-profile] :as opts}]
   (if (nil? seed)
     (result/error :missing-required-opt
                   {:message "--seed is required (determinism is a feature, not a default)"
@@ -5499,14 +6296,20 @@ M2a scope.
     (let [reference-date (or reference-date emit-hl7/default-reference-date)
           utc-offset (or utc-offset emit-hl7/default-utc-offset)
           warm-up-seconds (or warm-up-seconds 0)
+          effective-churn-profile (cond
+                                    churn-profile (merge churn/default-churn-profile churn-profile)
+                                    churn churn/sample-profile
+                                    :else nil)
           engine-params (-> (select-keys opts [:patients :arrival-gap :warm-up-seconds])
                              (assoc :reference-date reference-date :utc-offset utc-offset))
-          {:keys [ground-truth facility providers]}
-          (engine/run (merge {:seed seed}
+          {:keys [ground-truth facility providers exhausted]}
+          (engine/run (merge {:seed seed :churn-profile effective-churn-profile}
                              (select-keys opts [:patients :arrival-gap :facility :providers :warm-up-seconds])))
-          checked (check/check-all ground-truth facility warm-up-seconds)]
-      (if-not (result/ok? checked)
-        (result/error :self-check-failed (:payload checked))
+          checked (when-not exhausted (check/check-all ground-truth facility warm-up-seconds))]
+      (cond
+        exhausted (result/error :capacity-exhausted exhausted)
+        (not (result/ok? checked)) (result/error :self-check-failed (:payload checked))
+        :else
         (result/ok
          (cond-> {:ground-truth ground-truth
                   :manifest (manifest/build {:seed seed
@@ -5673,6 +6476,82 @@ M2a scope.
     (testing "a nonzero window actually marks at least one early event for this seed"
       (is (some :warm-up ground-truth)))))
 
+;; --- M2b: churn family invariants (co-landed with the step types) ------
+
+(deftest cancel-references-existing-uncancelled-event-detects-phantom-target
+  (let [log [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             ;; :cancels-event-id 5 doesn't exist in this log at all.
+             {:event :cancel-admit :t 10 :cancels-event-id 5 :participants (subject "P1")}]]
+    (is (seq (check/cancel-references-existing-uncancelled-event log)))))
+
+(deftest cancel-references-existing-uncancelled-event-detects-wrong-type
+  (let [log [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             ;; cancel-DISCHARGE pointed at an :admission event -- type mismatch.
+             {:event :cancel-discharge :t 10 :cancels-event-id 0 :participants (subject "P1")}]]
+    (is (seq (check/cancel-references-existing-uncancelled-event log)))))
+
+(deftest cancel-references-existing-uncancelled-event-detects-double-cancel
+  (let [log [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             {:event :cancel-admit :t 10 :cancels-event-id 0 :participants (subject "P1")}
+             {:event :cancel-admit :t 20 :cancels-event-id 0 :participants (subject "P1")}]]
+    (is (seq (check/cancel-references-existing-uncancelled-event log)))))
+
+(deftest cancel-references-existing-uncancelled-event-holds-for-legit-cancel
+  (let [log [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             {:event :cancel-admit :t 10 :cancels-event-id 0 :participants (subject "P1")}]]
+    (is (empty? (check/cancel-references-existing-uncancelled-event log)))))
+
+(deftest bed-swap-both-admitted-before-swap-detects-a-non-admitted-participant
+  (let [log [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             ;; P2 was never admitted.
+             {:event :bed-swap :t 10
+              :participants [{:patient-id "P1" :role :subject} {:patient-id "P2" :role :subject}]
+              :swap {"P1" {:from {:ward "Renal" :bed "RENAL-01" :placement :licensed} :to nil}
+                     "P2" {:from nil :to {:ward "Renal" :bed "RENAL-01" :placement :licensed}}}}]]
+    (is (seq (check/bed-swap-both-admitted-before-swap log)))))
+
+(deftest bed-swap-both-admitted-before-swap-holds-for-legit-swap
+  (let [log [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             {:event :admission :t 5 :home-ward "Renal" :participants (subject "P2")
+              :location {:ward "Renal" :bed "RENAL-H01" :placement :surge}}
+             {:event :bed-swap :t 10
+              :participants [{:patient-id "P1" :role :subject} {:patient-id "P2" :role :subject}]
+              :swap {"P1" {:from {:ward "Renal" :bed "RENAL-01" :placement :licensed}
+                          :to {:ward "Renal" :bed "RENAL-H01" :placement :surge}}
+                     "P2" {:from {:ward "Renal" :bed "RENAL-H01" :placement :surge}
+                          :to {:ward "Renal" :bed "RENAL-01" :placement :licensed}}}}]]
+    (is (empty? (check/bed-swap-both-admitted-before-swap log)))))
+
+(def ^:private legit-merge-log
+  [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+    :active-mrn "MRN000001" :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+   {:event :admission :t 5 :home-ward "Renal" :participants (subject "P2")
+    :active-mrn "MRN000002" :location {:ward "Renal" :bed "RENAL-H01" :placement :surge}}
+   {:event :merge :t 10
+    :participants [{:patient-id "P1" :role :survivor} {:patient-id "P2" :role :merged}]
+    :surviving-mrn "MRN000001" :merged-mrn "MRN000002" :merged-mrns #{"MRN000002"}}])
+
+(deftest merge-survivor-absorbs-merged-mrns-holds-for-legit-merge
+  (is (empty? (check/merge-survivor-absorbs-merged-mrns legit-merge-log))))
+
+(deftest merge-survivor-absorbs-merged-mrns-detects-wrong-active-mrn
+  (let [log (update-in legit-merge-log [2] assoc :surviving-mrn "MRN999999")]
+    (is (seq (check/merge-survivor-absorbs-merged-mrns log)))))
+
+(deftest no-events-after-merged-terminal-holds-for-legit-log
+  (is (empty? (check/no-events-after-merged-terminal legit-merge-log))))
+
+(deftest no-events-after-merged-terminal-detects-a-zombie-event
+  (let [log (conj legit-merge-log
+                  {:event :discharge :t 20 :participants (subject "P2")})]
+    (is (seq (check/no-events-after-merged-terminal log)))))
+
 ;; --- check-all: facility-aware, backward-compatible arity ---------------
 
 (deftest check-all-defaults-facility-when-omitted
@@ -5688,6 +6567,299 @@ M2a scope.
                                      :surge-format "%s-H%02d" :class :inpatient}]}
           {:keys [ground-truth]} (engine/run {:seed seed :patients patients :facility facility})]
       (result/ok? (check/check-all ground-truth facility)))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/churn_scenarios_test.clj ==========
+(ns ehr-testing-sim.churn-scenarios-test
+  "M2b's scripted regression fleet: authored, hand-driven scenarios
+  exercising the compound cases the catalog names --
+  docs/clinical-realities.md's newborn-merge entry (merge-while-
+  boarding), transfer-in-error then cancel-then-retransfer, and a
+  bed-swap between a licensed and a surge occupant. Each scenario
+  asserts the EXACT ground-truth event sequence AND the exact rendered
+  HL7v2 message sequence, not just that some invariant holds -- these
+  are regression fixtures, driving decide/evolve directly (the same
+  scripted-two-patient pattern ehr-testing-sim.engine-test's
+  bed-ready-transfer-scripted-two-patients already established, since
+  ehr-testing-sim.engine/run has no per-patient pathway mechanism for
+  authoring a SPECIFIC two-patient interaction -- decide/evolve driven
+  by hand IS the authored pathway here)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.emit-hl7 :as emit-hl7]
+            [com.nervestaple.hl7-parser.parser :as parser]
+            [com.nervestaple.hl7-parser.message :as message])
+  (:import [java.util Random]))
+
+(def ^:private ref-date "2024-01-01")
+(def ^:private utc-offset "+00:00")
+
+(def ^:private one-bed-one-surge-facility
+  "Renal: exactly one licensed bed and one surge slot -- a second
+  admission takes the surge slot (bed-swap fixture); a THIRD admission
+  boards in ED (merge-while-boarding fixture)."
+  {:id :scenario-fleet
+   :wards [{:id :ed :name "ED" :beds 0 :surge-slots 4
+            :surge-format "%s-H%02d" :class :ed}
+           {:id :renal :name "Renal" :beds 1 :surge-slots 1
+            :surge-format "%s-H%02d" :class :inpatient}]})
+
+(def ^:private providers
+  [{:id "1234567893" :name {:family "Chen" :given "A"} :role :attending
+    :specialty "Nephrology" :wards [:renal :ed]}])
+
+(defn- world-of
+  [patients]
+  {:patients patients :facility one-bed-one-surge-facility :providers providers :ground-truth []})
+
+(defn- fold-events
+  [world events]
+  (-> (reduce (fn [w ev]
+                (reduce (fn [w2 {:keys [patient-id]}]
+                          (update-in w2 [:patients patient-id] engine/evolve ev))
+                        w (:participants ev)))
+              world events)
+      (update :ground-truth into events)))
+
+(defn- step!
+  "Decides+folds `step` for `patient-id` at `t`, asserting it neither
+  exhausted nor rejected (a scripted scenario's own steps are all meant
+  to be legal) -- returns the updated world."
+  [world t patient-id step]
+  (let [{:keys [events exhausted rejected] :as outcome} (engine/decide (Random. 1) t world patient-id step)]
+    (assert (nil? exhausted) (str "unexpected exhaustion: " exhausted))
+    (assert (nil? rejected) (str "unexpected rejection: " rejected))
+    (fold-events world events)))
+
+(defn- triggers
+  "The ordered A-trigger sequence a ground-truth log renders to, for
+  compact exact-sequence assertions."
+  [ground-truth facility providers]
+  (mapv #(second (re-find #"\^(A\d+)" %))
+        (emit-hl7/emit ground-truth ref-date utc-offset facility providers)))
+
+;; --- Scenario 1: merge-while-boarding --------------------------------------
+;; docs/clinical-realities.md's newborn Babyboy/Babygirl entry: "a natural
+;; churn generator... merge steps get an organic scenario" -- here scripted
+;; directly rather than emerging from a pathway, but the same shape: a
+;; patient created while boarding gets merged into another identity.
+
+(deftest merge-while-boarding
+  ;; Renal has one licensed bed and one surge slot: P1 takes the licensed
+  ;; bed (rung 1), P2 takes the surge slot (rung 2, still home-ward Renal,
+  ;; NOT boarding), and P3 -- with both Renal rungs now exhausted -- boards
+  ;; in ED surge (rung 4: home-ward Renal, physically ED). P3 is then
+  ;; merged into P1 while still boarding.
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
+                          "P2" (engine/initial-patient "P2" "MRN000002")
+                          "P3" (engine/initial-patient "P3" "MRN000003")})
+        world1 (-> world0
+                  (step! 0 "P1" {:type :admission :location "Renal"})   ;; licensed
+                  (step! 5 "P2" {:type :admission :location "Renal"})  ;; surge
+                  (step! 6 "P3" {:type :admission :location "Renal"})) ;; boards (ED)
+        p3-before-merge (get-in world1 [:patients "P3"])
+        _ (testing "sanity: P3 is genuinely boarding at this point"
+            (is (= "Renal" (:home-ward p3-before-merge)))
+            (is (= "ED" (get-in p3-before-merge [:location :ward]))))
+        world2 (step! world1 10 "P1" {:type :merge :with "P3"})
+        survivor (get-in world2 [:patients "P1"])
+        merged (get-in world2 [:patients "P3"])]
+    (testing "exact ground-truth event sequence"
+      (is (= [:admission :admission :admission :merge] (mapv :event (:ground-truth world2)))))
+    (testing "the merged patient was boarding at the moment of merge, and stays merged, not reverted to any prior status"
+      (is (= :merged (:status merged)))
+      (is (= #{"MRN000001" "MRN000003"} (:mrns survivor)))
+      (is (= "MRN000001" (:active-mrn survivor))))
+    (testing "exact rendered message sequence: A01 A01 A01 A40"
+      (is (= ["A01" "A01" "A01" "A40"]
+             (triggers (:ground-truth world2) one-bed-one-surge-facility providers))))
+    (testing "the A40 carries PID=survivor, MRG=merged's prior mrn"
+      (let [a40 (last (emit-hl7/emit (:ground-truth world2) ref-date utc-offset one-bed-one-surge-facility providers))
+            parsed (parser/parse a40)]
+        (is (= "MRN000001" (message/get-field-first-value parsed "PID" 3)))
+        (is (= "MRN000003" (message/get-field-first-value parsed "MRG" 1)))))))
+
+;; --- Scenario 2: transfer-in-error, then cancel-then-retransfer -----------
+
+(deftest transfer-in-error-then-cancel-then-retransfer
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (step! world0 0 "P1" {:type :admission :location "Renal"})
+        ;; transfer-in-error: an erroneous transfer to ED, corrected atomically
+        world2 (step! world1 10 "P1" {:type :transfer-in-error :location "ED"})
+        after-error (get-in world2 [:patients "P1"])
+        ;; a genuine, INTENDED transfer to ED follows -- the "retransfer"
+        world3 (step! world2 20 "P1" {:type :transfer :location "ED"})
+        after-retransfer (get-in world3 [:patients "P1"])]
+    (testing "the in-error correction left the patient exactly where they started"
+      (is (= "Renal" (:home-ward after-error)))
+      (is (= "Renal" (get-in after-error [:location :ward]))))
+    (testing "the retransfer that follows is a REAL, uncorrected move"
+      (is (= "ED" (get-in after-retransfer [:location :ward]))))
+    (testing "exact ground-truth event sequence: admission, transfer(err), cancel-transfer(err), transfer(real)"
+      (is (= [:admission :transfer :cancel-transfer :transfer] (mapv :event (:ground-truth world3))))
+      (is (= [nil true nil] (mapv :in-error (rest (:ground-truth world3))))))
+    (testing "exact rendered message sequence: A01 A02 A12 A02"
+      (is (= ["A01" "A02" "A12" "A02"]
+             (triggers (:ground-truth world3) one-bed-one-surge-facility providers))))))
+
+;; --- Scenario 3: bed-swap between a licensed and a surge occupant ---------
+
+(deftest bed-swap-between-licensed-and-surge-occupant
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
+                          "P2" (engine/initial-patient "P2" "MRN000002")})
+        world1 (-> world0
+                  (step! 0 "P1" {:type :admission :location "Renal"})   ;; licensed (rung 1)
+                  (step! 5 "P2" {:type :admission :location "Renal"})) ;; surge (rung 2)
+        p1-before (get-in world1 [:patients "P1"])
+        p2-before (get-in world1 [:patients "P2"])
+        _ (testing "sanity: one licensed, one surge, same ward"
+            (is (= :licensed (get-in p1-before [:location :placement])))
+            (is (= :surge (get-in p2-before [:location :placement]))))
+        world2 (step! world1 10 "P1" {:type :bed-swap :with "P2"})
+        p1-after (get-in world2 [:patients "P1"])
+        p2-after (get-in world2 [:patients "P2"])]
+    (testing "placements are exchanged, home-wards untouched, both still admitted"
+      (is (= (:location p2-before) (:location p1-after)))
+      (is (= (:location p1-before) (:location p2-after)))
+      (is (= :surge (get-in p1-after [:location :placement])))
+      (is (= :licensed (get-in p2-after [:location :placement])))
+      (is (= :admitted (:status p1-after) (:status p2-after))))
+    (testing "exact ground-truth event sequence"
+      (is (= [:admission :admission :bed-swap] (mapv :event (:ground-truth world2)))))
+    (testing "exact rendered message sequence: A01 A01 A17"
+      (is (= ["A01" "A01" "A17"]
+             (triggers (:ground-truth world2) one-bed-one-surge-facility providers))))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/churn_test.clj ==========
+(ns ehr-testing-sim.churn-test
+  "InjectChurn (docs/sim-theory.edn): the pathway-ir x churn-profile ->
+  operational-pathway IR->IR transform. Written before
+  ehr-testing-sim.churn exists (ADR-0004 test-first). The stage's own
+  laws (docs/sim-theory.edn's :churn entry) become property tests here:
+  IR endomorphism, the clinical-steps invariant (only inserts, never
+  removes/reorders/alters), and single-seeded-RNG determinism."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.churn :as churn]
+            [ehr-testing-sim.pathway :as pathway])
+  (:import [java.util Random]))
+
+(def ^:private sample-pathway
+  {:name "admit-delay-discharge"
+   :steps [{:type :admission :location "Renal"}
+           {:type :delay :from 60 :to 120}
+           {:type :discharge}]})
+
+(def ^:private zero-profile churn/default-churn-profile)
+
+(def ^:private always-cancel-discharge
+  (assoc churn/default-churn-profile :cancel-discharge 1.0))
+
+(def ^:private always-everything
+  (into {} (map (fn [[k _]] [k 1.0])) churn/default-churn-profile))
+
+;; --- config schema ----------------------------------------------------
+
+(deftest default-churn-profile-is-valid-and-all-zero
+  (is (churn/valid-churn-profile? churn/default-churn-profile))
+  (is (every? zero? (vals churn/default-churn-profile))))
+
+;; --- zero-probability identity ------------------------------------------
+
+(deftest zero-profile-is-the-identity-transform
+  (is (= sample-pathway (churn/inject sample-pathway zero-profile (Random. 1)))))
+
+(defspec zero-profile-is-the-identity-transform-for-any-seed 100
+  (prop/for-all [seed gen/large-integer]
+    (= sample-pathway (churn/inject sample-pathway zero-profile (Random. ^long seed)))))
+
+;; --- IR endomorphism ------------------------------------------------------
+
+(deftest inject-output-is-valid-pathway-ir
+  (is (pathway/valid? (churn/inject sample-pathway always-everything (Random. 1)))))
+
+(defspec inject-always-produces-valid-ir 100
+  (prop/for-all [seed gen/large-integer
+                 cancel-admit-p (gen/double* {:min 0.0 :max 1.0 :NaN? false})
+                 cancel-transfer-p (gen/double* {:min 0.0 :max 1.0 :NaN? false})
+                 cancel-discharge-p (gen/double* {:min 0.0 :max 1.0 :NaN? false})
+                 tie-p (gen/double* {:min 0.0 :max 1.0 :NaN? false})
+                 swap-p (gen/double* {:min 0.0 :max 1.0 :NaN? false})
+                 merge-p (gen/double* {:min 0.0 :max 1.0 :NaN? false})]
+    (let [profile {:cancel-admit cancel-admit-p :cancel-transfer cancel-transfer-p
+                   :cancel-discharge cancel-discharge-p :transfer-in-error tie-p
+                   :bed-swap swap-p :merge merge-p}]
+      (pathway/valid? (churn/inject sample-pathway profile (Random. ^long seed))))))
+
+;; --- clinical-steps invariant: only inserts, strip recovers the input -----
+
+(deftest strip-recovers-the-original-pathway
+  (let [churned (churn/inject sample-pathway always-everything (Random. 1))]
+    (testing "sanity: churn actually inserted something"
+      (is (> (count (:steps churned)) (count (:steps sample-pathway)))))
+    (is (= sample-pathway (churn/strip churned)))))
+
+(defspec strip-of-inject-recovers-the-input-for-any-profile-and-seed 100
+  (prop/for-all [seed gen/large-integer
+                 p (gen/double* {:min 0.0 :max 1.0 :NaN? false})]
+    (let [profile (into {} (map (fn [[k _]] [k p])) churn/default-churn-profile)]
+      (= sample-pathway (churn/strip (churn/inject sample-pathway profile (Random. ^long seed)))))))
+
+;; --- validity-table applicability oracle ----------------------------------
+
+(deftest never-inserts-cancel-discharge-before-any-discharge-exists
+  (testing "even at probability 1.0, no :cancel-discharge appears before
+            the pathway's own :discharge step -- docs/patient-state-
+            model.md's event-validity table gates it"
+    (let [churned (churn/inject sample-pathway always-cancel-discharge (Random. 1))
+          steps (:steps churned)
+          discharge-idx (.indexOf ^java.util.List (mapv :type steps) :discharge)
+          cancel-discharge-idxs (keep-indexed #(when (= :cancel-discharge %2) %1) (mapv :type steps))]
+      (is (pos? (count cancel-discharge-idxs)) "sanity: at least one got inserted, after the discharge")
+      (is (every? #(> % discharge-idx) cancel-discharge-idxs)))))
+
+(deftest never-inserts-cancel-transfer-cancel-admit-or-bed-swap-into-a-pathway-with-no-admission
+  (testing "a pathway that never admits offers no legal insertion point
+            for anything that requires an existing/current admission"
+    (let [no-admission {:name "just-a-delay" :steps [{:type :delay :from 1 :to 2}]}
+          churned (churn/inject no-admission always-everything (Random. 1))]
+      (is (= no-admission churned)))))
+
+(defspec every-cancel-transfer-follows-an-uncancelled-transfer 200
+  (prop/for-all [seed gen/large-integer]
+    (let [pathway {:name "t" :steps [{:type :admission :location "Renal"}
+                                     {:type :transfer :location "Cardiology"}
+                                     {:type :delay :from 1 :to 2}
+                                     {:type :discharge}]}
+          churned (churn/inject pathway always-everything (Random. ^long seed))
+          types (mapv :type (:steps churned))
+          transfer-idx (.indexOf ^java.util.List types :transfer)]
+      (every? #(> % transfer-idx) (keep-indexed #(when (= :cancel-transfer %2) %1) types)))))
+
+;; --- determinism -----------------------------------------------------------
+
+(deftest inject-is-deterministic-for-a-fixed-seed
+  (is (= (churn/inject sample-pathway always-everything (Random. 42))
+         (churn/inject sample-pathway always-everything (Random. 42)))))
+
+(defspec inject-is-deterministic-for-any-seed 100
+  (prop/for-all [seed gen/large-integer]
+    (= (churn/inject sample-pathway always-everything (Random. ^long seed))
+       (churn/inject sample-pathway always-everything (Random. ^long seed)))))
+
+;; --- concrete: a churned transfer-in-error carries a real location -------
+
+(deftest inserted-transfer-in-error-carries-the-most-recent-known-location
+  (let [only-tie (assoc churn/default-churn-profile :transfer-in-error 1.0)
+        churned (churn/inject sample-pathway only-tie (Random. 1))
+        tie-step (first (filter #(= :transfer-in-error (:type %)) (:steps churned)))]
+    (is (some? tie-step))
+    (is (= "Renal" (:location tie-step)))))
 
 ========== END FILE ==========
 
@@ -5741,6 +6913,22 @@ M2a scope.
           flag-names (set (map :flag (:flags run-verb)))]
       (is (contains? flag-names "--emit"))
       (is (contains? flag-names "--reference-date")))))
+
+(deftest help-group-documents-churn
+  (testing "M2b: the run verb's flags cover --churn (InjectChurn wiring)"
+    (let [run-verb (first (filter #(= "run" (:verb %)) (:verbs cli/help-group)))
+          flag-names (set (map :flag (:flags run-verb)))]
+      (is (contains? flag-names "--churn")))))
+
+(deftest main!-with-churn-flag-runs-and-may-emit-churn-events
+  (let [printed (atom []) exited (atom nil)]
+    (cli/main! ["run" "--seed" "5" "--patients" "8" "--churn" "--emit" "hl7"]
+               {:println-fn #(swap! printed conj %)
+                :exit-fn #(reset! exited %)})
+    (is (= 0 @exited))
+    (let [payload (:payload (read-string (first @printed)))]
+      (testing "this specific seed produces at least one churn-family message (A17 bed-swap)"
+        (is (some #(string/includes? % "^A17") (:messages payload)))))))
 
 (deftest main!-emits-hl7-messages
   (let [printed (atom []) exited (atom nil)]
@@ -5980,6 +7168,152 @@ M2a scope.
     (testing "a non-UTC fixed offset renders its own suffix, arithmetic unaffected (no timezone database, ADR-0011)"
       (is (= "20240101013000-0500" (emit-hl7/hl7-timestamp "2024-01-01" 5400 "-05:00"))))))
 
+;; --- M2b: churn family message types --------------------------------------
+
+(def ^:private churn-facility
+  {:id :churn-test
+   :wards [{:id :ed :name "ED" :beds 0 :surge-slots 10
+            :surge-format "%s-H%02d" :class :ed}
+           {:id :renal :name "Renal" :beds 1 :surge-slots 1
+            :surge-format "%s-H%02d" :class :inpatient}]})
+
+(def ^:private churn-providers
+  [{:id "1234567893" :name {:family "Chen" :given "A"} :role :attending
+    :specialty "Nephrology" :wards [:renal :ed]}])
+
+(defn- world-of
+  [patients]
+  {:patients patients :facility churn-facility :providers churn-providers :ground-truth []})
+
+(defn- fold-events
+  [world events]
+  (-> (reduce (fn [w ev]
+                (reduce (fn [w2 {:keys [patient-id]}]
+                          (update-in w2 [:patients patient-id] engine/evolve ev))
+                        w (:participants ev)))
+              world events)
+      (update :ground-truth into events)))
+
+(defn- admit
+  [world t patient-id location]
+  (let [{:keys [events]} (engine/decide (Random. 1) t world patient-id
+                                        {:type :admission :location location})]
+    (fold-events world events)))
+
+(defn- nth-field-value
+  "Like message/get-field-first-value, but for the Nth (0-based)
+  occurrence of a repeating segment -- needed for A17's two PID/PV1
+  pairs in one message (get-field-first-value only ever sees the
+  first)."
+  [parsed segment-id field-index n]
+  (let [segment (nth (message/get-segments parsed segment-id) n)]
+    (parser/pr-field (:delimiters parsed) (message/get-segment-field-raw segment field-index))))
+
+(deftest message-type-registry-has-the-churn-family
+  (is (= {:type "ADT" :trigger "A11"} (emit-hl7/message-type-registry :cancel-admit)))
+  (is (= {:type "ADT" :trigger "A12"} (emit-hl7/message-type-registry :cancel-transfer)))
+  (is (= {:type "ADT" :trigger "A13"} (emit-hl7/message-type-registry :cancel-discharge)))
+  (is (= {:type "ADT" :trigger "A17"} (emit-hl7/message-type-registry :bed-swap)))
+  (is (= {:type "ADT" :trigger "A40"} (emit-hl7/message-type-registry :merge))))
+
+(deftest cancel-admit-round-trips-as-a11
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :cancel-admit})
+        world2 (fold-events world1 events)
+        messages (emit-hl7/emit (:ground-truth world2) ref-date utc-offset churn-facility churn-providers)
+        a11 (last messages)
+        parsed (parser/parse a11)]
+    (is (= 2 (count messages)))
+    (is (= "MRN000001" (message/get-field-first-value parsed "PID" 3)))
+    (is (= "ADT^A11" (message/get-field-first-value parsed "MSH" 9)))))
+
+(deftest cancel-transfer-round-trips-as-a12-and-reinstates-location
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        pre-location (get-in world1 [:patients "P1" :location])
+        {t-events :events} (engine/decide (Random. 1) 10 world1 "P1" {:type :transfer :location "ED"})
+        world2 (fold-events world1 t-events)
+        {c-events :events} (engine/decide (Random. 1) 20 world2 "P1" {:type :cancel-transfer})
+        world3 (fold-events world2 c-events)
+        messages (emit-hl7/emit (:ground-truth world3) ref-date utc-offset churn-facility churn-providers)
+        a12 (last messages)
+        parsed (parser/parse a12)]
+    (is (= 3 (count messages)))
+    (is (= "ADT^A12" (message/get-field-first-value parsed "MSH" 9)))
+    (testing "PV1-3 shows the reinstated (current) location"
+      (is (= (str (:ward pre-location) "^^" (:bed pre-location) "^churn-test")
+             (message/get-field-first-value parsed "PV1" 3))))))
+
+(deftest cancel-discharge-round-trips-as-a13
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        {d-events :events} (engine/decide (Random. 1) 10 world1 "P1" {:type :discharge})
+        world2 (fold-events world1 d-events)
+        {c-events :events} (engine/decide (Random. 1) 20 world2 "P1" {:type :cancel-discharge})
+        world3 (fold-events world2 c-events)
+        messages (emit-hl7/emit (:ground-truth world3) ref-date utc-offset churn-facility churn-providers)
+        a13 (last messages)
+        parsed (parser/parse a13)]
+    (is (= 3 (count messages)))
+    (is (= "ADT^A13" (message/get-field-first-value parsed "MSH" 9)))))
+
+(deftest transfer-in-error-emits-two-messages-a02-then-a12-in-error
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1"
+                                        {:type :transfer-in-error :location "ED"})
+        world2 (fold-events world1 events)
+        messages (emit-hl7/emit (:ground-truth world2) ref-date utc-offset churn-facility churn-providers)]
+    (is (= 3 (count messages)))
+    (is (= "ADT^A02" (message/get-field-first-value (parser/parse (second messages)) "MSH" 9)))
+    (is (= "ADT^A12" (message/get-field-first-value (parser/parse (last messages)) "MSH" 9)))))
+
+(deftest bed-swap-emits-one-a17-message-carrying-both-patients
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
+                          "P2" (engine/initial-patient "P2" "MRN000002")})
+        world1 (-> world0 (admit 0 "P1" "Renal") (admit 5 "P2" "Renal"))
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :bed-swap})
+        world2 (fold-events world1 events)
+        messages (emit-hl7/emit (:ground-truth world2) ref-date utc-offset churn-facility churn-providers)
+        a17 (last messages)
+        parsed (parser/parse a17)]
+    (testing "ONE message for the two-participant event -- event id (log position), not mrn alone, is what derivability keys on"
+      (is (= 3 (count messages)))
+      (is (= "ADT^A17" (message/get-field-first-value parsed "MSH" 9))))
+    (testing "both patients' PID segments are present, each with their NEW bed"
+      (is (= #{"MRN000001" "MRN000002"}
+             (set [(nth-field-value parsed "PID" 3 0) (nth-field-value parsed "PID" 3 1)])))
+      (let [pv1-3-values (set [(nth-field-value parsed "PV1" 3 0) (nth-field-value parsed "PV1" 3 1)])]
+        (is (contains? pv1-3-values (str (get-in world1 [:patients "P1" :location :ward]) "^^"
+                                          (get-in world1 [:patients "P1" :location :bed]) "^churn-test")))
+        (is (contains? pv1-3-values (str (get-in world1 [:patients "P2" :location :ward]) "^^"
+                                          (get-in world1 [:patients "P2" :location :bed]) "^churn-test")))))))
+
+(deftest merge-emits-one-a40-message-with-mrg-and-pid
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
+                          "P2" (engine/initial-patient "P2" "MRN000002")})
+        world1 (-> world0 (admit 0 "P1" "Renal") (admit 5 "P2" "Renal"))
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :merge :with "P2"})
+        world2 (fold-events world1 events)
+        messages (emit-hl7/emit (:ground-truth world2) ref-date utc-offset churn-facility churn-providers)
+        a40 (last messages)
+        parsed (parser/parse a40)]
+    (is (= 3 (count messages)))
+    (testing "PID carries the SURVIVING mrn, MRG carries the prior (merged-away) one"
+      (is (= "ADT^A40" (message/get-field-first-value parsed "MSH" 9)))
+      (is (= "MRN000001" (message/get-field-first-value parsed "PID" 3)))
+      (is (= "MRN000002" (message/get-field-first-value parsed "MRG" 1))))))
+
+(deftest churn-family-emission-is-deterministic
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
+                          "P2" (engine/initial-patient "P2" "MRN000002")})
+        world1 (-> world0 (admit 0 "P1" "Renal") (admit 5 "P2" "Renal"))
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :bed-swap})
+        world2 (fold-events world1 events)]
+    (is (= (emit-hl7/emit (:ground-truth world2) ref-date utc-offset churn-facility churn-providers)
+           (emit-hl7/emit (:ground-truth world2) ref-date utc-offset churn-facility churn-providers)))))
+
 (defspec timestamp-anchoring-property 100
   (prop/for-all [seconds (gen/choose 0 6000000)]
     (let [ts (emit-hl7/hl7-timestamp ref-date seconds utc-offset)
@@ -6209,6 +7543,277 @@ M2a scope.
       (let [final-world (:world-after (last records))]
         (is (= 2 (count final-world)))))))
 
+;; --- M2b: churn family ----------------------------------------------------
+
+(def ^:private churn-facility
+  "Two inpatient wards plus an ED with generous surge -- room for a
+  bed-swap between a licensed and a surge occupant, and for admissions
+  that never legitimately exhaust."
+  {:id :churn-test
+   :wards [{:id :ed :name "ED" :beds 0 :surge-slots 10
+            :surge-format "%s-H%02d" :class :ed}
+           {:id :renal :name "Renal" :beds 1 :surge-slots 1
+            :surge-format "%s-H%02d" :class :inpatient}]})
+
+(def ^:private churn-providers
+  [{:id "1234567893" :name {:family "Chen" :given "A"} :role :attending
+    :specialty "Nephrology" :wards [:renal :ed]}])
+
+(defn- world-of
+  [patients]
+  {:patients patients :facility churn-facility :providers churn-providers :ground-truth []})
+
+(defn- fold-events
+  "Test helper: applies `events` to `world`'s patients (every named
+  participant, ADR-0010) and appends them to `world`'s :ground-truth --
+  mirrors what engine/run's loop does each iteration, for scripted
+  multi-step tests that drive decide/evolve directly."
+  [world events]
+  (-> (reduce (fn [w ev]
+                (reduce (fn [w2 {:keys [patient-id]}]
+                          (update-in w2 [:patients patient-id] engine/evolve ev))
+                        w (:participants ev)))
+              world events)
+      (update :ground-truth into events)))
+
+(defn- admit
+  "Scripted-test helper: decides+folds an :admission for `patient-id`,
+  returning the updated world."
+  [world t patient-id location]
+  (let [{:keys [events]} (engine/decide (Random. 1) t world patient-id
+                                        {:type :admission :location location})]
+    (fold-events world events)))
+
+;; --- cancel-admit -> A11 --------------------------------------------------
+
+(deftest cancel-admit-reverts-patient-to-new
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :cancel-admit})
+        world2 (fold-events world1 events)]
+    (testing "one event, referencing the admission it cancels by log position"
+      (is (= 1 (count events)))
+      (is (= :cancel-admit (:event (first events))))
+      (is (= 0 (:cancels-event-id (first events))))
+      (is (= [{:patient-id "P1" :role :subject}] (:participants (first events)))))
+    (testing "patient reverts to :new, no location/attending/class left behind"
+      (let [p (get-in world2 [:patients "P1"])]
+        (is (= :new (:status p)))
+        (is (nil? (:location p)))
+        (is (not (contains? p :class)))))))
+
+(deftest cancel-admit-on-never-admitted-patient-is-a-structured-rejection-not-a-throw
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        outcome (engine/decide (Random. 1) 10 world0 "P1" {:type :cancel-admit})]
+    (is (empty? (:events outcome)))
+    (is (some? (:rejected outcome)))
+    (is (= "P1" (:patient-id (:rejected outcome))))))
+
+;; --- cancel-transfer -> A12: the shadow-field dissolution -----------------
+
+(deftest cancel-transfer-reinstates-prior-location-from-the-log-no-shadow-field
+  (testing "the SimHospital PriorLocationForCancelTransfer dissolution
+            (docs/patient-state-model.md, docs/event-sourcing.md):
+            cancelling a transfer reinstates the pre-transfer location by
+            QUERYING THE LOG, not by reading a shadow field the
+            accumulator carries for this purpose."
+    (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+          world1 (admit world0 0 "P1" "Renal")
+          pre-transfer-location (get-in world1 [:patients "P1" :location])
+          {transfer-events :events} (engine/decide (Random. 1) 10 world1 "P1"
+                                                    {:type :transfer :location "ED"})
+          world2 (fold-events world1 transfer-events)
+          _ (is (not= pre-transfer-location (get-in world2 [:patients "P1" :location]))
+                "sanity: the transfer actually moved the patient")
+          {cancel-events :events} (engine/decide (Random. 1) 20 world2 "P1" {:type :cancel-transfer})
+          world3 (fold-events world2 cancel-events)
+          reinstated (get-in world3 [:patients "P1"])]
+      (testing "one cancel-transfer event, referencing the transfer by log position"
+        (is (= 1 (count cancel-events)))
+        (is (= :cancel-transfer (:event (first cancel-events))))
+        (is (= 1 (:cancels-event-id (first cancel-events)))))
+      (testing "location and home-ward are reinstated exactly"
+        (is (= pre-transfer-location (:location reinstated)))
+        (is (= "Renal" (:home-ward reinstated))))
+      (testing "the accumulator holds NO prior-location shadow field -- only :location itself"
+        (is (not (contains? reinstated :prior-location)))
+        (is (not (contains? reinstated :location-before-cancel)))
+        (is (= #{:patient-id :mrns :active-mrn :status :class :home-ward :location :attending :admitted-at}
+               (set (keys reinstated))))))))
+
+(deftest cancel-transfer-on-never-transferred-patient-is-rejected
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :cancel-transfer})]
+    (is (empty? (:events outcome)))
+    (is (some? (:rejected outcome)))))
+
+;; --- cancel-discharge -> A13 -----------------------------------------------
+
+(deftest cancel-discharge-reinstates-admitted-state
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        pre-discharge (get-in world1 [:patients "P1"])
+        {discharge-events :events} (engine/decide (Random. 1) 10 world1 "P1" {:type :discharge})
+        world2 (fold-events world1 discharge-events)
+        {cancel-events :events} (engine/decide (Random. 1) 20 world2 "P1" {:type :cancel-discharge})
+        world3 (fold-events world2 cancel-events)
+        reinstated (get-in world3 [:patients "P1"])]
+    (is (= :discharged (:status (get-in world2 [:patients "P1"]))))
+    (is (= :admitted (:status reinstated)))
+    (is (= (:location pre-discharge) (:location reinstated)))
+    (is (= (:home-ward pre-discharge) (:home-ward reinstated)))))
+
+(deftest cancel-discharge-on-never-discharged-patient-is-rejected
+  (testing "docs/patient-state-model.md's own illegal example"
+    (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+          world1 (admit world0 0 "P1" "Renal")
+          outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :cancel-discharge})]
+      (is (empty? (:events outcome)))
+      (is (some? (:rejected outcome))))))
+
+(deftest cancel-transfer-cannot-be-applied-twice-to-the-same-transfer
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        {t-events :events} (engine/decide (Random. 1) 10 world1 "P1" {:type :transfer :location "ED"})
+        world2 (fold-events world1 t-events)
+        {c1-events :events} (engine/decide (Random. 1) 20 world2 "P1" {:type :cancel-transfer})
+        world3 (fold-events world2 c1-events)
+        second-attempt (engine/decide (Random. 1) 30 world3 "P1" {:type :cancel-transfer})]
+    (is (empty? (:events second-attempt)))
+    (is (some? (:rejected second-attempt)))))
+
+;; --- transfer-in-error -----------------------------------------------------
+
+(deftest transfer-in-error-emits-a-transfer-then-its-own-cancellation-in-error
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        pre (get-in world1 [:patients "P1"])
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1"
+                                        {:type :transfer-in-error :location "ED"})
+        world2 (fold-events world1 events)
+        after (get-in world2 [:patients "P1"])]
+    (testing "two events, same instant: the transfer, then its A12"
+      (is (= 2 (count events)))
+      (is (= :transfer (:event (first events))))
+      (is (= :cancel-transfer (:event (second events))))
+      (is (true? (:in-error (second events))))
+      (is (= (:t (first events)) (:t (second events)))))
+    (testing "the cancel references the transfer that immediately preceded it
+              (index 1: index 0 is world1's own :admission event)"
+      (is (= 1 (:cancels-event-id (second events)))))
+    (testing "net effect: the patient ends up exactly where they started"
+      (is (= (:location pre) (:location after)))
+      (is (= (:home-ward pre) (:home-ward after))))))
+
+;; --- bed-swap -> A17: genuinely two-participant ----------------------------
+
+(deftest bed-swap-exchanges-locations-between-two-admitted-patients
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
+                          "P2" (engine/initial-patient "P2" "MRN000002")})
+        world1 (-> world0 (admit 0 "P1" "Renal") (admit 5 "P2" "Renal"))
+        p1-before (get-in world1 [:patients "P1"])
+        p2-before (get-in world1 [:patients "P2"])
+        _ (is (not= (:location p1-before) (:location p2-before)) "sanity: different beds")
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :bed-swap})
+        world2 (fold-events world1 events)]
+    (testing "one two-participant event, both roles :subject"
+      (is (= 1 (count events)))
+      (is (= :bed-swap (:event (first events))))
+      (is (= #{"P1" "P2"} (set (map :patient-id (:participants (first events))))))
+      (is (every? #(= :subject (:role %)) (:participants (first events)))))
+    (testing "locations are exchanged; both remain placed and admitted"
+      (is (= (:location p2-before) (get-in world2 [:patients "P1" :location])))
+      (is (= (:location p1-before) (get-in world2 [:patients "P2" :location])))
+      (is (= :admitted (get-in world2 [:patients "P1" :status])))
+      (is (= :admitted (get-in world2 [:patients "P2" :status]))))))
+
+(deftest bed-swap-with-no-eligible-peer-is-rejected
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :bed-swap})]
+    (is (empty? (:events outcome)))
+    (is (some? (:rejected outcome)))))
+
+;; --- merge -> A40: the identity payoff --------------------------------------
+
+(deftest merge-absorbs-mrns-and-terminates-the-merged-stream
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
+                          "P2" (engine/initial-patient "P2" "MRN000002")})
+        world1 (-> world0 (admit 0 "P1" "Renal") (admit 5 "P2" "Renal"))
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :merge :with "P2"})
+        world2 (fold-events world1 events)
+        survivor (get-in world2 [:patients "P1"])
+        merged (get-in world2 [:patients "P2"])]
+    (testing "one two-participant event, roles :survivor/:merged"
+      (is (= 1 (count events)))
+      (is (= :merge (:event (first events))))
+      (is (= #{[:survivor "P1"] [:merged "P2"]}
+             (set (map (juxt :role :patient-id) (:participants (first events)))))))
+    (testing "survivor absorbs the merged MRN -- inactive, retained in :mrns"
+      (is (= "MRN000001" (:active-mrn survivor)))
+      (is (= #{"MRN000001" "MRN000002"} (:mrns survivor))))
+    (testing "the merged patient-id's stream ends with a terminal merged status"
+      (is (= :merged (:status merged)))
+      (is (= #{"MRN000002"} (:mrns merged)))
+      (is (= "MRN000002" (:active-mrn merged))))))
+
+(deftest merge-into-self-is-rejected
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :merge :with "P1"})]
+    (is (empty? (:events outcome)))
+    (is (some? (:rejected outcome)))))
+
+(deftest merge-referencing-unknown-patient-id-is-rejected
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :merge :with "GHOST"})]
+    (is (empty? (:events outcome)))
+    (is (some? (:rejected outcome)))))
+
+(deftest double-merge-of-the-same-patient-id-is-rejected
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
+                          "P2" (engine/initial-patient "P2" "MRN000002")
+                          "P3" (engine/initial-patient "P3" "MRN000003")})
+        world1 (-> world0 (admit 0 "P1" "Renal") (admit 5 "P2" "Renal") (admit 6 "P3" "ED"))
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :merge :with "P2"})
+        world2 (fold-events world1 events)
+        outcome (engine/decide (Random. 1) 20 world2 "P3" {:type :merge :with "P2"})]
+    (is (empty? (:events outcome)))
+    (is (some? (:rejected outcome)))))
+
+;; --- M2b: InjectChurn wiring ------------------------------------------
+
+(def ^:private active-churn-profile
+  {:cancel-admit 0.05 :cancel-transfer 0.1 :cancel-discharge 0.05
+   :transfer-in-error 0.1 :bed-swap 0.1 :merge 0.05})
+
+(defspec every-churned-run-satisfies-the-invariant-catalog 150
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 2 12)]
+    (let [{:keys [ground-truth]} (engine/run {:seed seed :patients patients
+                                              :facility churn-facility :providers churn-providers
+                                              :churn-profile active-churn-profile})]
+      (result/ok? (check/check-all ground-truth churn-facility)))))
+
+(deftest absent-churn-profile-does-not-perturb-the-no-churn-path
+  (testing "byte-identical whether :churn-profile is omitted or
+            explicitly nil (opt-in: nothing about this path changed
+            unless a real profile is supplied)"
+    (is (= (engine/run {:seed 42 :patients 5})
+           (engine/run {:seed 42 :patients 5 :churn-profile nil})))))
+
+(deftest churn-profile-actually-produces-churn-events-for-some-seed
+  (testing "sanity that active-churn-profile is not accidentally inert"
+    (is (some (fn [seed]
+                (let [{:keys [ground-truth]} (engine/run {:seed seed :patients 8
+                                                          :facility churn-facility :providers churn-providers
+                                                          :churn-profile active-churn-profile})]
+                  (some #{:cancel-admit :cancel-transfer :cancel-discharge :bed-swap :merge}
+                        (map :event ground-truth))))
+              (range 1 50)))))
+
 (deftest pinned-seed-survives-decide-evolve-refactor
   (testing "the fixture pins the POST-M2a baseline (ADR-0009/ADR-0010/
             ADR-0011 -- identity/participants and the seconds clock
@@ -6304,6 +7909,23 @@ M2a scope.
     (is (true? (:forced alloc)))
     (is (= "RENAL-H02" (get-in alloc [:location :bed])))
     (is (= :surge (get-in alloc [:location :placement])))))
+
+(deftest allocate-returns-structured-exhaustion-not-throw
+  (testing "every rung exhausted (licensed AND surge full, no ED/other
+            ward at all) -- result-not-throw, not an exception
+            (docs/clinical-realities.md's diversion stub)"
+    (let [facility {:id :t :wards [renal-ward]}
+          board (into {} (map vector (concat (facility/licensed-bed-ids renal-ward)
+                                              (facility/surge-slot-ids renal-ward))
+                                     (repeat "x")))
+          alloc (facility/allocate (Random. 1) facility board "Renal" nil)]
+      (is (true? (:exhausted alloc)))
+      (is (= "Renal" (:home-ward alloc))))))
+
+(deftest ward-census-reports-occupied-and-capacity-per-ward
+  (let [facility {:id :t :wards [renal-ward]}
+        board (into {} (map vector (facility/licensed-bed-ids renal-ward) (repeat "x")))]
+    (is (= {"Renal" {:occupied 3 :capacity 5}} (facility/ward-census facility board)))))
 
 (defspec allocate-never-returns-an-occupied-bed 100
   (prop/for-all [seed gen/large-integer]
@@ -6426,6 +8048,64 @@ M2a scope.
 
 (deftest transfer-without-location-is-invalid
   (is (not (pathway/valid? {:name "t" :steps [{:type :transfer}]}))))
+
+;; --- M2b: churn family IR ------------------------------------------------
+
+(deftest cancel-family-steps-are-valid-ir
+  (doseq [step-type [:cancel-admit :cancel-transfer :cancel-discharge]]
+    (is (pathway/valid? {:name "t" :steps [{:type :admission :location "Renal"}
+                                            {:type step-type}]})
+        (str step-type " should be valid IR"))))
+
+(deftest transfer-in-error-is-valid-ir
+  (is (pathway/valid? {:name "t" :steps [{:type :admission :location "Renal"}
+                                          {:type :transfer-in-error :location "Cardiology"}]})))
+
+(deftest transfer-in-error-without-location-is-invalid
+  (is (not (pathway/valid? {:name "t" :steps [{:type :transfer-in-error}]}))))
+
+(deftest bed-swap-is-valid-ir-with-and-without-explicit-peer
+  (is (pathway/valid? {:name "t" :steps [{:type :bed-swap}]}))
+  (is (pathway/valid? {:name "t" :steps [{:type :bed-swap :with "PID-000001"}]})))
+
+(deftest merge-is-valid-ir-with-and-without-explicit-peer
+  (is (pathway/valid? {:name "t" :steps [{:type :merge}]}))
+  (is (pathway/valid? {:name "t" :steps [{:type :merge :with "PID-000001"}]})))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/run_test.clj ==========
+(ns ehr-testing-sim.run-test
+  "The `sim run` capability's result-not-throw contract. Milestone M2b,
+  Task 0: allocation-ladder exhaustion is a structured outcome, not a
+  thrown exception -- ehr-testing-sim.facility/allocate returns
+  {:exhausted true ...} instead of throwing, ehr-testing-sim.engine/run
+  halts the loop and echoes it back, and run-command surfaces it as
+  :error :capacity-exhausted with the patient, ward, and census in the
+  payload (docs/clinical-realities.md's ED-diversion stub names the
+  modeling gap this leaves for M3+: a real waiting/diversion state)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [ehr-testing-sim.run :as run]
+            [ehr-testing-sim.result :as result]))
+
+(def ^:private one-bed-no-ed-facility
+  "A facility with exactly one bed and no ED ward at all -- the second
+  admission has nowhere to go at any ladder rung, guaranteeing
+  exhaustion deterministically rather than relying on a lucky seed."
+  {:id :tiny
+   :wards [{:id :renal :name "Renal" :beds 1 :surge-slots 0
+            :surge-format "%s-H%02d" :class :inpatient}]})
+
+(deftest run-command-surfaces-capacity-exhaustion-as-a-structured-error
+  (let [r (run/run-command {:seed 1 :patients 2 :facility one-bed-no-ed-facility})]
+    (testing "an :error, not a thrown exception reaching the caller"
+      (is (result/error? r))
+      (is (= :capacity-exhausted (:category r))))
+    (testing "payload carries patient, ward, and census"
+      (let [{:keys [patient-id ward census]} (:payload r)]
+        (is (string? patient-id))
+        (is (= "Renal" ward))
+        (is (= {"Renal" {:occupied 1 :capacity 1}} census))))))
 
 ========== END FILE ==========
 
