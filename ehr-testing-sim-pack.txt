@@ -1,9 +1,16 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T15:55:12Z
+generated (UTC): 2026-07-26T16:13:07Z
 HEAD: 44d27ea3321f27210266e8c0e2e2d30c873eb316
 git status --porcelain:
-working tree clean
+ M .agents/memory/architecture.md
+A  .gitattributes
+A  .githooks/pre-commit
+A  .githooks/pre-push
+ M AGENTS.md
+A  AUTHORS-GUIDE.md
+ M notes/ADRs.md
+A  notes/facts-register.md
 elides: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
@@ -21,13 +28,14 @@ on details that may have moved.
 ## Upstream sources
 
 **Google Simulated Hospital** (github.com/google/simhospital,
-archived, Apache-2.0, Go) — mined for the *operational* model:
+archived, Apache-2.0, Go — license/archived-status and step-vocabulary
+count: see facts-register F3) — mined for the *operational* model:
 
-- `pkg/pathway`: ~30 scripted step types incl. ADT churn
-  (Transfer, BedSwap, TransferInError, Cancel*, Pending*, Merge,
-  DeleteVisit...). YAML pathways picked by `percentage_of_patients`
-  via a distribution manager. Our IR step vocabulary derives from
-  this list; churn realism is its key contribution.
+- `pkg/pathway`: scripted step types incl. ADT churn (Transfer,
+  BedSwap, TransferInError, Cancel*, Pending*, Merge, DeleteVisit...).
+  YAML pathways picked by `percentage_of_patients` via a distribution
+  manager. Our IR step vocabulary derives from this list; churn
+  realism is its key contribution.
 - `pkg/state` + `pkg/hospital`: discrete-event core — priority queue
   of Event structs, patients map, `RunNextEventIfDue` loop. Our
   `engine.clj` is its functional reduction (pure fold, retained
@@ -40,16 +48,18 @@ archived, Apache-2.0, Go) — mined for the *operational* model:
   (ADT^A01 etc.) — reference for our emitter, but emission is built
   on the cmiles74 parser's structures instead.
 
-**Synthea** (github.com/synthetichealth/synthea, Apache-2.0, Java) —
-mined for the *generative clinical* layer and US data:
+**Synthea** (github.com/synthetichealth/synthea, Apache-2.0, Java —
+module count, license, and asthma-module state count: see
+facts-register F2) — mined for the *generative clinical* layer and US
+data:
 
-- 85 disease modules as plain JSON (`src/main/resources/modules/`),
-  each a probabilistic state machine (Generic Module Framework:
+- Disease modules as plain JSON (`src/main/resources/modules/`), each
+  a probabilistic state machine (Generic Module Framework:
   Initial/Delay/Simple/ConditionOnset/MedicationOrder/Encounter...
   with direct/distributed/conditional/complex transitions guarded on
-  age/sex/race/attributes). Verified: asthma module = 52 states.
+  age/sex/race/attributes).
 - Modules embed real codes inline: SNOMED (conditions), LOINC
-  (labs), RxNorm (meds). Apache-licensed → redistributable.
+  (labs), RxNorm (meds) — redistributable under Synthea's license.
 - US-centric throughout: census demographics, geography, SSNs, US
   units. This is our US data source.
 - Plan: port the GMF *interpreter* (documented spec on their wiki),
@@ -57,10 +67,8 @@ mined for the *generative clinical* layer and US data:
   A Synthea module is a pathway generator; a simhospital pathway is
   one sample from it.
 
-**HL7v2 in Clojure:** org.clojars.cmiles74/clojure-hl7-parser 3.5.1
-(verified from the project's project.clj). Group is
-`org.clojars.cmiles74`, artifact `clojure-hl7-parser` — NOT the
-GitHub repo name.
+**HL7v2 in Clojure:** coordinates and the group-name gotcha — see
+facts-register F1.
 
 ## Terminology decisions
 
@@ -68,8 +76,9 @@ GitHub repo name.
   natively (HL7v2 CWE, FHIR CodeableConcept). Codes are state, not
   format (ADR-0002).
 - Systems: SNOMED CT, LOINC, RxNorm, ICD-10-CM, CVX. **Never CPT**
-  (AMA-licensed). SNOMED→ICD-10-CM for DG1/billing via the NLM map,
-  or carry both codes where Synthea provides them.
+  (AMA-licensed) — licensing basis: see facts-register F4.
+  SNOMED→ICD-10-CM for DG1/billing via the NLM map, or carry both
+  codes where Synthea provides them.
 
 ## Sibling-repo integration (ehr-testing-tools)
 
@@ -93,6 +102,81 @@ the regression suite.
 ========== END FILE ==========
 
 ========== FILE: ./.agents/plans/.gitkeep ==========
+
+========== END FILE ==========
+
+========== FILE: ./.gitattributes ==========
+# ehr-testing-tools' .gitattributes carries two rules disabling line-ending
+# normalization (-text) for HL7v2 ER7 fixture bytes (segments are \r-
+# terminated; a normalizing checkout would corrupt them). Neither path
+# exists in this repo yet: no test/fixtures/v2/*.hl7, no vendored
+# SimHospital corpus. Add the equivalent -text rule here the moment either
+# lands, before the first commit of the actual bytes -- see tools'
+# .gitattributes for the exact pattern and rationale.
+
+========== END FILE ==========
+
+========== FILE: ./.githooks/pre-commit ==========
+#!/bin/sh
+# Enforce: git operations on this repo happen from WSL, not native Windows.
+#
+# See AUTHORS-GUIDE.md, "Git operations: WSL only", for the rationale --
+# in short, mixed-platform commits are how other repos ended up with
+# line-ending wars, and .gitattributes alone is defense in depth, not a
+# substitute for the rule. This hook is only active once a clone has run
+# `git config core.hooksPath .githooks` (it points git at this tracked
+# directory instead of the untracked, per-clone .git/hooks/ — see
+# AGENTS.md), so it does not fire for anyone who hasn't opted in yet.
+
+is_wsl=0
+if [ -n "$WSL_DISTRO_NAME" ]; then
+  is_wsl=1
+elif [ -r /proc/version ] && grep -qi microsoft /proc/version 2>/dev/null; then
+  is_wsl=1
+fi
+
+if [ "$is_wsl" -ne 1 ]; then
+  echo "ERROR: commits to this repo must be made from WSL, not $(uname -s 2>/dev/null || echo 'this shell')." >&2
+  echo "  See AUTHORS-GUIDE.md, 'Git operations: WSL only', for why." >&2
+  echo "  Re-run this commit from a WSL shell instead." >&2
+  exit 1
+fi
+
+exit 0
+
+========== END FILE ==========
+
+========== FILE: ./.githooks/pre-push ==========
+#!/bin/sh
+# Enforce: git operations on this repo happen from WSL, not native Windows
+# (pushes are git operations too -- see .githooks/pre-commit), and the test
+# suite is green before anything leaves this clone. Same opt-in mechanism
+# as pre-commit: this only fires once a clone has run
+# `git config core.hooksPath .githooks`.
+
+is_wsl=0
+if [ -n "$WSL_DISTRO_NAME" ]; then
+  is_wsl=1
+elif [ -r /proc/version ] && grep -qi microsoft /proc/version 2>/dev/null; then
+  is_wsl=1
+fi
+
+if [ "$is_wsl" -ne 1 ]; then
+  echo "ERROR: git pushes from this repo must be made from WSL, not $(uname -s 2>/dev/null || echo 'this shell')." >&2
+  echo "  See AUTHORS-GUIDE.md, 'Git operations: WSL only', for why." >&2
+  echo "  Re-run this push from a WSL shell instead." >&2
+  exit 1
+fi
+
+fail() {
+  echo "ERROR: $1 failed -- push refused." >&2
+  echo "  Fix the failure, or in a genuine emergency: git push --no-verify" >&2
+  exit 1
+}
+
+make test || fail "make test"
+
+exit 0
 
 ========== END FILE ==========
 
@@ -133,7 +217,22 @@ and outranks your own inference about why something is organized a
 certain way. Never silently revert an Accepted ADR — supersede it with
 a new numbered record. Durable design lineage (what was mined from
 Simulated Hospital and Synthea, and why) lives in
-`.agents/memory/architecture.md`.
+`.agents/memory/architecture.md`; externally verifiable facts (license,
+version, capability claims) live in `notes/facts-register.md`.
+`AUTHORS-GUIDE.md` covers the full authoring discipline — read it
+before your first commit.
+
+## Before your first git operation: read this
+
+**All git operations — especially `git commit` — must be run from WSL,
+never from native Windows** (see `AUTHORS-GUIDE.md` section 1),
+enforced by `.githooks/pre-commit` once `git config core.hooksPath
+.githooks` has been run for a given clone — that config is per-clone
+and does not travel with the repo:
+
+```sh
+git config core.hooksPath .githooks
+```
 
 ## Quick start
 
@@ -197,6 +296,102 @@ vocabulary.
 Repo-local skills live in `.agents/skills/` (none yet). Handoffs in
 `.agents/handoffs/`, plans in `.agents/plans/`, durable knowledge in
 `.agents/memory/`.
+
+========== END FILE ==========
+
+========== FILE: ./AUTHORS-GUIDE.md ==========
+# Authors' Guide
+
+This is the guide for future-you and any collaborator working on this repo.
+It exists so decisions don't have to be re-litigated every time someone
+opens it. It is a scoped-down adaptation of
+[`ehr-testing-tools`](https://github.com/pragsmike/ehr-testing-tools/blob/main/AUTHORS-GUIDE.md)'s
+own guide of the same name — see `notes/ADRs.md` ADR-0003 for why this
+repo adopts that repo's authoring conventions rather than inventing its
+own.
+
+## 1. Git operations: WSL only
+
+**All git operations on this repo — especially commits — are done from
+WSL, never from native Windows.** This is a hard rule inherited unchanged
+from the sibling repo (same author, same machine, same hard-won reasons:
+mixed-platform git usage is how repos end up with line-ending wars,
+spurious executable-bit flips, and diffs that are 90% whitespace noise).
+Windows is fine for building, reading, and running tools once they exist;
+it is not fine for writing to git history. `.githooks/pre-commit` and
+`.githooks/pre-push` enforce this once a clone runs `git config
+core.hooksPath .githooks` (see `AGENTS.md`); don't rely on the hook to
+catch a mistake for you — confirm you're in WSL *before* attempting a
+commit, not after a rejection.
+
+## 2. The pack ritual — pack-push is ACTIVE here
+
+`make pack` concatenates most git-tracked files in the repo into
+`ehr-testing-sim-pack.txt` (gitignored — it is session scaffolding, not a
+deliverable), for pasting into a chat session that can't read the
+filesystem directly. It elides `.agents/skills/**` and
+`.agents/prompts/archive/**` — skill content is large and changes rarely,
+so it doesn't belong in every session's context — and the header records
+the elision. `make pack-skills` packs exactly the elided directories, to
+a separate file.
+
+**One deliberate inversion from tools' guide: `make pack-push` is
+ACTIVE here, not dormant, and is the session-end ceremony.** This repo
+has no public GitHub remote yet, so the `pragsmike/packs` transport is
+the *only* way a chat session can read it — the same arrangement tools
+used before it went public (its ADR-0008). A session here ends with
+commit → `make pack-push`, not commit → `git push origin`. When
+ehr-testing-sim gets a public GitHub remote, demote `pack-push` to
+dormant the same way tools did, and record that demotion as a new ADR
+(see `Makefile`'s header comment, which carries the same note).
+
+`pack-push` copies both packs into a local clone of the public
+`pragsmike/packs` repo (`~/.packs`, cloned once by hand — see
+`Makefile`), commits with a message naming this repo and its HEAD, and
+pushes; a consuming surface fetches either pack by a plain
+`raw.githubusercontent.com/pragsmike/packs/main/<file>` URL. **Ordering
+caveat:** run `pack-push` *last* in a session, after the final commit,
+not mid-session — the pack header's `git status --porcelain` line is
+only a meaningful staleness signal if nothing was left uncommitted
+afterward.
+
+Pack markers (`========== FILE: ... ==========`, `========== END FILE
+==========`) are only valid matched at line start. The Makefile's own
+`pack` recipe legitimately contains this marker text mid-line (in the
+`echo` commands that emit it) — a naive substring search over the pack
+would misidentify those lines as marker lines. Anchor any parser to the
+start of the line.
+
+Mid-flight multi-session work ends with a handoff document in
+`.agents/handoffs/`, not a pack — the pack is a filesystem-access
+workaround for a chat session, not a substitute for recording what a
+future session needs to pick up cold. Tools' `handoff` skill, kept at
+the shared/user level per its shared-skill-layout convention rather
+than copied into this repo (`notes/ADRs.md` ADR-0003), may be used to
+generate it.
+
+## 3. ADR rules
+
+`notes/ADRs.md` holds every architecture/authoring decision in one file,
+numbered sequentially, Status Accepted unless noted otherwise. **Never
+silently revert an Accepted decision — supersede it with a new numbered
+record** that says so explicitly. This file outranks any agent's or
+collaborator's own inference about why the project is organized a
+certain way; read it before restructuring anything.
+
+## 4. Facts-register discipline
+
+`notes/facts-register.md` holds only F-rows (externally verifiable facts
+about tools, licenses, and ecosystem capabilities) — there is no C-table
+here, because there is no manuscript tracking drafting coverage.
+
+The discipline is **assert → register → date**: any time a doc in this
+repo asserts a load-bearing, externally verifiable fact (a license, a
+release status, a capability claim about a dependency or upstream
+source), it gets an F-row in the same commit — claim, where it's
+asserted, evidence (a URL or inspectable artifact), and a last-verified
+date. Revisit F-rows when the event that would resolve them completes,
+and update the date whether the claim held up or not.
 
 ========== END FILE ==========
 
@@ -655,6 +850,101 @@ state history rather than a redesign; the validation program's
 internal-consistency claims are cheaply machine-checkable at scale;
 churn injection (operational noise) becomes an IR-to-IR transform,
 cleanly separated from clinical trajectory generation.
+
+---
+
+## ADR-0003 — Adopt ehr-testing-tools' authoring conventions
+
+**Status:** Accepted (2026-07-26)
+
+**Context.** This repo started as a walking skeleton with no authoring
+discipline of its own, while its sibling ehr-testing-tools has already
+converged on a working set of conventions for exactly this
+situation — a solo author running Windows, doing git work from WSL,
+and depending on chat sessions that can't read the filesystem
+directly. Reinventing that discipline from scratch would either
+duplicate the sibling's reasoning or silently diverge from it for no
+reason. ADR-0001 already establishes that copying conventions and text
+from tools is fine — only code and data dependencies are barred.
+
+**Decision.**
+1. **Git hooks + WSL rule:** `.githooks/pre-commit` and
+   `.githooks/pre-push` are adopted from tools (the pre-push hook
+   trimmed to this repo's actual Makefile targets — `make test` only;
+   tools' `lint-pipeline`/`lint-deps`/`quickstart-fresh` targets don't
+   exist here). Activation (`git config core.hooksPath .githooks`) is
+   documented in `AGENTS.md`, mirroring tools' placement.
+2. **Pack ceremony, with the active-pack-push inversion carried
+   forward:** the pack ritual (`make pack`/`pack-skills`/`pack-push`)
+   is adopted, but unlike tools — where `pack-push` went dormant once
+   the repo and the `pragsmike/packs` transport both went public —
+   `pack-push` stays the **active** session-end ceremony here, because
+   this repo has no GitHub remote yet and the packs transport is
+   currently the only way a chat session can read it. This mirrors the
+   arrangement tools itself used before its own ADR-0008. **Trigger for
+   revisiting:** when this repo gets a public GitHub remote, demote
+   `pack-push` to dormant the way tools did, and record that demotion
+   as a new ADR.
+3. **ADR rules, unchanged:** never silently revert an Accepted ADR;
+   supersede with a new numbered record; ADRs outrank inference about
+   why the project is organized a certain way. Already this repo's
+   practice (this file's own header); now stated explicitly in
+   `AUTHORS-GUIDE.md` too.
+4. **Facts-register discipline, adopted:** `notes/facts-register.md`
+   holds F-rows only (no C-table) for load-bearing, externally
+   verifiable claims (license, version, count, capability), each with
+   claim / where-asserted / evidence / last-verified date, following
+   the same assert → register → date discipline as tools. Seeded from
+   the externally verifiable claims previously embedded in
+   `.agents/memory/architecture.md`, which now points at the register
+   instead of restating them.
+5. **Handoff convention, adopted:** mid-flight multi-session work ends
+   with a handoff document in `.agents/handoffs/`; tools' `handoff`
+   skill may be used to generate it.
+6. **Skills are NOT copied per-repo.** `.agents/skills/` stays empty.
+   Deliberation and utility skills (`handoff` and others) remain
+   shared at the user level, per tools' own shared-skill-layout
+   convention — copying them into this repo would create exactly the
+   kind of drift-prone duplication the shared layout exists to avoid.
+
+**Trigger conditions for later adoptions (agreed now, deferred until
+each condition is met):**
+- **CI** — adopt once this repo has a public GitHub remote to run it
+  against.
+- **Pinned-artifact or vendoring decision** (tools' `artifacts.lock.edn`
+  / vendor-corpus pattern) — adopt once Synthea modules (or another
+  large upstream artifact) actually land in this repo.
+- **`.agents/plans/` and pattern-nursery-style working files** — adopt
+  at first real multi-session use, not speculatively.
+
+**Consequences.** This repo's authoring discipline stays traceable to
+a working precedent instead of improvised ad hoc; the one deliberate
+divergence (active vs. dormant `pack-push`) is recorded with its own
+trigger condition instead of left to be rediscovered later; skills
+stay out of per-repo drift by design; facts about upstream sources
+are checkable in one place instead of scattered across prose.
+
+========== END FILE ==========
+
+========== FILE: ./notes/facts-register.md ==========
+# Facts Register
+
+<!-- Tracks load-bearing, externally verifiable assertions made anywhere in
+     this repo (docs, deps.edn, memory files) about tools, licenses, and
+     ecosystem capabilities — evidence and a last-verified date, so a claim
+     can be checked instead of trusted. This is the F-table half of
+     ehr-testing-tools' notes/facts-register.md pattern (see that repo's
+     AUTHORS-GUIDE.md section 4); there is no C-table here because there is
+     no manuscript tracking drafting coverage. See notes/ADRs.md ADR-0003
+     and AUTHORS-GUIDE.md section 4 for the assert -> register -> date
+     discipline this file exists to support. -->
+
+| # | Claim | Where asserted | Evidence | Last verified | Status |
+|---|---|---|---|---|---|
+| F1 | The HL7v2 ER7 parse/emit library's Maven coordinates are `org.clojars.cmiles74/clojure-hl7-parser`, version `3.5.1` — the Maven **group** is `org.clojars.cmiles74`, not the GitHub repo name (`cmiles74/clojure-hl7-parser`), a mismatch worth flagging since it's easy to get wrong when adding the dependency by hand. | `deps.edn` (`:deps` entry, with an inline comment noting the coordinates were verified), `.agents/memory/architecture.md` ("HL7v2 in Clojure") | The upstream project's own `project.clj` (`github.com/cmiles74/clojure-hl7-parser`), read directly per `.agents/memory/architecture.md`'s original verification session; not re-fetched this session | 2026-07-26 | verified (inherited from architecture.md; not re-verified this session) |
+| F2 | Synthea ships 85 disease modules as plain JSON under `src/main/resources/modules/`, each a probabilistic state machine (Generic Module Framework) with real codes embedded inline — SNOMED CT (conditions), LOINC (labs), RxNorm (medications) — under the Apache-2.0 license (redistributable). Verified example: the asthma module has 52 states. | `.agents/memory/architecture.md` ("Synthea"), `docs/problem-statement.md` (Provenance, §"Glass-box auditability" — asthma module cited by name) | `github.com/synthetichealth/synthea`, `src/main/resources/modules/` (module count), `src/main/resources/modules/asthma.json` (state count) — read directly per architecture.md's original verification session; not re-fetched this session | 2026-07-26 | verified (inherited from architecture.md; not re-verified this session) |
+| F3 | Google Simulated Hospital (`github.com/google/simhospital`) is licensed Apache-2.0 and is archived (no longer receiving source changes). Its `pkg/pathway` step vocabulary (~30 scripted step types including ADT churn — Transfer, BedSwap, TransferInError, Cancel\*, Pending\*, Merge, DeleteVisit) is the documented lineage of this repo's pathway IR step vocabulary. | `.agents/memory/architecture.md` ("Google Simulated Hospital"), `notes/ADRs.md` ADR-0002 (Context) | `github.com/google/simhospital` (license + archived status), `pkg/pathway` (step-type listing) — read directly per architecture.md's original verification session; not re-fetched this session | 2026-07-26 | verified (inherited from architecture.md; not re-verified this session) |
+| F4 | CPT codes are AMA-licensed and excluded from this repo by constraint (never emitted); SNOMED CT and LOINC are free to use for US-context work — SNOMED CT via NLM/UMLS US-member access, LOINC under its own free license — alongside RxNorm, ICD-10-CM, and CVX. | `docs/problem-statement.md` (§3 "Standard terminology"), `AGENTS.md` (Constraints), `.agents/memory/architecture.md` (Terminology decisions) | AMA CPT licensing terms (`ama-assn.org`); NLM/UMLS SNOMED CT US Edition membership terms (`nlm.nih.gov`); LOINC's own free-use license (`loinc.org`) — per architecture.md's original verification session; not re-fetched this session | 2026-07-26 | verified (inherited from architecture.md; not re-verified this session) |
 
 ========== END FILE ==========
 
