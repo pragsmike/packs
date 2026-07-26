@@ -1,9 +1,9 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T22:16:02Z
-HEAD: 2ceca40947ce42de70c8fc6a1740f55a77a04016
+generated (UTC): 2026-07-26T22:46:21Z
+HEAD: 96e16515b3db3d6eea99ca55d09802fed324c902
 git status --porcelain:
-?? docs/research/
+working tree clean
 includes only: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 

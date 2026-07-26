@@ -1,9 +1,9 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T22:16:01Z
-HEAD: 2ceca40947ce42de70c8fc6a1740f55a77a04016
+generated (UTC): 2026-07-26T22:46:20Z
+HEAD: 96e16515b3db3d6eea99ca55d09802fed324c902
 git status --porcelain:
-?? docs/research/
+working tree clean
 elides: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
@@ -195,6 +195,23 @@ name two further candidate step families for a future milestone, as
 (A21/A22) and observation/inpatient class-flip (A06/A07), both from
 `docs/clinical-realities.md`'s stub catalog.
 
+**Capture: encounters as first-class, M2b-surfaced.** Neither `:pending-*`
+step types nor `VisitID`/PV1-19 landed this session (both flagged in
+`docs/patient-state-model.md`'s mining section as pre-existing gaps,
+not new ones). The research pair's own mining (group D,
+`docs/research/SimHospital-Synthea-limitations-considered.md` §5.4)
+upgrades this from nice-to-have to evidence-backed: SimHospital's own
+in-code admission that a first pending encounter "will never be
+finished, since only the latest Encounter is checked" is direct proof
+that single-current-encounter assumptions break real workflows once
+multiple pending encounters can overlap. The capture — visit ids
+(PV1-19), readmission, and support for *multiple concurrent pending*
+encounters, not just one — must land **with or immediately before**
+whichever future milestone actually introduces `:pending-*` step
+types, since a pending-admission mechanism designed against a
+single-current-encounter assumption would reproduce the exact failure
+this evidence warns against.
+
 Co-landing invariants, landed: `cancel-references-existing-uncancelled-event`
 (a cancelled event must reference an event it cancels, of the right
 type, not already cancelled), `bed-swap-both-admitted-before-swap`,
@@ -228,6 +245,27 @@ Co-landing invariants: results reference orders that exist and
 precede them in time; order/result message types register in
 `message-type-registry` the same way ADT types already do.
 
+**M3-adjacent capture: per-patient pathway assignment.**
+`ehr-testing-sim.engine/run` today executes exactly one pathway for
+every patient in a run — the churn regression fleet (M2b) had to
+script `decide`/`evolve` directly, one call at a time, precisely
+because there is no config-level way to run a *mixture* of pathways
+across a patient population. SimHospital's own pathway config has a
+`percentage_of_patients`-style analogue for exactly this; this project
+has discussed the gap without capturing it in a planning artifact
+until now. Needed: a distribution/assignment layer — config mapping
+pathway ids to weights (a sampled mixture) or to explicit per-patient
+assignments (a scripted fleet, `run`'s existing single-pathway mode as
+the degenerate case) — so a scripted scenario fixture can run through
+`engine/run` end to end instead of hand-driving `decide`/`evolve`. This
+is also **M5's own prerequisite**: `CompileTrajectory` produces a
+*distinct* pathway per patient (each patient's own compiled clinical
+trajectory), so the assignment layer that lets `run` accept "one
+pathway per patient, not one pathway for all" is infrastructure M5
+needs regardless of where it lands first. Captured here as a named gap,
+not designed in the fuller sense `docs/operational-models.md` designs
+the allocation ladder.
+
 ## M4 — Persona + demographics tables; payer sampling; PID/IN1 enrichment
 
 Lands **Persona** (`:planned`) for real: demographics sampling from
@@ -236,7 +274,13 @@ vendored, hashed tables (`demographics-tables`, target 3), plus the
 reference on `:persona` — this is the milestone that turns that
 comment into a real `:catalytic` wire. PID gains demographic fields;
 IN1 lands as a segment for the first time, carrying the sampled payer
-(`docs/operational-models.md`'s payers model).
+(`docs/operational-models.md`'s payers model). **Upstream-demand
+citation** (`docs/research/SimHospital-Synthea-limitations-considered.md`
+§5.3): SimHospital issue #3 is a user unable to find a way to include
+the IN1 insurance segment — this milestone is the answer. PID's
+demographic enrichment also carries US phone formatting, named
+unavailable and uneditable in SimHospital issue #21 — the same issue
+that requests GT1/ZG1 (below, site-profiles' citation).
 
 Co-landing invariants: sampled demographics and payer are internally
 consistent with any age-linked rule (e.g. Medicare weighting at 65+
@@ -261,6 +305,25 @@ clinical-content-preserving compilation (every trajectory event maps
 to at least one IR step, none dropped or reordered against clinical
 causality).
 
+**Medications, M5+ note.** An OHDSI evaluation found Synthea's own
+medication data unreliable without its separate Medication
+Diversification Tool, citing limited model diversity as the root cause
+(`docs/research/SimHospital-Synthea-limitations-considered.md` §4.3,
+Wagner and Blacketer). Whenever medications land in this project
+(M5's GMF port or later), single-source distributions are expected to
+need the same kind of diversification step — recorded now so this
+isn't relearned the hard way once real medication content exists here.
+
+**No hidden modules (`sim-theory.md`'s IR-transforms-as-composition-
+layer note).** Synthea's built-in Java lifecycle modules run always-on
+and invisibly, surprising users who tried to run only their own custom
+module set (discussion #1126, `docs/research/SimHospital-Synthea-
+limitations-considered.md` §4.2). This milestone's own lifecycle
+behavior (birth, aging, death, whatever the GMF port needs) must be an
+explicit, listable stage or IR→IR transform — the same composition
+mechanism `InjectChurn` already established, not a special-cased
+always-on pass a config author has no way to see or disable.
+
 ## M6 — EmitState (FHIR snapshots first); emitter-coherence property
 
 Lands **EmitState** (`:planned`): state-document rendering from
@@ -268,7 +331,12 @@ Lands **EmitState** (`:planned`): state-document rendering from
 point to resolve `sim-theory.md`'s open question #3 — whether
 `state-history` is primitive or derived from `ground-truth-log` —
 since EmitState existing is exactly the precondition that question's
-own deferral names.
+own deferral names. **Upstream-demand citation**
+(`docs/research/SimHospital-Synthea-limitations-considered.md` §5.3):
+SimHospital issue #11, a 2024 user requesting FHIR output because
+Synthea already had it and it was easier to use — the issue stayed
+open through the project's archival, so this milestone answers a real,
+still-unmet request rather than a hypothetical one.
 
 Co-landing invariants: snapshot-at-instant (a state-document is a
 pure function of `state-history` at a queried instant, no access to
@@ -290,6 +358,17 @@ the milestone before it:
   via NIST/HAPI, per `docs/third-party-sources.md` Tier 2) — triggers
   once this repo has a public GitHub remote (ADR-0003's existing
   trigger) or another CI-capable remote.
+- **SETUP.md** — deferred trigger: owed before this repo has any user
+  besides its own author, not written speculatively now. Installation
+  friction is a first-class adoption risk for both mined upstreams —
+  SimHospital's Bazel/Go build breakage across several issues, and an
+  InterSystems team calling Synthea's JDK/Gradle setup a "nightmare"
+  even after successfully using the tool
+  (`docs/research/SimHospital-Synthea-limitations-considered.md` §5.2,
+  §4.5). This repo's cold-start already fits in one documented command
+  (`AGENTS.md`'s Quick start); SETUP.md exists to keep that true for
+  someone who isn't this repo's author, not to add ceremony ahead of
+  need.
 - **Packs demotion** — `pack-push` stays the active session-end
   ceremony (ADR-0006) until this repo's GitHub remote goes *public*;
   demoting it to dormant, the way `ehr-testing-tools` did at its own
@@ -303,7 +382,17 @@ the milestone before it:
   thin content without order/result data to bind them to — a
   site-profile milestone landing before M3's `order-profiles` catalytic
   exists would have little beyond code-table overrides to actually
-  exercise.
+  exercise. **Scope addition: MSH-12 (HL7 version id) as an explicit
+  site-profile config knob** — SimHospital issue #17
+  (`docs/research/SimHospital-Synthea-limitations-considered.md` §5.3),
+  a consumer of HL7v2.6 who could see multiple generated schemas in the
+  project but no documented way to switch versions, is this milestone's
+  citation for making version selection a named, configured field
+  rather than a hard-coded emitter constant. **Custom-segment
+  citation**: SimHospital issue #21, a 2024 user asking how to add GT1
+  and ZG1 segments — the same issue this roadmap's M4 entry cites for
+  US phone formatting — is this milestone's citation for the
+  Z-segment-template scope item above.
 
 ## Consumer plan: sim doesn't validate itself in a vacuum
 
@@ -1401,6 +1490,86 @@ typed, timestamped, and already authoritative — rather than porting
 `Person.history` itself; the accumulator deliberately carries no
 visit-history field of its own for exactly this reason.
 
+## Scope: what this architecture buys, and what it doesn't
+
+A tempering note, not a walk-back: an independent research pass over
+SimHospital's and Synthea's own public issue trackers, source, and
+practitioner discussion (`docs/research/SimHospital-Synthea-limitations-
+considered.md`, retrieved 2026-07-26) confirms the state-machinery
+critique this document makes — and sharpens exactly where its boundary
+sits. The report verifies further receipts beyond the two this document
+already cites above, each the same shadow-field-accretion family as
+`PatientInfo`'s six location fields, not a new failure mode: visit
+deletion pops the latest identifier off a `PastVisits` stack rather than
+deriving "the prior visit" from a durable fact stream; pending-location
+cancellation shuffles values between `PendingLocation` and
+`PriorPendingLocation` rather than the log simply being queried; and an
+in-code comment on consecutive pending encounters admits outright that
+the first "will never be finished, since only the latest Encounter is
+checked" — direct evidence of the single-current-object assumption this
+document's own argument predicts.
+
+What that critique does **not** reach, and the report is explicit about
+this too: the dominant complaints practitioners actually file against
+both tools are about **clinical fidelity** — Synthea's simplified and
+isolated disease models, its heterogeneous-outcome gap, its US-centric
+demographics — not storage architecture. Event sourcing dissolves the
+state-machinery failure class this document is about: reproducibility,
+correction/supersession, audit, and the coherence laws this project's
+own validation program states as claims 3 and 7
+(`docs/problem-statement.md`). It does not, by itself, buy clinical
+realism — validation claims 4 and 5, "would a clinician find these
+trajectories credible" and "does this look like a real ADT feed" —
+which rest on entirely separate mechanisms this project already treats
+as separate: content provenance (Synthea-derived GMF modules, M5),
+statistical calibration against published references, and capacity
+modeling (`docs/operational-models.md`'s allocation ladder, already
+built). Keeping these two arguments apart is deliberate, not a gap the
+report caught: an event-sourced engine that generated medically
+implausible trajectories would be exactly as untrustworthy as a
+mutable-state one, just for a different, unrelated reason.
+
+The report's own final assessment (§9) states, independently, the same
+design target this project's architecture and roadmap already converge
+on: "an immutable, replayable clinical-event ledger with explicit
+correction/supersession semantics; deterministic simulation time and
+identifiers; separately materialized current-state views; composable
+reactions across modules; and empirically validated domain models."
+Every clause in that sentence names a decision this project has already
+made or has on its roadmap — ADR-0008's log-is-primitive engine,
+ADR-0011's deterministic time model and ADR-0010's deterministic
+identity, the occupancy-board/state-history projection pattern
+(`docs/operational-models.md`), `sim-theory.edn`'s IR-transform
+composition (InjectChurn), and M5's empirically-sourced GMF module
+content — arrived at independently of this report, not retrofitted to
+match it after the fact. See `docs/research/SimHospital-Synthea-
+limitations-considered.md` for the full compendium this section
+distills; this project treats it as evidence to cite, not a source to
+re-verify each time it comes up.
+
+## Determinism threats: what a seed alone doesn't guarantee
+
+Synthea's own reproducibility saga — issues #682 and #1342, PRs #756
+and #1237 (`docs/research/SimHospital-Synthea-limitations-considered.md`
+§4.1) — is worth citing directly here because it demonstrates, with a
+paper trail, a claim this document otherwise only argues structurally:
+a seed is necessary, not sufficient. Their failure modes double as a
+checklist against this project's own defenses.
+
+| Threat (theirs) | Our status |
+|---|---|
+| UUID/id generation divergence | Defended: deterministic `:patient-id` (ADR-0010) and control ids, both derived from the run's seed, never `java.util.UUID/randomUUID` or similar wall-clock/hardware entropy |
+| Unordered-collection iteration | Mostly defended (the engine's work queue is a `sorted-map`); gap closed this session — `emitter-order-independence-test` (`test/ehr_testing_sim/emitter_order_independence_test.clj`) guards that `emit-hl7` never depends on a map's or set's own iteration order when building segments |
+| Reference *date* vs full timestamp | Defended: relative seconds (ADR-0011) plus an explicit `:reference-date` and a fixed `:utc-offset`, both pinned in the run manifest, never a bare current-time reference |
+| Locale/OS differences | Partially defended (locale/timezone recorded in the manifest); revisit once CI exists (`.agents/plans/roadmap.md`'s CI trigger) |
+| Cross-format id divergence (CDA vs FHIR vs CSV) | **Gap, open**: "the same event ids and patient ids across every emitter" is not yet a named law — see the cross-emitter id sub-law noted alongside `sim-theory.md`'s emitter-coherence law, testable once EmitState (M6) gives this project a second emitter to check the first against |
+
+The structural defense behind the first four rows is already argued
+elsewhere in this document (`:patient-id`/`:mrns` generation, the
+seconds/UTC-offset time model, the single seeded RNG); the table exists
+to make the comparison to a documented real-world failure explicit
+rather than left merely asserted.
+
 ## The practical payoffs
 
 Making the domain's event-sourced shape explicit, rather than leaving
@@ -1666,7 +1835,12 @@ needs a board) and rendered in PV1-7 as `id^family^given`, HL7's
 usual attending-doctor field shape. Providers serve many patients
 concurrently by construction: there is no occupancy invariant to
 write for a provider, because "attending has 40 patients at once" is
-never a bug.
+never a bug. (Synthea's own encounter export maps its `provider`
+column to an *organization*, not a clinician, leaving many encounters
+without an identifiable physician — Synthea issue #547, per
+`docs/research/SimHospital-Synthea-limitations-considered.md` §4.4 —
+a gap this model's provider/facility split already avoids by
+rendering a real per-patient attending, not an organization stand-in.)
 
 **Captured, not designed — open questions:**
 
@@ -1817,7 +1991,18 @@ gaps and one design lesson:
   regardless of which physical ward they're sitting in.
 - **`VisitID`** per encounter (PV1-19) — not landed yet; flagged for
   whenever encounters become first-class (readmission scenarios, M2b
-  or later). Not part of the schema below.
+  or later). Not part of the schema below. This gap is now
+  evidence-backed, not merely anticipated: the research pair's own
+  mining (`docs/research/SimHospital-Synthea-limitations-considered.md`
+  §5.4) surfaces SimHospital's own in-code admission that a first
+  pending encounter "will never be finished, since only the latest
+  Encounter is checked" — direct proof that a single-current-encounter
+  assumption breaks once multiple pending encounters can overlap.
+  Encounters-as-first-class (visit ids, readmission, and *multiple
+  concurrent pending* encounters, not just one) is captured in
+  `.agents/plans/roadmap.md` to land with or immediately before
+  whichever future milestone introduces `:pending-*` step types, for
+  exactly this reason.
 - **Pending locations and expected admit/discharge/transfer
   datetimes** (the A14/A15-family pending events) carry *expected*
   times, a field class this project's events don't have yet. Flagged
@@ -2006,6 +2191,30 @@ specifically so `decide` can query it directly (`nth`/`filter`/
 `:transfer-in-error`'s prior-location lookup already makes (see the
 worked example below).
 
+## Rejected steps (M2b-surfaced capture, ADR-0012)
+
+M2b's `InjectChurn` property-testing surfaced a gap in the log's own
+claim to be authoritative (ADR-0002, ADR-0008): a step that is
+statically legal per the applicability oracle above can still be
+rejected at execution time by live world state the oracle had no
+visibility into (e.g. a `:cancel-discharge` reinstatement targeting a
+bed someone else's admission has since reclaimed). Today that
+rejection is a bare no-op — no trace enters the log. [ADR-0012](../notes/ADRs.md#adr-0012)
+records the decision to close this: a `:step-rejected` event
+(`:participants`, the attempted step, a reason) enters the ground-truth
+log on every such rejection. It is **truth about the run, never a
+message-bearing event** — no `message-type-registry` entry, by design,
+since no real ADT feed carries a message for an attempted action that
+never became a real one — but `check.clj`'s invariant catalog and any
+test harness reading the log directly may reference it, the same
+glass-box-auditability rationale every other event type already
+serves. ADR-0012 also captures a v2 refinement: cancel-reinstatement
+should route back through `ehr-testing-sim.facility/allocate`'s
+existing ladder rather than dead-ending as a no-op, because a real
+hospital doesn't fail a cancellation when the original bed is gone —
+it finds the patient a different one. Both pieces are captured here as
+design, scheduled M3-adjacent; no code lands with this session.
+
 ## States and transitions
 
 ```mermaid
@@ -2134,7 +2343,83 @@ separately-parameterized invariant, `warm-up-mark-matches-window`
 seconds)` against the run's own configured window — `check/check-all`
 grew a third optional arg (`warm-up-seconds`, default 0) alongside the
 existing `facility-config` one, both following the same "needs more
-than just the log" pattern.
+than just the log" pattern. (This landed choice — mark the log,
+never silently trim it — is exactly the failure mode Synthea's own
+export-window confusion warns against: content that appears to vanish
+from a generated history with no marker explaining why, issues #1465
+and #1040 per `docs/research/SimHospital-Synthea-limitations-
+considered.md` §4.1/§4.2. A consumer here can always tell warm-up
+traffic from steady-state traffic by querying `:warm-up`, rather than
+wondering where events went.)
+
+========== END FILE ==========
+
+========== FILE: ./docs/positioning-notes.md ==========
+# Positioning notes (raw material — pre-positioning scratch)
+
+**This is not a positioning document.** It's the raw material one will
+eventually draw from — three observations mined from
+[`docs/research/SimHospital-Synthea-limitations-considered.md`](research/SimHospital-Synthea-limitations-considered.md)
+(retrieved 2026-07-26) that bear directly on how this project would
+explain itself to someone comparing it against the two tools it mined.
+Nothing here is a claim ready to ship in a README or a talk; it's notes
+for whoever writes that document later, kept here so the mining session
+that surfaced them isn't lost before that document exists.
+
+## 1. Capacity realism is a differentiator
+
+Synthea's own COVID-19 modeling paper concedes the tool "did not
+constrain care or supplies by capacity" — its authors call the model's
+output an *upper bound* on delivered care, not a resource-constrained
+simulation, and note it would need extra pathways to represent
+unavailable ventilators or other scarce resources (§4.3 of the research
+report, citing Walonoski et al. 2020). This project's boarding
+mechanic, ladder exhaustion, and cross-patient bed-ready coupling
+(`docs/operational-models.md`, landed M1) are not a nice-to-have
+add-on — they are exactly the thing Synthea's own authors say their
+tool doesn't do. Worth saying plainly, eventually: *capacity is not
+decoration on top of this simulator's clinical content, it emerges
+from the same engine that produces the content.*
+
+## 2. The gap is open — say so honestly
+
+The report's own negative finding (§7, "Event-sourced alternative"):
+no checkable project was found that positions itself as an
+event-sourced successor to either SimHospital or Synthea. That's a
+finding about the *market*, not a finding about this project's
+technical merit, and the two shouldn't be conflated when this gets
+written up. The honest framing is "this is an open opportunity," not
+"the market has converged on this being the right architecture and we
+built it" — the report explicitly warns against the latter overclaim
+(§8, evidence gaps: "no public comparative experiment shows that an
+event-sourced rewrite would improve realism, extensibility, or
+correctness"). Whatever positioning document eventually gets written
+should carry that same honesty rather than borrow more confidence from
+this research than the research itself claims.
+
+## 3. The log player answers a documented need
+
+SyntheaWeb's own stated rationale (§4.5 of the research report) is that
+Synthea's CLI is a significant technical barrier for clinical
+researchers, and raw FHIR JSON output is an "interpretability gap" for
+end users who aren't going to read JSON to understand a patient's
+story. This project's own future log player / bed-board consumer
+(named in `.agents/plans/roadmap.md`'s consumer plan, not yet built) is
+aimed at exactly that same gap, independently arrived at — a human
+wants to *watch* a simulated hospital, not grep its ground-truth log.
+Worth citing SyntheaWeb specifically when that consumer's own
+motivation gets written up, since it's independent confirmation the
+need is real rather than a need this project invented to justify a
+planned feature.
+
+## Provenance
+
+Every claim above traces to a specific section of
+`docs/research/SimHospital-Synthea-limitations-considered.md`, cited
+inline. Nothing here restates a fact from that report without a
+pointer back to it — per `AGENTS.md`'s "do not invent facts about
+upstream sources" discipline, this document treats the report as the
+evidence artifact and does not re-verify or re-derive its findings.
 
 ========== END FILE ==========
 
@@ -2232,6 +2517,313 @@ A skeptical domain expert — an interface analyst, clinical informaticist, or Q
 **Glass-box auditability.** All clinical content is inspectable data, not opaque code or model weights: an expert can open the asthma module and read its SNOMED codes, incidence probabilities, and state transitions directly. The engine is deterministic and seeded, so any output event is traceable to the module state and random draw that produced it. "Don't trust us — read the data" is a stronger posture than any black-box generator can offer.
 
 **Reproducibility as evidence.** Because identical config + seed yields byte-identical output, every validation artifact — conformance reports, invariant checks, distribution comparisons — is independently re-runnable by the skeptic on their own machine. Validation is not a claim about past testing; it is a standing, repeatable demonstration.
+
+========== END FILE ==========
+
+========== FILE: ./docs/research/SimHospital-Synthea-experience.md ==========
+# SimHospital and Synthea: Limitations, Practitioner Experience
+
+*Research current to July 26, 2026*
+
+## 1. Research prompt
+
+> Compile a structured, source-cited compendium of real-world problems, limitations, and practitioner opinions regarding Google’s SimHospital and MITRE’s Synthea. Profile each tool’s architecture and intended use; verify its internal state model from source code and architecture documentation; mine GitHub issues, pull requests, discussions, contributors, activity, and notable forks; search interoperability forums, practitioner communities, blogs, academic studies, conferences, social media, and health-IT trade press; and synthesize whether observed limitations actually support a mutable-state-versus-event-sourcing critique. Distinguish explicit practitioner claims from architectural inference, identify counterevidence, and state where public evidence is sparse. Every factual claim must link to a checkable source.
+
+## 2. Executive summary
+
+**Bottom line:** the public evidence supports a narrower claim than the prompt’s premise. Both tools are stateful simulations, and neither is an event-sourced system in which an immutable event log is the authoritative record from which state is rebuilt. Yet neither is simply “mutable current state”: SimHospital has a time-ordered event queue and per-event pathway history, while Synthea retains state-machine history and timestamped clinical-record entries ([SimHospital event source](https://github.com/google/simhospital/blob/master/pkg/state/event.go), [Synthea generic-module architecture](https://github.com/synthetichealth/synthea/wiki/Generic-Module-Framework), [Synthea `Person.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/agents/Person.java)).
+
+Commonly reported root causes are:
+
+1. **Synthea:** simplified and isolated disease models, incomplete variation and comorbidity logic, output inconsistencies, surprising time/history semantics, module composition difficulty, US-centric input data, installation friction, and limited fitness for real-world inference ([2019 validation study](https://pmc.ncbi.nlm.nih.gov/articles/PMC6416981/), [2022 simulation-platform evaluation](https://pmc.ncbi.nlm.nih.gov/articles/PMC9360775/), [2026 model-development study](https://pmc.ncbi.nlm.nih.gov/articles/PMC12772637/)).
+2. **SimHospital:** build/toolchain breakage, MLLP networking confusion, inflexible HL7 schema/version handling, missing segments/features, limited output formats, thin support, and eventual abandonment—the repository was archived on March 28, 2025 ([repository](https://github.com/google/simhospital), [issue list](https://github.com/google/simhospital/issues)).
+
+There is nevertheless code-level evidence of the kind of complexity the hypothesis anticipates. SimHospital cancellations restore saved “prior” locations, visit deletion pops a previous visit, and a code comment warns that with two consecutive pending encounters the first “will never be finished” because only the latest is checked ([event-processing source](https://github.com/google/simhospital/blob/master/pkg/hospital/event_types.go)). Synthea mutates active `Person`, provider, module, and `HealthRecord` objects, while ending conditions, allergies, medications, care plans, and encounters by changing stop/status fields in place ([`Person.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/agents/Person.java), [`HealthRecord.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/concepts/HealthRecord.java)). These are legitimate examples of mutable-state machinery, but public evidence does not establish that replacing it with event sourcing would solve the dominant realism and usability complaints.
+
+## 3. Tool profiles and verified state models
+
+| Dimension | SimHospital | Synthea |
+|---|---|---|
+| Primary purpose | Generates configurable hospital workflow messages in HL7v2 and can send them over MLLP, save them, or print them ([README](https://github.com/google/simhospital)). | Simulates birth-to-death patient histories and exports FHIR, C-CDA, CSV, and other formats ([repository](https://github.com/synthetichealth/synthea)). |
+| Modeling unit | A pathway: a sequence of hospital events such as admission, transfer, order, result, discharge, cancellation, and merge ([pathway documentation](https://github.com/google/simhospital/blob/master/docs/write-pathways.md)). | A patient processed through disease and care modules represented as states and transitions at simulation time steps ([generic-module documentation](https://github.com/synthetichealth/synthea/wiki/Generic-Module-Framework)). |
+| Event-like elements | A priority queue contains `Event` objects with event/message times, current step, pathway, index, and a `History` array; the source calls an event a “stateful object” for events “currently in progress” ([event source](https://github.com/google/simhospital/blob/master/pkg/state/event.go)). | `Person.history` holds state-machine history; clinical record entries carry start/stop timestamps; modules process states sequentially ([`Person.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/agents/Person.java), [module framework](https://github.com/synthetichealth/synthea/wiki/Generic-Module-Framework)). |
+| Mutable-state elements | `Hospital` owns mutable patient, bed/location, event-queue, and message-queue structures; `Patient` indexes mutable `PatientInfo`, orders, documents, and past visits ([hospital package](https://pkg.go.dev/github.com/google/simhospital/pkg/hospital), [`Patient` source](https://github.com/google/simhospital/blob/master/pkg/state/patient.go)). | `Person` exposes mutable attributes, current modules, active record(s), chronic medications, current providers, and state history; `HealthRecord` updates active entries and stop times ([`Person.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/agents/Person.java), [`HealthRecord.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/concepts/HealthRecord.java)). |
+| Event sourced? | **No.** Events are queued work items and may be persisted, but the application’s authoritative operational state also resides in mutable patient/location/order structures; no replay-derived aggregate architecture is documented ([event source](https://github.com/google/simhospital/blob/master/pkg/state/event.go), [extension documentation](https://github.com/google/simhospital/blob/master/docs/extend-sh.md)). | **No.** State history and dated entries exist, but current state is not derived solely by replaying an immutable append-only event log ([`Person.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/agents/Person.java), [`HealthRecord.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/concepts/HealthRecord.java)). |
+
+### Important counterevidence to an overbroad critique
+
+SimHospital explicitly models transfer-in-error, discharge-in-error, cancel admit/visit, cancel transfer, cancel discharge, delete visit, amendments, and result corrections ([pathway documentation](https://github.com/google/simhospital/blob/master/docs/write-pathways.md)). It is therefore incorrect to say the tool is categorically unable to represent corrections or reversals. The better criticism is that these workflows are implemented as named procedural cases with saved prior fields and inverse mutations, which may become cumbersome as scenarios become more concurrent or non-linear ([event-processing source](https://github.com/google/simhospital/blob/master/pkg/hospital/event_types.go)).
+
+Synthea likewise preserves more history than a pure “current-row overwrite” model: it keeps timestamped record entries and module-state history ([`HealthRecord.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/concepts/HealthRecord.java), [`Person.java`](https://github.com/synthetichealth/synthea/blob/master/src/main/java/org/mitre/synthea/world/agents/Person.java)). Its central limitation is better described as **forward state-machine simulation with mutable aggregates and simplified domain models**, not absence of temporal data.
+
+## 4. Synthea: catalog of problems and practitioner opinions
+
+### 4.1 Temporal control, reproducibility, and export consistency
+
+| Evidence | Reported problem | Interpretation |
+|---|---|---|
+| [Issue #1465](https://github.com/synthetichealth/synthea/issues/1465) | In versions 3.1.x–3.2.0, encounters extended beyond `exporter.years_of_history`; the reporter requested day-level history control. | Export-window semantics do not reliably match users’ mental model of generated history. |
+| [Issue #1342](https://github.com/synthetichealth/synthea/issues/1342) | A run made without an explicit reference time could not be exactly reproduced because the internal reference is a full timestamp while `-r` accepted only a date. | Current-time dependence leaked into reproducibility. |
+| [Issue #682](https://github.com/synthetichealth/synthea/issues/682) | Identical seeds produced differing timestamps, while IDs were inconsistent across runs and between CDA, FHIR, and CSV. | Export and generation layers did not initially share stable identity/time semantics. |
+| [PR #756](https://github.com/synthetichealth/synthea/pull/756) | Maintainers centralized randomness, cloned modules/states, and added a reference date, but warned that UUIDs and filtered export history would still differ. | Reproducibility required cross-cutting controls, not merely a seed. |
+| [PR #1237](https://github.com/synthetichealth/synthea/pull/1237) | Maintainers fixed nondeterministic set ordering, exporter UUID generation, leaked imaging objects, and OS differences; the PR called extra end sorting “not ideal.” | Mutable/shared objects, concurrency, unordered collections, and exporter behavior all caused divergence. |
+
+The FHIR implementers’ forum records the same control mismatch in practitioner terms. Asked to place an encounter on a specified day, maintainer Jason Walonoski replied: “**No, Synthea doesn't work that way. It is a simulation and generator, not a tool for you to hand-write sample data**,” and “**There is no out of the box parameter to do what you want**”; his workaround was to filter FHIR resources by date after generation ([FHIR implementers chat](https://chat-archive.fhir.org/stream/179166-implementers/topic/Generate.20Synthea.20Patients.html)).
+
+Stable clocks, deterministic random streams, explicit bitemporal semantics, immutable identifiers, and consistent exporter contracts could address many of these failures without a full event-sourced rewrite.
+
+### 4.2 Module composition and extensibility
+
+- A user whose direct-transition module appeared to require an encounter for every patient saw ten condition rows but only a few encounter rows ([issue #475](https://github.com/synthetichealth/synthea/issues/475)). A similar user saw the state execute but the expected endoscopy absent from FHIR while a follow-up visit remained ([issue #458](https://github.com/synthetichealth/synthea/issues/458)).
+- Users repeatedly expected a selected module to affect every generated patient, but obtained patients with no expected observations or devices ([issue #941](https://github.com/synthetichealth/synthea/issues/941), [discussion #1040](https://github.com/synthetichealth/synthea/discussions/1040)). In the latter, the maintainer explained that all modules run from birth at every time step, so an unguarded device state may execute on newborns and later disappear from the configured export window ([discussion #1040](https://github.com/synthetichealth/synthea/discussions/1040)).
+- Cross-module augmentation is awkward: a practitioner wanting standard vital signs on every emergency encounter asked whether every module’s emergency encounter had to be found and individually edited ([issue #780](https://github.com/synthetichealth/synthea/issues/780)).
+- Running only custom modules is not a clean isolation boundary. Maintainer Jason Walonoski warned it “**might not behave the way you expect**” because hard-coded Java lifecycle modules still execute, then jokingly described the advanced alternative as exploring “**strange new worlds alone and in the dark**” ([discussion #1126](https://github.com/synthetichealth/synthea/discussions/1126)).
+- Local module replacement can also be surprising: adding a module directory may run the local and bundled versions in parallel, while modifying the bundled module requires rebuilding the JAR ([discussion #1529](https://github.com/synthetichealth/synthea/discussions/1529)).
+
+These complaints indicate a composition model dominated by global time-step execution, shared patient state, hard-coded lifecycle behavior, and export filtering. An event bus or event-sourced aggregate could make cross-cutting reactions and replay more explicit, but discoverability, module packaging, scoping, and documentation are at least as important.
+
+### 4.3 Clinical realism and validity
+
+The best-documented Synthea limitations come from validation studies, not GitHub.
+
+- A 2019 clinical-quality-measure validation concluded that Synthea modeled demographics and average service probabilities reasonably but had limited ability to model heterogeneous post-service outcomes. SyntheticMass had obesity prevalence of 62.6% versus 23.3% in the real Massachusetts comparison, and the implementation covered only two of five eligible colorectal-screening methods ([Chen et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC6416981/)).
+- The original Synthea paper itself cautioned that synthetic records are not suitably nuanced or rich for biomedical, genetic, or pharmaceutical discovery and that “real clinical discovery requires real data” ([Walonoski et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC7651916/)).
+- A 2022 evaluation found no ingestion path for record-level data to estimate model parameters, no user-friendly way to specify complex multivariate models, and a predominance of guideline pathways rather than guideline-discordant, alternative, or hypothetical care paths ([Meeker et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC9360775/)).
+- A 2024/2025 benchmark found Synthea generated nonzero prevalence for only 160 phecodes, tended to underestimate prevalence, and overestimated associations relative to MIMIC data; its privacy resistance was comparatively strong, illustrating a fidelity–privacy trade-off rather than universal inferiority ([Chen et al.](https://arxiv.org/html/2411.04281v1)).
+- The 2020 COVID-19 model authors said the model lacked knowledge emerging after May 2020, did not constrain care or supplies by capacity, represented an upper bound on delivered care, and would need extra pathways for unavailable ventilators or other resources ([Walonoski et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC7531559/)).
+- A 2026 Synthea model-development paper described “frequent medical code inaccuracies,” isolated models without comorbidity considerations, continued need for clinical experts, and a time-consuming co-development process that may encode only the treatment variations familiar to participating clinicians ([Kramer et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC12772637/)).
+- An OHDSI evaluation summarized prior work as finding Synthea medication data unreliable without a Medication Diversification Tool and said limited model diversity hindered fidelity ([Wagner and Blacketer](https://www.ohdsi.org/wp-content/uploads/2024/10/41-Wagner-Evaluating_Synthea-Clair-Blacketer.pdf)).
+
+These findings mostly concern **model content, parameterization, dependency structure, and validation**, not storage architecture. Event sourcing would improve provenance and replay but would not by itself create guideline-discordant care, realistic comorbidities, resource constraints, diverse medications, or empirically calibrated correlations.
+
+### 4.4 Data integrity, output semantics, and runtime failures
+
+- An encounter CSV column called `provider` mapped to an organization rather than a clinician, leaving many encounters without an identifiable physician ([issue #547](https://github.com/synthetichealth/synthea/issues/547)).
+- A COVID-19 module contained an incomplete builder placeholder that threw an error, while an intubation reason referred to respiratory failure under a contradictory state; the reporter removed one value and replaced another ([issue #707](https://github.com/synthetichealth/synthea/issues/707)).
+- A city-scale run produced `NullPointerException`s for 1,152 of 43,944 demographic rows, including missing next-state lookups deep in submodule processing ([issue #1380](https://github.com/synthetichealth/synthea/issues/1380)).
+- An Abu Dhabi localization failed to find ambulatory, wellness, or inpatient providers even after the user replaced hospital, primary-care, urgent-care, demographic, ZIP-code, and timezone inputs ([issue #1542](https://github.com/synthetichealth/synthea/issues/1542)).
+- The international configuration project acknowledges incomplete regions, mismatched English/local place names, US-format phone numbers, US-derived common names outside Finland, and even reuse of Finnish demographics across European countries ([Synthea International](https://github.com/synthetichealth/synthea-international)).
+
+### 4.5 Usability and practitioner sentiment
+
+Practitioner opinion is mixed rather than uniformly negative.
+
+- Rob Rossmiller praised Synthea for simplifying generation “without compromising on its quality,” called its CLI straightforward, and valued the ability to create privacy-safe demo data; his cancer-only experiment also encountered unrelated non-cancer records, aligning with the module-filter complaint he filed on GitHub ([first-use blog](https://medium.com/@rrossmiller24/my-first-experience-with-synthea-synthetic-health-data-generation-74fffd74a138), [issue #546](https://github.com/synthetichealth/synthea/issues/546)).
+- An InterSystems team wrote that “Synthea came to our rescue” for a public readmission demo, but called installing the JDK and Gradle across a team a “nightmare” and containerized the tool to make the environment reproducible ([InterSystems community post](https://community.intersystems.com/post/using-synthea-and-docker-consistent-realistic-synthetic-patient-generation)).
+- The SyntheaWeb project describes Synthea’s CLI as a significant technical barrier for clinical researchers and raw FHIR JSON as an “interpretability gap” for end users ([LOINC article](https://loinc.org/articles/syntheaweb-a-web-based-platform-for-the-generation-and-interactive-inspection-of-synthetic-healthcare-data/)).
+- In a mortality-prediction discussion, maintainer Dylan Hall said the disease-progression models are “**extremely simplified compared to the complexities of the real world**” and warned that a model trained only on Synthea would not work on real patients ([discussion #1445](https://github.com/synthetichealth/synthea/discussions/1445)).
+- MITRE’s own account is strongly positive: its engineers emphasize that Synthea gives developers complex, standards-based test data that would be impractical to handcraft, particularly for API testing ([MITRE impact story](https://www.mitre.org/news-insights/impact-story/patient-data-synthea-missing-piece-health-it)).
+
+### 4.6 Community and maintenance
+
+Synthea remains active. Its repository showed about 2.8k stars, 789 forks, 80 watchers, 18 releases, and 4,994 commits in the July 2026 search snapshot ([repository](https://github.com/synthetichealth/synthea)). A local history analysis found 36 commits in 2026 through July 21, following 94 in 2025 and 76 in 2024; the two largest normalized author identities account for about 48% of commits, and the leading contributors are predominantly MITRE-affiliated ([repository history](https://github.com/synthetichealth/synthea), [contributors page](https://github.com/synthetichealth/synthea/graphs/contributors)).
+
+This is a mature but concentrated project, not a stalled one. Open issues and discussions that remain unanswered for years indicate support bandwidth limits, but ongoing commits and 2026 documentation updates contradict an abandonment narrative ([developer setup, updated March 2026](https://github.com/synthetichealth/synthea/wiki/Developer-Setup-and-Running)).
+
+## 5. SimHospital: catalog of problems and practitioner opinions
+
+### 5.1 Maintenance is the dominant limitation
+
+SimHospital’s repository was archived on March 28, 2025 and is read-only; its last cloned commit was August 9, 2023, and the repository contains 150 commits ([repository](https://github.com/google/simhospital)). The July 2026 snapshot showed about 710 stars, 86 forks, 20 watchers, and seven listed contributors, but those popularity signals no longer translate into maintainability ([repository](https://github.com/google/simhospital)).
+
+Local history analysis found 96% of commits attributable to the top five normalized author identities and 78% to the top two; nearly all leading author emails were at Google. This concentration is consistent with a small internal team publishing a useful tool rather than a broadly governed community project ([contributors page](https://github.com/google/simhospital/graphs/contributors), [repository history](https://github.com/google/simhospital/commits/master/)).
+
+The issue list is unusually stark: the visible public tracker consists of a small set of open questions and defects, many with no assignee, linked development, or visible resolution, and archiving permanently froze them ([issue list](https://github.com/google/simhospital/issues)).
+
+### 5.2 Installation, build, and transport problems
+
+| Evidence | Practitioner problem |
+|---|---|
+| [Issue #2](https://github.com/google/simhospital/issues/2) | Windows Bazel builds found no targets or failed while fetching Gazelle tools. |
+| [Issue #7](https://github.com/google/simhospital/issues/7) | A user reported failed builds on both Windows and Linux due to old Bazel/Python dependency machinery. |
+| [Issue #8](https://github.com/google/simhospital/issues/8) | A macOS build failed because Bazel expected a `python` executable and could not fetch `pip_deps`. |
+| [Issue #19](https://github.com/google/simhospital/issues/19) | A 2024 user requested documented Go/Bazel versions after compatibility failures with Go 1.22 and Bazel 7.3. |
+| [Issue #4](https://github.com/google/simhospital/issues/4) and [issue #12](https://github.com/google/simhospital/issues/12) | Users could not connect the Dockerized simulator to local MLLP listeners; Docker host/network semantics were not made obvious. |
+| [Issue #9](https://github.com/google/simhospital/issues/9) | Docker startup produced dozens of poorly formatted information lines. |
+
+These are dependency-age and deployment-documentation failures, not consequences of patient-state architecture.
+
+### 5.3 Protocol, schema, and output limitations
+
+- A user could not find a way to include the HL7v2 IN1 insurance segment ([issue #3](https://github.com/google/simhospital/issues/3)).
+- Another asked how schemas were generated and whether the parser could be separated into its own package, implying that a potentially reusable component was tightly embedded ([issue #13](https://github.com/google/simhospital/issues/13)).
+- A consumer of HL7v2.6 could see multiple generated schemas in the project but could not determine how to switch versions ([issue #17](https://github.com/google/simhospital/issues/17)).
+- A 2023 user requested FHIR output, arguing that Synthea already supported it and FHIR was easier to use ([issue #11](https://github.com/google/simhospital/issues/11)). SimHospital later contained some FHIR resource-generation code, but the issue remained open and the README still defines HL7v2 as the main output ([repository](https://github.com/google/simhospital), [FHIR package](https://pkg.go.dev/github.com/google/simhospital/pkg/fhir)).
+- A 2024 user said US phone formatting was unavailable and uneditable and asked how to add GT1 and ZG1 segments ([issue #21](https://github.com/google/simhospital/issues/21)).
+
+### 5.4 Mutable-state workarounds and edge cases
+
+SimHospital’s event vocabulary is rich, but its implementation exposes explicit inverse-operation machinery:
+
+- transfers assign `PriorLocation` and `PriorLocationForCancelTransfer`, then cancellation swaps the patient back and frees the newer location;
+- pending-admission and pending-transfer cancellation move `PendingLocation` into `PriorPendingLocation` before clearing it;
+- visit deletion pops the latest identifier from a `PastVisits` stack; and
+- discharge cancellation resets current account status rather than deriving it from a durable fact stream ([event-processing source](https://github.com/google/simhospital/blob/master/pkg/hospital/event_types.go), [`Patient` source](https://github.com/google/simhospital/blob/master/pkg/state/patient.go)).
+
+The clearest code-level awkwardness is a comment on consecutive pending encounters: the first “**will never be finished, since only the latest Encounter is checked**” ([event-processing source](https://github.com/google/simhospital/blob/master/pkg/hospital/event_types.go)). That is direct evidence of a single-current-object assumption limiting overlapping workflow representation.
+
+Yet this evidence should not be overstated. The tool also supports result amendments and corrections, historical data, readmission flags, transfer tracking, and many ADT cancellation message types ([pathway documentation](https://github.com/google/simhospital/blob/master/docs/write-pathways.md)). Its extension API permits event/message pre-, post-, and override processors, custom validation, item synchronization, generators, and arbitrary patient data ([extension documentation](https://github.com/google/simhospital/blob/master/docs/extend-sh.md)). The limitation is **complexity and fragility of procedural reversals**, not absence of event concepts or all correction support.
+
+### 5.5 Practitioner, forum, academic, and trade evidence
+
+Public practitioner discussion about SimHospital is extremely thin. The located LinkedIn result merely shared the repository and was not accessible for substantive quotation; targeted searches of Stack Overflow, Reddit health-IT communities, FHIR chat, Google Groups, Mastodon/X, conferences, and health-IT trade publications did not produce a checkable first-person review of the tool’s architecture. The meaningful public evidence is therefore the GitHub tracker, code, and usage examples such as Snowflake’s HL7v2 quickstart ([Snowflake quickstart](https://www.snowflake.com/en/developers/guides/processing-hl7-v2-messages-with-snowflake/)).
+
+No peer-reviewed paper located in the academic searches evaluated Google SimHospital itself or documented its limitations. Search results were frequently polluted by unrelated hospital simulation software and games, which further reduces confidence in broad social-search conclusions.
+
+## 6. Cross-cutting comparison
+
+| Theme | Synthea | SimHospital | Event-sourcing relevance |
+|---|---|---|---|
+| Temporal model | Birth-to-death, time-step state machines with dated record entries ([module framework](https://github.com/synthetichealth/synthea/wiki/Generic-Module-Framework)). | Explicit ordered pathway events and message times ([pathway documentation](https://github.com/google/simhospital/blob/master/docs/write-pathways.md)). | Both are event-aware; neither uses an immutable event log as sole truth. |
+| Reported temporal pain | History windows, exact encounter dates, reproducibility, UUID/timestamp divergence ([issue #1465](https://github.com/synthetichealth/synthea/issues/1465), [PR #1237](https://github.com/synthetichealth/synthea/pull/1237)). | Overlapping pending encounters and cancellation bookkeeping appear in code, not user reports ([event source](https://github.com/google/simhospital/blob/master/pkg/hospital/event_types.go)). | Stronger architectural relevance for deterministic replay and corrections, but practitioners do not name event sourcing. |
+| Extension pain | Global modules, built-in Java behavior, cross-module observations, surprising export filtering ([discussion #1126](https://github.com/synthetichealth/synthea/discussions/1126), [issue #780](https://github.com/synthetichealth/synthea/issues/780)). | Embedded schemas, custom segments, missing insurance/FHIR options, archived project ([issues](https://github.com/google/simhospital/issues)). | Event subscriptions could help cross-cutting rules, but packaging and governance are larger factors. |
+| Realism | Extensively studied: limited heterogeneity, sparse phenotypes, isolated comorbidity models, guideline-centric pathways ([Chen et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC6416981/), [Kramer et al.](https://pmc.ncbi.nlm.nih.gov/articles/PMC12772637/)). | Little public validation; “realistic” is principally the project’s own claim ([repository](https://github.com/google/simhospital)). | Mostly unrelated to event sourcing; realism requires better models and calibration. |
+| Operational reliability | Active project with recurring data/runtime issues and fixes ([repository](https://github.com/synthetichealth/synthea)). | Build breakage plus permanent archival ([repository](https://github.com/google/simhospital)). | Maintenance status dominates SimHospital risk. |
+| Community | Large, active, MITRE-led; substantial practitioner and academic footprint ([repository](https://github.com/synthetichealth/synthea)). | Small Google-led contributor base; minimal external discourse ([repository](https://github.com/google/simhospital)). | Governance and contributor capacity are independent of state architecture. |
+
+## 7. Forks and alternatives
+
+### Notable Synthea adaptations
+
+- **NHS England `swpc_synthea`** makes deliberately incompatible changes for English primary-care data, removes US-specific features, and incorporates UK statistics. Its documentation warns that outputs are “realistic but not real,” reports only smoke testing, and says the current release has not undergone statistical validation ([fork](https://github.com/nhsengland/swpc_synthea), [documentation](https://nhsengland.github.io/swpc_synthea/)).
+- **Synthea International** supplies location metadata and exposes how difficult localization is: incomplete provider maps, naming mismatches, US phone/name residue, and weak demographic substitutions ([repository](https://github.com/synthetichealth/synthea-international)).
+- An **openEHR adaptation discussion** describes Synthea output as “very episodic” and encounter-centered; a practitioner is anglicizing the code, aligning it to UK Core, and exploring mixed FHIR/openEHR output, while noting difficulty grouping all Synthea content into compositions ([openEHR forum](https://discourse.openehr.org/t/synthea-data-in-openehr-format/6906)).
+- **SynthEHRella** is not a replacement generator but a benchmark wrapper comparing Synthea with statistical and generative methods on fidelity, utility, and privacy ([repository](https://github.com/chenxran/synthEHRella), [benchmark paper](https://arxiv.org/html/2411.04281v1)).
+- **SynTEG** and other learned longitudinal generators target temporal sequence fidelity rather than Synthea’s transparent rule-based pathways, but no source located describes them as event-sourced replacements ([SynTEG paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC7936402/)).
+
+### SimHospital forks
+
+The network showed dozens of forks but no well-documented fork that became an active successor or introduced event sourcing. Search results surfaced downstream use and mirrors rather than a maintained architectural rewrite ([SimHospital repository](https://github.com/google/simhospital), [fork network](https://github.com/google/simhospital/forks)).
+
+### Event-sourced alternative: negative finding
+
+No checkable project was found that explicitly positions itself as an event-sourced successor to either SimHospital or Synthea. Searches found temporal deep-learning generators, FHIR scenario tools, localized forks, output converters, and commercial scenario generators, but not an immutable-domain-event EHR simulator. That gap may represent an opportunity, but it is not evidence that a market already converged on the proposed architecture.
+
+## 8. Evidence gaps and research cautions
+
+1. **GitHub stars and forks reveal attention, not production use.** The report treats them only as rough popularity signals.
+2. **SimHospital has a severe evidence imbalance.** Its tracker is tiny, the project is archived, and practitioner/academic discussion is nearly absent; conclusions about user experience therefore have lower confidence than those for Synthea ([repository](https://github.com/google/simhospital)).
+3. **Social media was sparse or inaccessible.** LinkedIn, Reddit, and X/Mastodon searches produced few specific posts, and access restrictions prevented reliable quotation of several results. No claims were inferred from inaccessible snippets.
+4. **Trade press did not yield substantive reviews.** Targeted searches of Healthcare IT News, Fierce Healthcare, HIMSS, and MobiHealthNews did not locate a hands-on review of either tool. Government, MITRE, LOINC, community blogs, and academic literature supplied the usable evidence instead.
+5. **Issue reports are not all confirmed defects.** Some reflect configuration misunderstandings or deployment networking; they are presented as reported experiences, not independently reproduced failures.
+6. **Architecture-to-causation remains inferential.** Source code verifies mutable aggregates and event/history elements, but no public comparative experiment shows that an event-sourced rewrite would improve realism, extensibility, or correctness.
+7. **Synthea evolves.** Older issues and studies may describe versions that have since changed; newer 2026 work and ongoing commits were included to avoid treating historical limitations as necessarily current ([2026 study](https://pmc.ncbi.nlm.nih.gov/articles/PMC12772637/), [repository](https://github.com/synthetichealth/synthea)).
+
+## 9. Final assessment
+
+The original hypothesis identifies a real architectural tension but overstates both the purity of the tools’ mutable-state designs and the strength of public corroboration. SimHospital is already event-driven at the scheduling/message level, and Synthea already records temporal entries and state history. Their common characteristic is that **current mutable aggregates remain authoritative during simulation**, with procedural logic producing and revising output.
+
+For a new system, the strongest evidence-backed design target is an **immutable, replayable clinical-event ledger with explicit correction/supersession semantics; deterministic simulation time and identifiers; separately materialized current-state views; composable reactions across modules; and empirically validated domain models**. The first four address the reproducibility, overlap, rollback, and audit concerns visible in code and issues; the last is indispensable because the dominant Synthea limitations are about clinical fidelity rather than persistence architecture.
+
+========== END FILE ==========
+
+========== FILE: ./docs/research/SimHospital-Synthea-limitations-considered.md ==========
+# Mining notes: upstream-limitations research → repo actions
+
+Companion to the research report in `docs/research/` (SimHospital and
+Synthea: limitations, practitioner experience; retrieved 2026-07-26).
+This distills the report into specific repo actions, each tagged with
+where it lands. The report is the evidence; cite it rather than
+re-verifying its sources.
+
+## A. Accept the correction (edit: docs/event-sourcing.md)
+
+The report's central finding tempers our narrative and we adopt the
+temper: event sourcing dissolves the *state-machinery* failure class —
+now with more receipts than our docs cite (SimHospital's `PastVisits`
+pop, pending-location shuffles, and the in-code admission that a first
+pending encounter "will never be finished, since only the latest
+Encounter is checked") — but the dominant Synthea complaints are
+**clinical fidelity**, which storage architecture does not fix.
+Action: add a scope paragraph to `event-sourcing.md`: architecture
+carries reproducibility, correction/supersession, audit, and the
+coherence laws (validation claims 3, 7); realism (claims 4–5) rests
+on content provenance (Synthea modules), calibration, and capacity
+modeling — different mechanisms, deliberately separate. Then cite the
+report's §9 design target ("immutable replayable ledger with explicit
+correction/supersession semantics; deterministic simulation time and
+identifiers; separately materialized current-state views; composable
+reactions across modules; empirically validated domain models") as
+independent convergence with this repo's architecture + roadmap.
+
+## B. Determinism-threat catalog (edit: event-sourcing.md or a test)
+
+Synthea's reproducibility saga (issues #682/#1342, PRs #756/#1237)
+shows a seed is necessary, not sufficient. Their failure modes, our
+defenses, and the two gaps to close:
+
+| Threat (theirs) | Our status |
+|---|---|
+| UUID/id generation divergence | Defended: deterministic patient-ids, control ids |
+| Unordered-collection iteration | Mostly defended (sorted queue); **gap: add a guard test that emitters never iterate unsorted maps/sets when building segments** |
+| Reference *date* vs full timestamp | Defended: relative seconds + explicit reference-date + fixed utc-offset, all in the manifest |
+| Locale/OS differences | Partially defended (locale/tz recorded in manifest); revisit at CI time |
+| Cross-format id divergence (CDA vs FHIR vs CSV) | **Gap: name "same event ids and patient ids across every emitter" as an explicit sub-law of emitter coherence, testable at M6** |
+
+## C. IR transforms as the composition layer (edit: sim-theory.md note)
+
+Synthea's composition pain — cross-cutting augmentation requires
+editing every module (#780); modules surprising users via global
+execution and hidden hard-coded Java lifecycle behavior (#941, #1126)
+— is answered structurally by our pipeline: **IR→IR transforms between
+CompileTrajectory and Execute are the cross-cutting composition
+mechanism; InjectChurn is the first instance, not a special case.**
+"Attach vitals to every emergency encounter" is a transform, written
+once, touching no module. Action: one paragraph in `sim-theory.md`
+naming the pattern. Corollary for M5 (roadmap note): **no hidden
+modules** — lifecycle behavior (birth, death, aging) is explicit and
+listable, never always-on and invisible.
+
+## D. Overlapping encounters: evidence-backed requirement (roadmap)
+
+The "never be finished" comment is upstream proof that
+single-current-encounter assumptions break real workflows. The
+encounters capture (visit ids, readmission, PV1-19) upgrades from
+nice-to-have to documented-failure-avoidance, and must support
+*multiple concurrent pending* encounters. Land the capture before or
+with the milestone that introduces pending-admission steps.
+
+## E. Demand-validated roadmap items (roadmap annotations)
+
+Upstream users asked for, and did not get: IN1 (SimHospital #3 — our
+M4), custom segments GT1/ZG1 (#21 — our site-profiles milestone), HL7
+version switching (#17 — our MSH-12-as-config item, previously noted
+in the design channel; add to the site-profiles or M3 scope), FHIR
+output (#11 — our M6), US phone formatting (#21 — Persona/M4 detail).
+Annotate each roadmap item with its upstream-demand citation — cheap
+provenance that these milestones answer real requests.
+
+## F. Positioning (README/positioning doc, when one exists)
+
+1. **Capacity realism is a differentiator**: Synthea's own COVID
+   paper concedes it "did not constrain care or supplies by
+   capacity"; this simulator's boarding, exhaustion, and bed-ready
+   coupling *emerge from* capacity. Say so.
+2. **The gap is open**: the report's negative finding — no project
+   positions itself as an event-sourced successor to either tool —
+   framed honestly (an opportunity, not a converged market).
+3. **The log player answers a documented need**: SyntheaWeb's stated
+   "interpretability gap" (CLI + raw JSON as barriers) is the same
+   need the player/bed-board serves.
+
+## G. Smaller notes (file where indicated)
+
+- Providers: Synthea's encounter `provider` column mapped to an
+  *organization*, leaving encounters clinician-less (#547) — our
+  provider/facility split already avoids this; one line in
+  operational-models.md's providers section citing it.
+- Warm-up/window: their export-window confusion (#1465, #1040 —
+  content silently vanishing from windows) is the failure mode our
+  mark-don't-trim choice prevents; one line where warm-up is
+  documented.
+- Medications (M5+): OHDSI found Synthea med data unreliable without
+  the Medication Diversification Tool — when meds land, single-source
+  distributions need diversification; roadmap note now so it isn't
+  relearned.
+- Installation friction is a first-class adoption risk for both
+  upstreams (Bazel rot; JDK/Gradle "nightmare") — keep this repo's
+  cold-start to one documented command, and treat SETUP.md (deferred
+  trigger) as owed before any external user.
 
 ========== END FILE ==========
 
@@ -2822,6 +3414,32 @@ process** (an alternative to fixed `:patients N`) was sketched but not
 built this session — explicitly a stretch item behind the seam, per
 the M2a session's own plan; M2b does not depend on it.
 
+## IR transforms as the composition layer
+
+Synthea's own composition pain — cross-cutting augmentation requiring
+every module to be edited individually (#780); modules surprising users
+via always-on global execution and hidden hard-coded Java lifecycle
+behavior (#941, #1126) — per
+`docs/research/SimHospital-Synthea-limitations-considered.md` §4.2, is
+answered structurally by this composite's own shape, not by a feature
+added in response to reading about it. **IR→IR transforms between
+`CompileTrajectory` and `Execute` are the cross-cutting composition
+mechanism; `InjectChurn` (landed, M2b) is the first instance of this
+pattern, not a special case bolted on beside it.** "Attach vital signs
+to every emergency encounter" is exactly this shape: a transform
+written once over `pathway-ir`, touching no module and no per-module
+edit, the same way `InjectChurn` inserts churn steps into any
+pathway — authored or compiled — without either pathway's own author
+knowing a transform ran. A corollary this pattern commits this project
+to, named now rather than left implicit until M5's module interpreter
+exists to violate it by accident: **no hidden modules** — any lifecycle
+behavior this project ever runs (birth, aging, death, whatever M5's GMF
+port needs) must be an explicit, listable stage or transform, never an
+always-on, invisible pass the way Synthea's built-in Java lifecycle
+modules are reported to surprise users who tried to run only their own
+custom module set (discussion #1126). `.agents/plans/roadmap.md`'s M5
+entry carries this as a roadmap note.
+
 ## Resource type bindings
 
 Per the notation, every resource name binds to a type; an equation
@@ -2896,7 +3514,14 @@ reconstructs `state-history`, and a snapshot at instant *t* agrees
 with the state implied by the messages up to *t*. This is the
 problem-statement guarantee "every message derivable from the log, and
 vice versa," extended across emitters — a *want*-level law that
-becomes a cross-emitter property test when EmitState lands.
+becomes a cross-emitter property test when EmitState lands. A named
+sub-law, surfaced by mining Synthea's own cross-format id divergence
+between CDA, FHIR, and CSV exports
+(`docs/research/SimHospital-Synthea-limitations-considered.md` §4.1):
+**every emitter renders the same event ids and patient ids for the
+same ground-truth facts** — no format-local id scheme, no re-derivation
+that could drift from another emitter's choice for the same event.
+Testable at M6, once EmitState exists to check EmitHL7 against.
 
 **Code provenance.** Concept triplets flow unchanged from module JSON
 through trajectory, IR, and log; emitters render codes natively and
@@ -4032,6 +4657,99 @@ M2a scope.
   document's own header discipline); the API shape is captured so
   M2a's implementation has a target, not so this session can skip
   ahead of it.
+
+---
+
+## ADR-0012 — Decide-time step rejections become a `:step-rejected` ground-truth event; cancel-reinstatement routes through the allocation ladder (v2)
+
+**Status:** Accepted (author-ratified 2026-07-26) — design capture,
+surfaced by M2b's landed session; no code lands with this ADR.
+
+**Context.** M2b's `InjectChurn` property-testing surfaced a real
+runtime behavior, already recorded in `.agents/plans/roadmap.md`'s M2b
+entry: a churn-inserted step that is statically legal per the
+applicability oracle can still be rejected at execution time by live
+world state InjectChurn had no visibility into — e.g. a bed a
+cancel-discharge would reinstate into was reclaimed by someone else's
+admission in the meantime. Today that rejection is a bare no-op: the
+step simply doesn't happen, and the ground-truth log carries no record
+that it was ever attempted or why it didn't occur. This is a narrower
+instance of a more general gap this project's own architecture makes
+conspicuous by contrast: `decide` (ADR-0008) already distinguishes
+"this step happens" from "this step doesn't," but only the first
+outcome leaves a trace. A log that is supposed to be the single
+authoritative record of a run (ADR-0002, ADR-0008) has a blind spot
+exactly where a tester might most want visibility — a hospital's live
+world state rejecting an attempted action is itself an operationally
+real fact, not merely an absence of one.
+
+**Decision.**
+
+1. **A `:step-rejected` event enters the ground-truth log** whenever
+   `decide` rejects an attempted step at execution time (not merely
+   whenever the applicability oracle would have refused it up front —
+   this event exists for exactly the runtime-visibility gap M2b's
+   cancel/bed-swap/merge rejections surfaced, where the oracle said yes
+   and the live world said no). It carries `:participants` (per
+   ADR-0010's shape), the attempted step, and a reason. It is **truth
+   about the run, not a message-bearing event** — no
+   `message-type-registry` entry, ever, by design: a real hospital's
+   ADT feed does not carry a message for "the system almost tried to
+   do something and didn't," so an emitter rendering one here would be
+   inventing wire traffic no real interface would ever see. It exists
+   for the ground-truth log's own consumers — `check.clj`'s invariant
+   catalog and any test harness reading the log directly — not for
+   `EmitHL7`.
+2. **Invariants may reference `:step-rejected` events.** A future
+   invariant asking "did this run ever attempt an illegal reinstatement
+   and silently drop it" becomes answerable by querying the log instead
+   of unanswerable by construction, the same glass-box-auditability
+   rationale (`docs/problem-statement.md`'s claim 3, "does the stream
+   contradict itself") this project already applies to every other
+   event type.
+3. **v2 refinement, captured alongside: cancel-reinstatement routes
+   through the allocation ladder instead of no-opping.** Today's
+   conservative behavior (`ehr-testing-sim.churn`'s M2b landing) treats
+   a blocked `:cancel-discharge` reinstatement as a dead end — the step
+   fails and (until decision 1 lands) leaves no trace. A real hospital
+   does not behave this way: cancelling a discharge and finding the
+   original bed already reclaimed does not mean the cancellation fails,
+   it means the patient needs a *different* bed, so the reinstatement
+   re-enters `ehr-testing-sim.facility/allocate`'s existing ladder
+   (`docs/operational-models.md`) exactly the way a fresh admission
+   would, rather than being special-cased as a no-op. This is captured
+   here as the correct future behavior, not built — it depends on
+   decision 1 existing first (a rejected first attempt should still be
+   visible even when the ladder retry succeeds), so both land together
+   whenever this ADR's implementation milestone is scheduled.
+
+**Rejected.**
+
+- **Silently continuing to no-op rejected steps** — rejected because it
+  reintroduces, for a different event class, exactly the "state that
+  doesn't originate from the log" problem ADR-0008 already eliminated
+  for patient state: a rejection is a fact about the run, and a log
+  claiming to be authoritative shouldn't have facts it doesn't contain.
+- **Rendering `:step-rejected` as an HL7 message** (e.g., a synthetic
+  ACK-reject or a house Z-segment) — rejected because no real ADT feed
+  carries a message for an attempt that never became a real hospital
+  action; inventing one would misrepresent what real wire traffic looks
+  like, the opposite of this project's realism goal.
+- **Making cancel-reinstatement retry the ladder immediately, ahead of
+  `:step-rejected` existing** — rejected because a silent retry that
+  happens to succeed would hide the fact that the *first* placement
+  attempt failed, which is exactly the visibility gap this ADR exists
+  to close; the two decisions are sequenced, not independent.
+
+**Consequences.** `docs/patient-state-model.md` gains a short capture
+paragraph describing `:step-rejected`'s shape and its M3-adjacent
+implementation timing. No code lands with this ADR: implementation
+(the event, its schema, `check.clj` support, and the ladder-retry
+refinement) is scheduled M3-adjacent, per `.agents/plans/roadmap.md`,
+not in this session. A future session implementing this ADR should
+treat `message-type-registry`'s deliberate non-entry for
+`:step-rejected` as load-bearing, not an oversight to "fix" by adding
+one.
 
 ========== END FILE ==========
 
@@ -7323,6 +8041,106 @@ M2a scope.
           expected (.plusSeconds (.atStartOfDay (LocalDate/parse ref-date)) seconds)]
       (and (= expected parsed)
            (= "+0000" offset-part)))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/emitter_order_independence_test.clj ==========
+(ns ehr-testing-sim.emitter-order-independence-test
+  "Guard test, mining group B (docs/research/SimHospital-Synthea-limitations-
+  considered.md, its own mining notes' determinism-threat table): Synthea's
+  own reproducibility saga (issues #682/#1342, PR #1237) shows unordered-
+  collection iteration is a real determinism threat elsewhere, not merely a
+  hypothetical here. This project's own defense is structural -- `emit-hl7`
+  reads every field by keyword lookup (`:active-mrn`, `:location`, ...),
+  never by iterating a map's own key order -- but the defense had no test of
+  its own until this one. Builds facility/provider config maps via
+  independent, differently-ordered `assoc` chains (`=`-equal, but with
+  different construction histories, so a >8-key map could in principle land
+  in a different internal bucket layout) and asserts the emitted ER7 is
+  byte-identical either way.
+
+  Expected to already be green -- this is a tripwire against a regression,
+  not a red-then-green fix (ADR-0004's test-first rule applies to new
+  behavior; a guard test for an existing structural guarantee is the
+  documented exception). Run repeatedly (`clojure -X:test`, 3x per the
+  mining notes) precisely because a hash-order-dependent bug, if one were
+  ever introduced, might not fail every single run."
+  (:require [clojure.test :refer [deftest is testing]]
+            [ehr-testing-sim.emit-hl7 :as emit-hl7]
+            [ehr-testing-sim.engine :as engine]))
+
+(def ref-date "2024-01-01")
+(def utc-offset "+00:00")
+
+(defn- ward-forward
+  [id name beds surge class]
+  (-> {}
+      (assoc :id id)
+      (assoc :name name)
+      (assoc :beds beds)
+      (assoc :surge-slots surge)
+      (assoc :surge-format "%s-H%02d")
+      (assoc :class class)))
+
+(defn- ward-reversed
+  [id name beds surge class]
+  (-> {}
+      (assoc :class class)
+      (assoc :surge-format "%s-H%02d")
+      (assoc :surge-slots surge)
+      (assoc :beds beds)
+      (assoc :name name)
+      (assoc :id id)))
+
+(def facility-a
+  (-> {}
+      (assoc :id :order-test)
+      (assoc :wards [(ward-forward :ed "ED" 2 5 :ed)
+                     (ward-forward :renal "Renal" 2 1 :inpatient)])))
+
+(def facility-b
+  (-> {}
+      (assoc :wards [(ward-reversed :ed "ED" 2 5 :ed)
+                     (ward-reversed :renal "Renal" 2 1 :inpatient)])
+      (assoc :id :order-test)))
+
+(defn- provider-template-forward
+  [family given specialty wards]
+  (-> {}
+      (assoc :name {:family family :given given})
+      (assoc :role :attending)
+      (assoc :specialty specialty)
+      (assoc :wards wards)))
+
+(defn- provider-template-reversed
+  [family given specialty wards]
+  (-> {}
+      (assoc :wards wards)
+      (assoc :specialty specialty)
+      (assoc :role :attending)
+      (assoc :name {:given given :family family})))
+
+(def providers-a
+  [(provider-template-forward "Chen" "Amara" "Nephrology" [:renal])
+   (provider-template-forward "Reyes" "Priya" "Emergency Medicine" [:ed :renal])])
+
+(def providers-b
+  [(provider-template-reversed "Chen" "Amara" "Nephrology" [:renal])
+   (provider-template-reversed "Reyes" "Priya" "Emergency Medicine" [:ed :renal])])
+
+(deftest emitted-output-does-not-depend-on-map-insertion-order
+  (testing "the two configs are = despite each map being built via a different
+            assoc order"
+    (is (= facility-a facility-b))
+    (is (= providers-a providers-b)))
+  (testing "same seed, structurally-equal-but-differently-built facility/provider
+            config -> byte-identical ground truth and byte-identical ER7"
+    (let [run-a (engine/run {:seed 42 :patients 5 :facility facility-a :providers providers-a})
+          run-b (engine/run {:seed 42 :patients 5 :facility facility-b :providers providers-b})]
+      (is (= (:ground-truth run-a) (:ground-truth run-b)))
+      (is (= (:providers run-a) (:providers run-b)))
+      (is (= (emit-hl7/emit (:ground-truth run-a) ref-date utc-offset (:facility run-a) (:providers run-a))
+             (emit-hl7/emit (:ground-truth run-b) ref-date utc-offset (:facility run-b) (:providers run-b)))))))
 
 ========== END FILE ==========
 
