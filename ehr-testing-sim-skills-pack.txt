@@ -1,9 +1,9 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T16:32:14Z
-HEAD: e2bf6b24109468f96d287ddd87ebaf9b84f88c1c
+generated (UTC): 2026-07-26T17:13:50Z
+HEAD: f7a29e08a80b65506fa9b73f20b8e712b4283807
 git status --porcelain:
-working tree clean
+?? .wsl_run.sh
 includes only: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
