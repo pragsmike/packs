@@ -1,20 +1,376 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T16:17:17Z
-HEAD: 44d27ea3321f27210266e8c0e2e2d30c873eb316
+generated (UTC): 2026-07-26T16:32:14Z
+HEAD: e2bf6b24109468f96d287ddd87ebaf9b84f88c1c
 git status --porcelain:
- M .agents/memory/architecture.md
-A  .gitattributes
-A  .githooks/pre-commit
-A  .githooks/pre-push
- M AGENTS.md
-A  AUTHORS-GUIDE.md
- M notes/ADRs.md
-A  notes/facts-register.md
+working tree clean
 includes only: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
-========== FILE: ./.agents/skills/.gitkeep ==========
+========== FILE: ./.agents/skills/handoff/SKILL.md ==========
+---
+name: handoff
+description: >
+  Generate a session handoff document for successor agents. Use when the user
+  types '/handoff' or asks to create a handoff. Reads the previous handoff (if any)
+  for continuity, generates a new handoff with today's date, saves it to
+  .agents/handoffs/, and archives the previous one to .agents/handoffs/archive/.
+license: MIT
+allowed-tools:
+  - codex
+  - claude-code
+  - opencode
+metadata:
+  author: cyberneutics
+  version: 0.1.0
+  tags:
+    - automation
+  tested-tools:
+    - claude-code
+---
+
+# Handoff Skill
+
+Generate effective session handoff documents that enable successor agents to
+continue work on this repository, avoiding pitfalls encountered and building
+on lessons learned that aren't captured in formal documentation.
+
+## When to use
+
+- User types `/handoff`
+- User asks to "create a handoff" or "write a handoff document"
+- End of a significant work session when continuity matters
+- After completing major milestones or before known breaks
+
+## What the skill does
+
+1. **Reads previous handoff** from `.agents/handoffs/handoff-[YYYY-MM-DD].md` (if exists) to understand trajectory and maintain continuity
+2. **Analyzes current session** to extract:
+   - What was accomplished
+   - What mistakes were made and lessons learned
+   - What dead ends were explored
+   - Current state of work (completed, in-progress, blocked)
+   - Immediate next steps for successor
+3. **Generates new handoff** following the structured template
+4. **Saves** as `.agents/handoffs/handoff-[TODAY].md`
+5. **Archives previous** handoff to `.agents/handoffs/archive/handoff-[OLD-DATE].md`
+
+All steps happen automatically without confirmation prompts.
+
+## Handoff document structure
+
+The generated handoff follows this structure:
+
+### Session Summary
+- Duration and main accomplishments
+- Original intent vs. actual outcome
+- Key deliverables
+
+### Mistakes and Lessons
+- Specific mistakes made during session
+- Root causes and how to avoid them
+- Concrete examples
+
+### Dead Ends Explored
+- Approaches that didn't work and why
+- What was learned from failures
+- Conditions under which they might be worth revisiting
+
+### Current State
+- Completed this session
+- In progress (with blockers)
+- Not yet started but planned
+
+### Immediate Next Steps
+- Prioritized, actionable tasks
+- Context for why each is ready
+- Dependencies and blockers
+
+### Open Questions and Decisions Needed
+- Questions requiring human input
+- Topics needing research/exploration
+
+### Technical Notes
+- Repository structure quirks
+- Tools and workflow notes
+- File management approach
+
+### Watch-Outs for Successor
+- Tasks that seem simple but aren't
+- Hidden dependencies
+- Quality standards
+
+### Theoretical/Conceptual Notes
+- Key insights from session
+- Unresolved tensions
+- How understanding evolved
+
+### What Worked Well / What To Do Differently
+- Collaboration patterns that were productive
+- Process improvements needed
+- Communication adjustments
+
+### Context for Specific Files
+- File-by-file notes on status, quirks, dependencies
+
+### Session Metadata
+- Agent, date, goals
+- Continuation priority
+
+## Key principles for generation
+
+1. **Be specific**: "File Y has hidden dependency on Z because of reason R" not "Watch out for X"
+
+2. **Capture the invisible**: What seemed obvious in context but won't be obvious to successor?
+
+3. **Save time**: What would you want to know picking this up fresh? What did you learn the hard way?
+
+4. **Be honest**: Mistakes and dead ends are valuable intelligence
+
+5. **Think forward**: What enables successor to maintain momentum vs. starting from scratch?
+
+6. **Prioritize ruthlessly**: Focus on what materially affects successor's effectiveness
+
+7. **Maintain narrative continuity**: Reference previous handoff observations—did predicted issues materialize? Did recommended approaches work? What trajectory is the work following?
+
+## Example bad vs. good entries
+
+**Bad**: "Be careful with the evaluation rubrics"
+- Not specific, not actionable
+
+**Good**: "The evaluation-rubrics-reference.md has examples that reference other artifacts. If you change artifact names/structure, those examples need updating too. Caught this when we moved files and examples broke."
+- Specific, explains why it matters, gives concrete scenario
+
+**Bad**: "The user prefers good documentation"
+- Everyone prefers good documentation, this says nothing
+
+**Good**: "The user prefers examples over abstract explanation. When explaining theoretical concepts, noticed engagement increased significantly when we included concrete transcripts/examples rather than just describing patterns."
+- Specific observation, actionable pattern
+
+**Bad**: "Some tasks still need to be done"
+- Obvious from the task list already
+
+**Good**: "The config migration task is listed as 'pending' but the scope hasn't been defined beyond the title. Before starting, confirm: does this cover only the YAML schema change, or also updating all downstream consumers? Those are different tasks with very different scope."
+- Identifies real ambiguity, suggests clarifying question, prevents wasted effort
+
+## Implementation notes
+
+**File naming**: `handoff-YYYY-MM-DD.md` using today's date
+
+**Archive location**: `.agents/handoffs/archive/` — ensure directory exists before moving files
+
+**Reading previous handoff**: If multiple handoffs exist in `.agents/handoffs/`, read the most recent (by date in filename). Don't read from `archive/` — those are historical.
+
+**Continuity narrative**: The handoff should note:
+- What the previous handoff predicted/recommended
+- Whether those predictions were accurate
+- What trajectory the work is following
+- Evolution of understanding about user preferences
+- Patterns that are becoming clearer over multiple sessions
+
+**No redundancy**: Don't repeat what's already in repository documentation. The handoff is for meta-context, session-specific intelligence, and invisible knowledge.
+
+**Tone**: Direct, practical, specific. Written for another AI agent picking up the work. Be frank about mistakes and unknowns.
+
+## Usage
+
+When user types `/handoff`, simply execute the skill:
+1. Read `.agents/handoffs/handoff-*.md` (most recent if multiple)
+2. Analyze the current session transcript
+3. Generate comprehensive handoff document
+4. Save as `.agents/handoffs/handoff-[TODAY].md`
+5. Move previous handoff to `.agents/handoffs/archive/`
+6. Confirm completion: "Handoff document created: .agents/handoffs/handoff-[TODAY].md (previous handoff archived)"
+
+No intermediate confirmations or reviews—generate and save directly.
+
+========== END FILE ==========
+
+========== FILE: ./.agents/skills/string-diagram/SKILL.md ==========
+---
+name: string-diagram
+description: >
+  Convert resource equations into Mermaid string diagrams. Use when the user has
+  typed resource equations (A × B → C style) and wants a visual diagram, or when
+  the user describes a pipeline of operations on typed artifacts and wants both
+  the equations and the diagram. Also use when editing or extending an existing
+  set of resource equations.
+---
+
+# String Diagram Skill
+
+Generate Mermaid string diagrams from resource equations written in a
+monoidal-category style. Operations become boxes, types become labeled
+wires, cross products become multiple input wires, and the diagram is
+isomorphic to the equations — given either representation, the other
+can be derived mechanically.
+
+## When to use
+
+- User provides resource equations and wants a Mermaid diagram
+- User describes a pipeline in prose and wants it formalized as equations + diagram
+- User wants to edit, extend, or compose existing equation sets
+- User asks for a "string diagram," "process flow," "resource flow," or "pipeline diagram"
+
+## Core concept
+
+A resource equation has the form:
+
+```
+inputs → outputs  [OperationName]  {annotations}
+```
+
+This is a morphism in a symmetric monoidal category:
+- **Types** (objects) are named text artifact kinds
+- **Operations** (morphisms) are named transformations
+- **×** is the monoidal product (multiple inputs)
+- **+** is the coproduct (multiple outputs, e.g., accepted + rejected)
+- **Catalytic inputs** participate but aren't consumed (comonoid copy)
+- **Discard outputs** are waste/byproducts (the "egg shells")
+- **Feedback** connects an output back to an earlier input (traced monoidal structure)
+
+## Equation syntax
+
+```
+# Comment lines start with #
+
+# Simple: one input, one output, named operation
+A → B  [Transform]
+
+# Cross product: multiple inputs
+A × B × C → D  [Combine]
+
+# Parentheses group (associativity only, no semantic effect)
+(A × B) × C → D  [Combine]
+
+# Coproduct output: multiple outputs
+A → B + C  [Split]
+
+# Annotations: catalytic, discard, feedback
+A × B → C  [Op]  {catalytic: B}
+A → B + C  [Op]  {discard: C}
+A → B      [Op]  {feedback: B→X}
+
+# Combined annotations (semicolon-separated)
+A × B → C + D  [Op]  {catalytic: B; discard: D}
+
+# Spider topology (fan/funnel duality)
+A → B + C  [Diverge]  {spider: fan}
+A × B → C  [Converge]  {spider: funnel}
+
+# External (black-box) operation: dashed border
+A → B  [UserTransform]  {external: true}
+```
+
+**Spider annotations**: Mark operations as `fan` (one-to-many, divergent) or
+`funnel` (many-to-one, convergent) to render them with distinct shapes and
+colors. Fan operations get a trapezoid shape (blue); funnel operations get an
+inverted trapezoid (green). Use for the fan/funnel duality from
+`palgebra/duality-and-composition.md`. Annotations on continuation lines
+(indented, containing `{`) are joined to the previous equation automatically.
+
+**Type names:** lowercase hyphenated identifiers (e.g., `experience-reports`, `candidates-long-list`)
+
+**ASCII fallbacks:** `*` for `×`, `->` for `→`
+
+## Diagram conventions
+
+The generated Mermaid diagram follows string-diagram style:
+
+| Concept | Equation | Diagram |
+|---------|----------|---------|
+| Operation | `[Name]` | Dark box node |
+| Source type (raw input) | Appears only as input | Light rounded node on left |
+| Intermediate type | Produced and consumed | Labeled wire between operation boxes |
+| Catalytic input | `{catalytic: X}` | Dashed wire (not consumed) |
+| Waste/discard | `{discard: X}` | Red sink node |
+| Feedback loop | `{feedback: X→Y}` | Wire from output back to input node |
+| Cross product | `A × B` | Multiple wires entering one box |
+| Coproduct | `A + B` | Multiple wires leaving one box |
+| Fan spider | `{spider: fan}` | Trapezoid node (blue) — one-to-many topology |
+| Funnel spider | `{spider: funnel}` | Inverted trapezoid node (green) — many-to-one topology |
+| External operation | `{external: true}` | Dashed-border box — a black-box operation the diagram's own system doesn't implement |
+
+## How to use
+
+### Step 1: Write or receive equations
+
+If the user provides equations, save them to a `.txt` file. If the user
+describes a pipeline in prose, formalize it as equations first, confirm
+with the user, then proceed.
+
+### Step 2: Run the converter
+
+The converter script is claimed into ehr-testing-tools' `palgebra/`
+directory, not vendored into this repo (see "Files" below) — this
+step requires a sibling checkout of `ehr-testing-tools` at `../ehr-testing-tools`:
+
+```bash
+python ../ehr-testing-tools/palgebra/tools/resource_equations_to_mermaid.py equations.txt -o flow.mermaid
+```
+
+Options:
+- `--direction LR` (default) — left to right flow
+- `--direction TD` — top to bottom flow
+- `-o file.mermaid` — write to file (default: stdout)
+
+### Step 3: Deliver both representations
+
+Always provide the user with **both** the equations file and the Mermaid
+file. They are isomorphic — this is the point. The user should be able
+to edit either one and regenerate the other.
+
+## Extending and composing
+
+To add an equation to an existing set:
+1. Append the new equation line to the `.txt` file
+2. Re-run the converter
+3. The diagram updates mechanically
+
+To compose two pipelines (e.g., pipeline A feeds into pipeline B):
+1. Concatenate the equation files
+2. Ensure the output types of A match the input types of B (same names)
+3. The converter will automatically wire them together
+
+## Validation
+
+The converter classifies every type as source, intermediate, sink, or
+catalytic by analyzing the equation set. If a type appears as input but
+is never produced and isn't a declared source, that's a gap. If a type
+is produced but never consumed and isn't a declared sink, that's a
+dangling output. The user should review these.
+
+## Example: Lemon Meringue Pie
+
+```
+egg → yolk + white + egg-shells  [SeparateEgg]  {discard: egg-shells}
+lemon × butter × sugar × yolk → lemon-filling + lemon-peel + butter-wrapper  [MakeLemonFilling]  {discard: lemon-peel, butter-wrapper}
+white × sugar → meringue  [MakeMeringue]
+crust × lemon-filling → unbaked-lemon-pie  [FillCrust]
+unbaked-lemon-pie × meringue → unbaked-pie  [AddMeringue]
+```
+
+This produces a diagram isomorphic to a standard process flow diagram
+for making lemon meringue pie, with ingredients as source nodes,
+operations as boxes, and waste (egg shells, lemon peel, butter wrapper)
+as red sink nodes.
+
+## Files
+
+This skill's teaching material (`SKILL.md`, this file) is copied into
+this repo (ADR-0005); the converter and example equation sets it
+teaches from remain claimed into ehr-testing-tools' `palgebra/`
+directory (that repo's `.agents/plans/judge-gate-refactor.md` Phase 2,
+D9) — they speak only in wires/boxes/composition, not in either repo's
+own stages, and were not vendored here. Using this skill from
+ehr-testing-sim requires a sibling checkout of ehr-testing-tools at
+`../ehr-testing-tools`:
+
+- `SKILL.md` — this file
+- `../ehr-testing-tools/palgebra/tools/resource_equations_to_mermaid.py` — the converter (Python 3.7+, no dependencies)
+- `../ehr-testing-tools/palgebra/examples/ai-study-equations.txt` — the AI study pipeline equations
+- `../ehr-testing-tools/palgebra/examples/lemon-pie-equations.txt` — the lemon meringue pie equations
+- `../ehr-testing-tools/palgebra/examples/decision-monad-equations.txt` — the fan→funnel deliberated choice pipeline (demonstrates spider annotations)
 
 ========== END FILE ==========
 
