@@ -1,7 +1,7 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-26T22:46:20Z
-HEAD: 96e16515b3db3d6eea99ca55d09802fed324c902
+generated (UTC): 2026-07-27T00:46:32Z
+HEAD: f3453ebb0d374435cfba76394253e61e82b896a9
 git status --porcelain:
 working tree clean
 elides: .agents/skills, .agents/prompts/archive
@@ -231,40 +231,101 @@ rejection is a no-op for that one step, not a run-halting condition,
 and InjectChurn's own state model treats `:cancel-discharge`
 conservatively (never assumes it succeeds) for exactly this reason.
 
-## M3 — Order profiles + order/result steps
+## M3 — Order profiles + order/result steps — **landed**
 
-Advances **Execute** via its new `order-profiles` catalytic (added
-this session, target 3 — hashed US-units config): order and result
-step types, and ORM/ORU emission in `EmitHL7`. This is the milestone
-that repairs the capture gap named in this session's theory
+Advanced **Execute** via its `order-profiles` catalytic (declared
+comment-only ahead of this milestone, target 3 — hashed US-units
+config, now real): `:order` (author-facing IR, auto-pairs its own
+`:result-followup` after a profile-sampled turnaround — the ergonomics
+choice recorded over a hand-authored `:result{:order-ref ...}}` step,
+`docs/patient-state-model.md`) and ORM^O01/ORU^R01 emission in
+`EmitHL7` — 181 tests / 503 assertions green, coverage 95.35%/97.75%
+(up from the M2b baseline 94.78%/97.25%). `resources/order-profiles.edn`
+ships a small hand-curated CBC + BMP starter set, real LOINC codes
+verified directly against loinc.org (`notes/facts-register.md` F7), US
+conventional units, typical adult reference ranges, and a per-analyte
+value distribution (normal + abnormal tails). This is the milestone
+that repairs the capture gap named in an earlier theory
 sync — Simulated Hospital's order profiles and the ORM/ORU cycle were
 discussed from the project's first session but, until now, lived in
 no planning artifact.
 
-Co-landing invariants: results reference orders that exist and
-precede them in time; order/result message types register in
+**The run-loop mechanism this needed, recorded here since it's a real
+engine extension, not just a new step type:** `decide`'s outcome may
+now carry `:schedule-followup` — a genuine future `[t seq-no]` queue
+entry the run loop enqueues, distinct from returning events directly.
+An `:order`'s result is fully computed (all its RNG draws, including
+every analyte's sampled value and computed abnormal flag) atomically at
+order-decide-time, the same "decided atomically" precedent
+`:transfer-in-error` already set — but splicing that future-timestamped
+event directly into the order's own `:events` would enter
+`ground-truth` at the order's own log position, ahead of other
+patients' smaller-`:t` events the run loop hasn't processed yet yet,
+breaking the log's global time ordering. `:schedule-followup` instead
+asks the run loop to enqueue it for real, so it lands at its own
+correct position, the same as any other scheduled event.
+
+**A real finding, corrected before landing:** this milestone's own
+integration test surfaced that a patient can legitimately be discharged
+before their result arrives (async turnaround, `:order`'s own
+`:advance 0` doesn't block the rest of the pathway on the pending
+result) — pending labs at discharge are real, common clinical traffic,
+not a bug. The event-validity invariant this milestone co-lands
+(`order-only-when-admitted`) is therefore scoped to `:order-placed`
+alone, not generalized to `:result-available` as first drafted.
+
+Co-landing invariants: `result-references-existing-order-and-follows-
+it-in-time` (every result's `:order-event-id` names a real order for
+the same patient, at or before the result's own time);
+`result-analytes-match-order-profile` (a result's analyte set is
+exactly its own profile's); `abnormal-flags-consistent-with-value-vs-
+range` (the computed-truth mini-law, checked from the log directly);
+`order-only-when-admitted` (the therapeutic-intent-class validity row,
+scoped per the finding above). Order/result message types register in
 `message-type-registry` the same way ADT types already do.
 
-**M3-adjacent capture: per-patient pathway assignment.**
-`ehr-testing-sim.engine/run` today executes exactly one pathway for
-every patient in a run — the churn regression fleet (M2b) had to
-script `decide`/`evolve` directly, one call at a time, precisely
-because there is no config-level way to run a *mixture* of pathways
-across a patient population. SimHospital's own pathway config has a
-`percentage_of_patients`-style analogue for exactly this; this project
-has discussed the gap without capturing it in a planning artifact
-until now. Needed: a distribution/assignment layer — config mapping
-pathway ids to weights (a sampled mixture) or to explicit per-patient
-assignments (a scripted fleet, `run`'s existing single-pathway mode as
-the degenerate case) — so a scripted scenario fixture can run through
-`engine/run` end to end instead of hand-driving `decide`/`evolve`. This
-is also **M5's own prerequisite**: `CompileTrajectory` produces a
-*distinct* pathway per patient (each patient's own compiled clinical
-trajectory), so the assignment layer that lets `run` accept "one
-pathway per patient, not one pathway for all" is infrastructure M5
-needs regardless of where it lands first. Captured here as a named gap,
-not designed in the fuller sense `docs/operational-models.md` designs
-the allocation ladder.
+**Task 0's consumer-loop triage, landed alongside:** `manifest/build`
+and `MirroredManifest` both omitted `:schema-version` — correlated
+drift the mirror could not self-detect, since it validates its own
+output against its own copy of the schema (a mirror cannot catch itself
+agreeing with its own mistake, the reason the BINDING contract test
+lives in tools' own integration tree). Fixed both sides to mirror
+tools' `ManifestV1_1` exactly (`:schema-version "1.1"`); verified
+against tools' `sim-manifest-contract-test`, run as a subprocess, green.
+
+**ADR-0012 (`:step-rejected`), landed alongside.** Decide-time
+rejections (the cancel-family's own reinstatement guards, bed-swap/
+merge's no-eligible-peer cases) now append a `:step-rejected` ground-
+truth event — participants (the attempting patient only, never a
+possibly-nonexistent `:with` target), the attempted step, and a
+documented reason keyword (`ehr-testing-sim.engine/documented-step-
+rejection-reasons`, its own catalog-style enum, co-landed with a
+`step-rejected-reason-is-documented` invariant). No
+`message-type-registry` entry, by design — truth about the run, never
+wire traffic. Rejected steps consume no RNG beyond what `decide` had
+already drawn before discovering the rejection.
+
+**M3-adjacent capture, landed alongside: per-patient pathway
+assignment.** `ehr-testing-sim.engine/run` gained `:pathways`
+(`ehr-testing-sim.pathway/PathwaysConfig`): weighted-pool entries
+(`{:pathway :weight}`, a sampled mixture across the patient population)
+and/or explicit per-ordinal entries (`{:patient-ordinal :pathway}`, a
+scripted assignment), `assign-pathway`'s own input — SimHospital's
+`percentage_of_patients`-style analogue this project had discussed
+without capturing until now. `run`'s existing single-`:pathway` config
+is the degenerate case and stays byte-identical (the pinned fixture is
+untouched — `:pathways` absent entirely, not merely all-zero, means no
+new draw, exactly the same opt-in shape M2b's `:churn-profile` already
+established). The M2b scripted-scenario fleet
+(`ehr_testing_sim/churn_scenarios_test.clj`) now runs end-to-end through
+`engine/run` via explicit assignments, computing peer patient-ids with
+the pure `patient-id-for`; `engine-test`'s own
+`bed-ready-transfer-scripted-two-patients` is kept as the one direct
+decide/evolve-driven API-level regression, per this session's own
+migration note. This is also **M5's own prerequisite**:
+`CompileTrajectory` produces a *distinct* pathway per patient, so this
+assignment layer is infrastructure M5 needs regardless of where it
+landed first.
 
 ## M4 — Persona + demographics tables; payer sampling; PID/IN1 enrichment
 
@@ -969,9 +1030,13 @@ problem, constraints, black-box contract, and validation program.
 invariant catalog, HL7v2 ADT emission (admission/discharge/transfer
 plus the full churn family — below), the facility and providers
 models (beds, the allocation ladder, boarding, bed-ready transfers,
-synthetic attendings — docs/operational-models.md), and InjectChurn
+synthetic attendings — docs/operational-models.md), InjectChurn
 (cancel-admit/cancel-transfer/cancel-discharge, transfer-in-error,
-bed-swap, merge — docs/patient-state-model.md).
+bed-swap, merge — docs/patient-state-model.md), and, as of Milestone
+M3, order/result step types with a real CBC+BMP order-profiles
+catalytic (verified LOINC codes) plus ORM^O01/ORU^R01 emission, a
+per-patient pathway-assignment layer (`:pathways`), and `:step-rejected`
+ground-truth events for decide-time rejections (ADR-0012).
 
 ## Pipeline: now / next / later
 
@@ -984,11 +1049,11 @@ bed-swap, merge — docs/patient-state-model.md).
 
 ```mermaid
 flowchart LR
-    Persona["Persona"]:::planned
+    Persona["Persona"]:::next
     RunModules["RunModules"]:::planned
     CompileTrajectory["CompileTrajectory"]:::planned
     InjectChurn["InjectChurn"]:::built
-    Execute["Execute"]:::next
+    Execute["Execute"]:::built
     Check["Check"]:::built
     EmitHL7["EmitHL7"]:::built
     EmitState["EmitState"]:::planned
@@ -1008,13 +1073,14 @@ flowchart LR
     classDef planned fill:#37474f,stroke:#78909c,color:#cfd8dc,stroke-width:1px,stroke-dasharray: 3 3;
 ```
 
-**Now** (green): Execute, Check, EmitHL7, and, as of Milestone M2b,
-InjectChurn — property-tested and green (134 tests / 318 assertions).
-**Next** (amber): Execute's own further step-vocabulary growth —
-Milestone M3's order/result step types and the ORM/ORU cycle, landed
-under Execute's existing contract the same way M2b's churn family was
-(no new stage). **Later** (dashed grey): everything else in the
-*want*.
+**Now** (green): Execute, Check, EmitHL7, InjectChurn (M2b), and, as of
+Milestone M3, Execute's own order/result step types and EmitHL7's
+ORM/ORU cycle — property-tested and green (181 tests / 503 assertions).
+**Next** (amber): **Persona**, Milestone M4 — demographics sampling
+from vendored, hashed tables, plus the `payer-pool` catalytic this
+theory currently only records as a comment at Persona, turning into a
+real wire once this stage lands. **Later** (dashed grey): everything
+else in the *want*.
 
 [`docs/sim-theory-diagram.md`](docs/sim-theory-diagram.md) is the full
 detail view (every resource wire, catalytic input, and the
@@ -2302,7 +2368,9 @@ class wherever a single event type doesn't map to a single class.
 | `:pending-*` (M2b, planned) | `:status = :admitted`, not already pending | — | Double-pending; pending a non-admitted patient. |
 | `:cancel-*` / `:*-in-error` (M2b, planned) | The event class being cancelled must exist in this patient's log and not already be cancelled | — | Cancelling an event that never happened, or cancelling twice. |
 | `:merge` (M2b, planned) | Both patient-ids exist (ADR-0010); at least the surviving patient-id is `:admitted` or reachable | — | Merging into/from a patient-id that was never admitted, or a double merge. |
-| Therapeutic-intent classes (orders, meds, procedures with clinical intent) | **Illegal** when `:status = :expired` | — | An order or medication timestamped after a death event — the classic post-mortem rejection case (`docs/clinical-realities.md`). |
+| `:order` (M3, **landed**) | `:status = :admitted` | — | Ordering labs for a patient not currently admitted (`ehr-testing-sim.check/order-only-when-admitted`). |
+| `:result-available` (M3, **landed**) | No status restriction of its own — a result is asynchronous to the rest of the patient's own pathway (auto-paired at a profile-sampled turnaround, not blocking authored steps like `:discharge`) and may legitimately arrive after discharge; **pending labs at discharge is real clinical traffic, not a bug** — a case this milestone's own integration test surfaced before this row was narrowed to match it. Its own constraint is referential, not status-based: it must name a real, preceding `:order-placed` event for the same patient (`ehr-testing-sim.check/result-references-existing-order-and-follows-it-in-time`). | — | A result whose `:order-event-id` doesn't resolve to a real prior `:order-placed` event for the same patient, or that precedes it in time. |
+| Therapeutic-intent classes (orders, meds, procedures with clinical intent) | **Illegal** when `:status = :expired` | — | An order or medication timestamped after a death event — the classic post-mortem rejection case (`docs/clinical-realities.md`). `:order` is this class's first LANDED instance (row above); the `:expired` half of this row is not yet checkable in code, since `:expired` isn't a landed `:status` value yet (see the accumulator table's own `:status` note) — `order-only-when-admitted` is written as the strict generalization ("legal only when `:admitted`") that already covers it once `:expired` lands, without inventing an unfalsifiable invariant against a status no event can yet produce. |
 | Morgue/funeral-home transfer | Legal when `:status = :expired` (also legal pre-expiry as an ordinary `:transfer`) | — | A morgue transfer for a patient who is not `:expired`. |
 | Autopsy / specimen events | Legal when `:status = :expired` | — | An autopsy event for a patient who is not `:expired`. |
 | Donor-management / organ-procurement events | Legal when `:status = :expired` | **gated on `:donor` = true** in `:attributes` | A procurement event for a patient whose `:attributes` doesn't carry `:donor true` — the gate that makes this row conditional rather than a plain status check. |
@@ -3161,7 +3229,15 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
 ;; prose, keeping the file loadable by tools' Pipeline Malli as-is.
 {:schema-version 1
  :stages
- [;; payer-pool (target 3, hashed config, docs/operational-models.md)
+ [;; NEXT -- Milestone M4 (.agents/plans/roadmap.md): Persona for real --
+  ;; demographics sampling from vendored, hashed tables, plus the
+  ;; payer-pool catalytic this comment names below turning into a real
+  ;; wire once this stage flips to :built. M3's own NEXT (Execute's
+  ;; order/result step family) landed this session -- see :execute's own
+  ;; :contract for the landing record. The author may re-aim NEXT; this
+  ;; is the default per the roadmap.
+  ;;
+  ;; payer-pool (target 3, hashed config, docs/operational-models.md)
   ;; binds here for payer sampling once Persona lands -- not added to
   ;; :catalytic below because Persona itself is still :planned and the
   ;; wire would be premature until the stage is real; until then,
@@ -3210,11 +3286,6 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
           "zero-probability identity: an all-zero churn-profile is the identity transform, for ANY seed -- property-tested (churn-test/zero-profile-is-the-identity-transform-for-any-seed, 100 trials green 2026-07-26), not merely assumed from the RNG-consumption law"]
    :contract "v1 scope (M2b, docs/patient-state-model.md's event-validity table as InjectChurn's applicability oracle, ehr-testing-sim.churn): six step types (cancel-admit/cancel-transfer/cancel-discharge -> A11/A12/A13, transfer-in-error -> A02+A12, bed-swap -> A17, merge -> A40), each co-landed with check.clj invariants and message-type-registry entries in the same change (AGENTS.md's co-landing convention, extended to this stage). Applicability is tracked as a small type-level state machine over the pathway's own step sequence (no facility/occupancy visibility at injection time) -- decide still independently re-validates against LIVE world state at execution time and rejects (not throws) when a statically-legal insertion turns out to collide with something only runtime knows about (e.g. a bed a cancel-discharge would reinstate into has since been reclaimed); a rejected step is a no-op, not a run-halting condition. Wired into ehr-testing-sim.run/run-command via `:churn` (a modest built-in sample-profile) or an explicit `:churn-profile` map. The WANT is InjectChurn choosing insertion points from real operational realism data (site profiles, Calibrate feedback) rather than flat per-gap probabilities -- not this session's scope."}
 
-  ;; NEXT -- Execute's own further step-vocabulary growth: M3's
-  ;; order/result steps and the ORM/ORU cycle (order-profiles catalytic,
-  ;; below) is what's next under Execute's existing :built contract, now
-  ;; that InjectChurn itself has landed :built. The author may re-aim
-  ;; NEXT; this is the default per the roadmap.
   {:id :execute
    :label "Execute"
    :kind :transform
@@ -3224,9 +3295,9 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
    :catalytic ["provider-pool" "order-profiles"]
    :laws ["determinism: single seeded RNG, totally ordered event queue ([t seq-no] tiebreak) => byte-identical serialized output for identical inputs+seed -- property-tested (engine-test/determinism-holds-for-all-seeds, 100 trials green 2026-07-26)"
           "decide/evolve split (ADR-0008): decide (rng, t, world, mrn, step) -> {:events :advance} consults world-so-far and the RNG but never mutates; evolve (world, event) -> world' is the ONLY function that changes patient state, pure and total, folding one event at a time -- so state-history is DERIVED (reduce evolve over a log prefix), not a second output the engine must keep in sync with the log by discipline; this is what makes state-based emitters renderings rather than redesigns (ADR-0002)"
-          "order-profiles catalytic (target 3, hashed US-units config, docs/operational-models.md): order and result step types land under Execute's existing :built contract as the engine's step vocabulary grows -- an EmitHL7-style co-landing addition, not a new stage (repairs the plan's earlier capture gap: order profiles and the ORM/ORU cycle were discussed from the first session but appeared in no planning artifact before this one)"
+          "order-profiles catalytic (target 3, hashed US-units config, docs/operational-models.md; LANDED M3): :order/:result-followup step types under Execute's existing :built contract, an EmitHL7-style co-landing addition, not a new stage -- repairs the plan's earlier capture gap named at this catalytic's first mention (order profiles and the ORM/ORU cycle were discussed from the first session but appeared in no planning artifact before M3's own roadmap entry). Auto-pairing law: an :order's decide call samples its :result-available event FULLY, atomically, at order-time (all RNG draws happen in that one call, the same 'decided atomically' precedent :transfer-in-error already set) but the result event rides a NEW `:schedule-followup` decide-outcome key rather than being spliced into :events directly -- splicing a future-t event into the current call's :events would enter ground-truth at THIS call's own log position, ahead of other patients' smaller-:t events the run loop hasn't processed yet, breaking the log's own global t-ordering; `:schedule-followup` instead asks the run loop to enqueue a genuine future [t seq-no] entry, the same queue every other scheduled event already goes through. Computed-truth mini-law: a result's abnormal flag is DERIVED from value vs reference-range (ehr-testing-sim.order-profiles/abnormal-flag), never sampled independently -- property-tested (order-profiles-test/abnormal-flag-agrees-with-sample-analyte-value-for-any-draw, 200 trials green 2026-07-26)"
           "provider-pool catalytic (target 3, hashed config, docs/operational-models.md): attending assignment at admission draws from the provider pool the same way bed assignment draws from facility config -- both are Execute-time allocations, not separate stages"]
-   :contract "v1 scope (Milestone M1, docs/operational-models.md): the walking-skeleton step set (:admission :delay :discharge) plus :transfer, engine-assigned via the allocation ladder and provider sampling -- provider-pool is a real catalytic now (synthetic Luhn-valid NPIs materialized once per run, ehr-testing-sim.config), not just a declared wire. M2a (ADR-0010, ADR-0011): patient-id is the fold/queue key, :mrn moved into state as {:mrns :active-mrn}, every event carries :participants, the clock is seconds (pathway IR's :delay stays minutes, converted at decide-time), and a configurable warm-up window marks early events. M2b: the churn family (cancel-admit/cancel-transfer/cancel-discharge/transfer-in-error/bed-swap/merge, landed as :execute step types the SAME way :transfer was -- :churn, above, is what decides WHERE to insert them into a pathway, this stage is what runs them) plus result-not-throw capacity-exhaustion (a structured {:exhausted ...} outcome, never a thrown exception, when the allocation ladder is fully exhausted). All of this landed under this SAME :built contract, no new input/output/catalytic (docs/sim-theory.md records why this needed no diagram regeneration). The WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"}
+   :contract "v1 scope (Milestone M1, docs/operational-models.md): the walking-skeleton step set (:admission :delay :discharge) plus :transfer, engine-assigned via the allocation ladder and provider sampling -- provider-pool is a real catalytic now (synthetic Luhn-valid NPIs materialized once per run, ehr-testing-sim.config), not just a declared wire. M2a (ADR-0010, ADR-0011): patient-id is the fold/queue key, :mrn moved into state as {:mrns :active-mrn}, every event carries :participants, the clock is seconds (pathway IR's :delay stays minutes, converted at decide-time), and a configurable warm-up window marks early events. M2b: the churn family (cancel-admit/cancel-transfer/cancel-discharge/transfer-in-error/bed-swap/merge, landed as :execute step types the SAME way :transfer was -- :churn, above, is what decides WHERE to insert them into a pathway, this stage is what runs them) plus result-not-throw capacity-exhaustion (a structured {:exhausted ...} outcome, never a thrown exception, when the allocation ladder is fully exhausted). M3 (docs/operational-models.md's order-profiles catalytic, this session): :order (author-facing IR step, `{:type :order :profile :cbc}`) and the engine-internal :result-followup (never hand-authored -- an :order's own decide call auto-pairs it, keeping authored pathways ergonomic, the choice recorded over a hand-authored :result{:order-ref}} step, docs/patient-state-model.md); a run's `world` gains :order-profiles (default ehr-testing-sim.order-profiles/default-profiles, a small hand-curated CBC+BMP starter set, real LOINC codes verified against loinc.org -- notes/facts-register.md F7). The run loop itself gained ONE new mechanism for this: decide's outcome may carry :schedule-followup, a genuine future [t seq-no] queue entry (not a splice into the current call's :events) -- see :execute's own laws above for why. All of this landed under this SAME :built contract, no new input/output, one new catalytic wire (order-profiles, already declared, now real -- docs/sim-theory.md records why this needed no diagram regeneration). The WANT is the full Simulated-Hospital-derived step vocabulary, landed step by step under the co-landing law (see :check)"}
 
   {:id :check
    :label "Check"
@@ -3249,7 +3320,7 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
    :catalytic ["hl7-parser-dep" "message-type-registry" "snomed-icd10-map"]
    :laws ["bidirectional derivability: every emitted message is derivable from the log, and every message is traceable back to the log event that produced it (problem-statement Guarantees) -- the property that makes the corpus a test instrument rather than mere traffic -- property-tested (emit-hl7-test/bidirectional-derivability, 100 trials green 2026-07-26)"
           "native code rendering: concept triplets render as coded fields (CWE etc.) in their own system; the ONE sanctioned translation is SNOMED->ICD-10-CM for billing segments (DG1), via the pinned NLM map (catalytic target 1), or code pairs carried from the module where provided"]
-   :contract "v0 scope was ADT^A01 (admission) and ADT^A03 (discharge) only; M1 added A02 (transfer); M2b adds the full churn family -- A11/A12/A13 (cancel-admit/cancel-transfer/cancel-discharge), A17 (bed-swap, ONE message carrying both patients' PID/PV1 pairs -- the real HL7v2 A17 shape), and A40 (merge, PID carries the surviving MRN, MRG-1 the prior/merged-away one). MSH/EVN/PID/PV1(/MRG) populated minimally, on org.clojars.cmiles74/clojure-hl7-parser's structures (the emitter's only runtime dependency, docs/third-party-sources.md). Timestamps render from a pinned :reference-date run-config input (ehr-testing-sim.emit-hl7/default-reference-date), never wall-clock. ORU/ORM lands alongside M3's order/result step types -- each a message-type-registry addition, not a redesign of this stage."}
+   :contract "v0 scope was ADT^A01 (admission) and ADT^A03 (discharge) only; M1 added A02 (transfer); M2b adds the full churn family -- A11/A12/A13 (cancel-admit/cancel-transfer/cancel-discharge), A17 (bed-swap, ONE message carrying both patients' PID/PV1 pairs -- the real HL7v2 A17 shape), and A40 (merge, PID carries the surviving MRN, MRG-1 the prior/merged-away one). MSH/EVN/PID/PV1(/MRG) populated minimally, on org.clojars.cmiles74/clojure-hl7-parser's structures (the emitter's only runtime dependency, docs/third-party-sources.md). Timestamps render from a pinned :reference-date run-config input (ehr-testing-sim.emit-hl7/default-reference-date), never wall-clock. M3 (this session): ORM^O01 (order-placed -- ORC-1 \"NW\", OBR-4 the panel-level LOINC concept as CWE) and ORU^R01 (result-available -- OBR-4 the same panel concept, one OBX per analyte: OBX-3 CWE with the analyte's own LOINC triplet, OBX-5 value, OBX-6 units, OBX-7 reference range as \"low-high\", OBX-8 the abnormal flag rendered in HL7's own N/L/H vocabulary, Table 0078). Neither carries EVN (an ADT-specific segment, not part of the order-message family, HL7v2 convention). :step-rejected renders NOTHING -- no message-type-registry entry, by design (ADR-0012): truth about the run, never wire traffic."}
 
   {:id :emit-state
    :label "EmitState"
@@ -3324,12 +3395,16 @@ One file describes three systems:
   **EmitHL7**, and, as of Milestone M2b, **InjectChurn** (each
   walking-skeleton, v1-slice, or v0-slice scope, per their `:contract`
   notes), plus the manifest component inside Package that shipped
-  ahead of its stage. Everything the *now* claims is property-tested
-  and green (134 tests / 318 assertions, 2026-07-26).
-- **next** — the single stage marked `;; NEXT` in the EDN: **Execute**
-  itself, growing further under its own existing contract toward
-  Milestone M3's order/result step types and the ORM/ORU cycle
-  (`order-profiles`, already a declared catalytic).
+  ahead of its stage. As of Milestone M3, Execute's own step vocabulary
+  further grows (`:order`/`:result-followup`, the `order-profiles`
+  catalytic now real) and EmitHL7 gains ORM^O01/ORU^R01. Everything the
+  *now* claims is property-tested and green (181 tests / 503 assertions,
+  2026-07-26).
+- **next** — the single stage marked `;; NEXT` in the EDN: **Persona**,
+  Milestone M4 — demographics sampling from vendored, hashed tables,
+  plus the `payer-pool` catalytic this theory currently only records as
+  a comment at Persona (below), turning into a real wire once this
+  stage flips to `:built`.
 
 No schema keys were invented for this convention — it lives in
 comments and here, keeping the EDN loadable by tools' Pipeline Malli
@@ -3413,6 +3488,31 @@ neither change touches a structural key. ADR-0011's **seeded arrival
 process** (an alternative to fixed `:patients N`) was sketched but not
 built this session — explicitly a stretch item behind the seam, per
 the M2a session's own plan; M2b does not depend on it.
+
+## M3 lands under Execute's existing contract — no new stage or wire
+
+`order-profiles` was already a declared catalytic on `Execute` (the
+previous section) before this milestone — Milestone M3 makes it real
+(`ehr-testing-sim.order-profiles`, a small hand-curated CBC+BMP starter
+set, real LOINC codes verified against loinc.org,
+`notes/facts-register.md` F7) and lands the two new step types it
+feeds: `:order` (author-facing IR, `{:type :order :profile :cbc}`) and
+`:result-followup` (engine-internal only — never hand-authored; an
+`:order`'s own `decide` call auto-pairs its result after a
+profile-sampled turnaround, the choice recorded over a hand-authored
+`:result{:order-ref ...}}` step because it keeps authored pathways
+ergonomic, `docs/patient-state-model.md`). `EmitHL7` gains ORM^O01 and
+ORU^R01 the same way it gained the churn family's ADT triggers in
+M2b — a `message-type-registry` addition, not a redesign. None of this
+touches `Execute`'s or `EmitHL7`'s declared `:inputs`, `:outputs`, or
+`:catalytic` keys (`order-profiles` was already wired; ORM/ORU are new
+registry entries, not new catalytic wires), so — the same argument the
+M2a section above already made, confirmed by inspection rather than by
+re-running the generator — this cannot change what any diagram
+generated from `sim-theory.edn` renders. `:step-rejected` (ADR-0012,
+also landed this milestone) renders in **neither** diagram nor
+message-type-registry, by design: it is truth about the run, not wire
+traffic a real ADT/ORM/ORU feed would ever carry.
 
 ## IR transforms as the composition layer
 
@@ -4774,10 +4874,124 @@ one.
 | F4 | CPT codes are AMA-licensed and excluded from this repo by constraint (never emitted); SNOMED CT and LOINC are free to use for US-context work — SNOMED CT via NLM/UMLS US-member access, LOINC under its own free license — alongside RxNorm, ICD-10-CM, and CVX. | `docs/problem-statement.md` (§3 "Standard terminology"), `AGENTS.md` (Constraints), `.agents/memory/architecture.md` (Terminology decisions) | AMA CPT licensing terms (`ama-assn.org`); NLM/UMLS SNOMED CT US Edition membership terms (`nlm.nih.gov`); LOINC's own free-use license (`loinc.org`) — per architecture.md's original verification session; not re-fetched this session | 2026-07-26 | verified (inherited from architecture.md; not re-verified this session) |
 | F5 | The SNOMED CT to ICD-10-CM map is published by NLM as part of UMLS — the official U.S. mapping (the current map ships in the US Edition of SNOMED CT), built by dual independent mapping with third-expert adjudication of discordant mappings. Access requires a UMLS/UTS license (free for SNOMED CT in the US and free for ICD-10-CM in the US) — this is the pinned data artifact `docs/sim-theory.edn` names as `snomed-icd10-map`, the one sanctioned code translation (DG1). | `docs/third-party-sources.md` (Tier 1), `docs/sim-theory.edn` (`:emit-hl7` catalytic, `snomed-icd10-map`) | `nlm.nih.gov/research/umls/mapping_projects/snomedct_to_icd10cm.html`, fetched directly this session | 2026-07-26 | verified this session |
 | F6 | Two independent-of-this-repo validation tool families exist for HL7v2 conformance, matching problem-statement.md claim #1's proof strategy: (a) NIST's HL7 v2 Conformance Testing portfolio (General Validation Tool, IGAMT, TCAMT) at `hl7v2tools.nist.gov`, offered as public-domain resources; (b) HAPI HL7v2 (`hapifhir/hapi-hl7v2` on GitHub), an open-source Java library for HL7v2 parsing. Neither is wired into this repo yet — both are named as Tier 2 validation/calibration anchors, future CI integration. | `docs/third-party-sources.md` (Tier 2), `docs/problem-statement.md` (Validation claim #1) | `nist.gov/itl/health-it-testing-infrastructure/testing-tools/hl7-v2-conformance-testing-tools`, `hl7v2tools.nist.gov`; `github.com/hapifhir/hapi-hl7v2` — fetched directly this session (HAPI's specific license terms were not confirmed by the fetch and are not asserted here) | 2026-07-26 | verified this session (HAPI license unconfirmed) |
+| F7 | `resources/order-profiles.edn`'s CBC and BMP panel LOINC codes are real, active LOINC codes with the exact component structure encoded: CBC panel `58410-2` (component analytes used here: `6690-2` Leukocytes, `789-8` Erythrocytes, `718-7` Hemoglobin, `4544-3` Hematocrit, `777-3` Platelets — all `R`/required in the panel); BMP panel `51990-0` (component analytes used here: `2339-0` Glucose, `6299-2` Urea nitrogen, `38483-4` Creatinine, `49765-1` Calcium, `2947-0` Sodium, `6298-4` Potassium, `2069-3` Chloride, `20565-8` Carbon dioxide total — all `R`/required). LOINC is free to use (per F4); no CPT codes appear anywhere in the profile. | `resources/order-profiles.edn`, `docs/sim-theory.edn` (`order-profiles` catalytic) | `loinc.org/58410-2` and `loinc.org/51990-0` — each panel's own "Details for each LOINC in Panel" table, fetched directly this session via browser | 2026-07-26 | verified this session |
 
 ========== END FILE ==========
 
 ========== FILE: ./resources/.gitkeep ==========
+
+========== END FILE ==========
+
+========== FILE: ./resources/order-profiles.edn ==========
+;; Order profiles catalytic (docs/sim-theory.edn's `order-profiles`,
+;; target 3 -- hashed repo-authored config, docs/sim-theory.md's
+;; Catalytic resolution table). A small, hand-curated starter set: CBC
+;; and BMP panels, real LOINC codes (verified directly against
+;; loinc.org 2026-07-26 -- see notes/facts-register.md), US
+;; conventional units, typical adult reference ranges (representative
+;; clinical ranges, not tied to one lab's exact methodology -- this
+;; project's realism goal is plausibility, not diagnostic precision),
+;; and a per-analyte value distribution (normal + abnormal tails).
+;;
+;; Concepts are {:system :loinc :code :display} triplets per ADR-0002's
+;; code-provenance law. NO CPT anywhere (docs/third-party-sources.md's
+;; standing constraint). Turnaround is authored in MINUTES
+;; (docs/patient-state-model.md's durations rule); the engine converts
+;; to seconds at decide-time, the same treatment :delay's IR already
+;; gets.
+;;
+;; Each analyte's :distribution is a 3-way categorical draw
+;; (:normal/:low/:high weights) then a uniform sample within whichever
+;; range is chosen -- ehr-testing-sim.order-profiles/sample-analyte-value
+;; is the sampler this data feeds. :precision is decimal places for
+;; rendering (matching typical lab-report precision per analyte).
+{:cbc
+ {:concept {:system :loinc :code "58410-2" :display "CBC panel - Blood by Automated count"}
+  :turnaround-minutes {:from 30 :to 90}
+  :analytes
+  [{:concept {:system :loinc :code "6690-2" :display "Leukocytes [#/volume] in Blood by Automated count"}
+    :units "K/uL" :precision 1
+    :reference-range {:low 4.5 :high 11.0}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 2.0 :high 4.5}
+                   :abnormal-high-range {:low 11.0 :high 25.0}}}
+   {:concept {:system :loinc :code "789-8" :display "Erythrocytes [#/volume] in Blood by Automated count"}
+    :units "M/uL" :precision 2
+    :reference-range {:low 4.2 :high 5.9}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 3.0 :high 4.2}
+                   :abnormal-high-range {:low 5.9 :high 7.0}}}
+   {:concept {:system :loinc :code "718-7" :display "Hemoglobin [Mass/volume] in Blood"}
+    :units "g/dL" :precision 1
+    :reference-range {:low 12.0 :high 17.5}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 7.0 :high 12.0}
+                   :abnormal-high-range {:low 17.5 :high 20.0}}}
+   {:concept {:system :loinc :code "4544-3" :display "Hematocrit [Volume Fraction] of Blood by Automated count"}
+    :units "%" :precision 1
+    :reference-range {:low 36.0 :high 50.0}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 20.0 :high 36.0}
+                   :abnormal-high-range {:low 50.0 :high 60.0}}}
+   {:concept {:system :loinc :code "777-3" :display "Platelets [#/volume] in Blood by Automated count"}
+    :units "K/uL" :precision 0
+    :reference-range {:low 150 :high 450}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 20 :high 150}
+                   :abnormal-high-range {:low 450 :high 900}}}]}
+
+ :bmp
+ {:concept {:system :loinc :code "51990-0" :display "Basic metabolic panel - Blood"}
+  :turnaround-minutes {:from 45 :to 120}
+  :analytes
+  [{:concept {:system :loinc :code "2339-0" :display "Glucose [Mass/volume] in Blood"}
+    :units "mg/dL" :precision 0
+    :reference-range {:low 70 :high 99}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 40 :high 70}
+                   :abnormal-high-range {:low 99 :high 400}}}
+   {:concept {:system :loinc :code "6299-2" :display "Urea nitrogen [Mass/volume] in Blood"}
+    :units "mg/dL" :precision 0
+    :reference-range {:low 7 :high 20}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 2 :high 7}
+                   :abnormal-high-range {:low 20 :high 100}}}
+   {:concept {:system :loinc :code "38483-4" :display "Creatinine [Mass/volume] in Blood"}
+    :units "mg/dL" :precision 2
+    :reference-range {:low 0.6 :high 1.3}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 0.2 :high 0.6}
+                   :abnormal-high-range {:low 1.3 :high 8.0}}}
+   {:concept {:system :loinc :code "49765-1" :display "Calcium [Mass/volume] in Blood"}
+    :units "mg/dL" :precision 1
+    :reference-range {:low 8.5 :high 10.2}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 6.0 :high 8.5}
+                   :abnormal-high-range {:low 10.2 :high 13.0}}}
+   {:concept {:system :loinc :code "2947-0" :display "Sodium [Moles/volume] in Blood"}
+    :units "mmol/L" :precision 0
+    :reference-range {:low 135 :high 145}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 115 :high 135}
+                   :abnormal-high-range {:low 145 :high 160}}}
+   {:concept {:system :loinc :code "6298-4" :display "Potassium [Moles/volume] in Blood"}
+    :units "mmol/L" :precision 1
+    :reference-range {:low 3.5 :high 5.1}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 2.5 :high 3.5}
+                   :abnormal-high-range {:low 5.1 :high 7.0}}}
+   {:concept {:system :loinc :code "2069-3" :display "Chloride [Moles/volume] in Blood"}
+    :units "mmol/L" :precision 0
+    :reference-range {:low 96 :high 106}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 80 :high 96}
+                   :abnormal-high-range {:low 106 :high 120}}}
+   {:concept {:system :loinc :code "20565-8" :display "Carbon dioxide, total [Moles/volume] in Blood"}
+    :units "mmol/L" :precision 0
+    :reference-range {:low 23 :high 29}
+    :distribution {:weights {:normal 0.85 :low 0.075 :high 0.075}
+                   :abnormal-low-range {:low 10 :high 23}
+                   :abnormal-high-range {:low 29 :high 40}}}]}}
 
 ========== END FILE ==========
 
@@ -4819,6 +5033,7 @@ one.
             [ehr-testing-sim.config :as config]
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.facility :as facility]
+            [ehr-testing-sim.order-profiles :as order-profiles]
             [ehr-testing-sim.result :as result]))
 
 (defn- events-by-patient
@@ -5067,6 +5282,97 @@ one.
                     (some #(= merged-id (:patient-id %)) (:participants later-event)))]
       {:invariant :no-events-after-merged-terminal :patient-id merged-id :at (:t later-event)})))
 
+;; --- ADR-0012: :step-rejected -- truth about the run, checked structurally
+;; (never a message-bearing event -- no message-type-registry entry, by
+;; design; see ehr-testing-sim.engine/documented-step-rejection-reasons) --
+
+(defn step-rejected-reason-is-documented
+  "ADR-0012's own invariant: every :step-rejected event's :reason is one
+  of the documented enum (ehr-testing-sim.engine/documented-step-
+  rejection-reasons) -- a rejection with an undocumented reason would
+  mean a new decide-time rejection path shipped without updating the
+  enum, the co-landing convention extended to this event type."
+  [ground-truth]
+  (for [event ground-truth
+        :when (and (= :step-rejected (:event event))
+                   (not (contains? engine/documented-step-rejection-reasons (:reason event))))]
+    {:invariant :step-rejected-reason-is-documented :reason (:reason event) :at (:t event)}))
+
+;; --- M3: order/result (docs/patient-state-model.md's event-validity
+;; table's therapeutic-intent-class row -- orders/results illegal when
+;; :status = :expired; written here as "legal only when :admitted", the
+;; strict generalization that's testable today since :expired isn't a
+;; landed status yet -- once it lands, :expired != :admitted makes this
+;; row cover it automatically, no new invariant needed then) ---------------
+
+(defn order-only-when-admitted
+  "Therapeutic-intent class (docs/patient-state-model.md's event-
+  validity table): :order-placed is legal only when the patient's prior
+  state is :admitted -- covers :new/:discharged/:merged today, and
+  (once that status lands) :expired too, since :expired is never
+  :admitted either.
+
+  Deliberately NOT extended to :result-available: a result's own
+  turnaround is asynchronous to the rest of the patient's pathway (the
+  patient's OTHER steps, including :discharge, are not blocked waiting
+  for it -- engine.clj's :order docstring), so a result legitimately
+  arriving after discharge is a real, common clinical pattern (pending
+  labs at discharge), not a bug -- an engine/run integration test
+  surfaced exactly this case during this milestone's own development,
+  which is why this invariant is scoped to the order alone rather than
+  generalized to both event types. result-references-existing-order-
+  and-follows-it-in-time already guarantees a result's own order was
+  itself legitimate."
+  [ground-truth]
+  (for [{:keys [event before patient-id]} (engine/replay ground-truth)
+        :when (and (= :order-placed (:event event)) (not= :admitted (:status before)))]
+    {:invariant :order-only-when-admitted :patient-id patient-id :at (:t event)}))
+
+(defn result-references-existing-order-and-follows-it-in-time
+  "Every :result-available event's :order-event-id is a real
+  :order-placed event in this same log, for the SAME patient, at or
+  before the result's own :t (co-landing invariant, Milestone M3)."
+  [ground-truth]
+  (let [indexed (vec ground-truth)]
+    (for [[idx event] (map-indexed vector indexed)
+          :when (= :result-available (:event event))
+          :let [target-idx (:order-event-id event)
+                target (get indexed target-idx)
+                patient-id (:patient-id (first (:participants event)))]
+          :when (or (nil? target)
+                    (not= :order-placed (:event target))
+                    (not (some #(= patient-id (:patient-id %)) (:participants target)))
+                    (> (:t target) (:t event)))]
+      {:invariant :result-references-existing-order-and-follows-it-in-time :patient-id patient-id :at (:t event)})))
+
+(defn result-analytes-match-order-profile
+  "Every :result-available event's :results analyte-concept set is
+  EXACTLY its own :profile's analyte set (`order-profiles` -- default
+  ehr-testing-sim.order-profiles/default-profiles, the same 'needs more
+  than just the log' pattern facility-catalog/warmup-catalog already
+  follow) -- catches a result that dropped, added, or substituted an
+  analyte relative to what its own profile declares."
+  [ground-truth order-profiles]
+  (for [event ground-truth
+        :when (= :result-available (:event event))
+        :let [expected (into #{} (map :concept) (:analytes (get order-profiles (:profile event))))
+              actual (into #{} (map :concept) (:results event))]
+        :when (not= expected actual)]
+    {:invariant :result-analytes-match-order-profile :profile (:profile event) :at (:t event)}))
+
+(defn abnormal-flags-consistent-with-value-vs-range
+  "The computed-truth mini-law (Milestone M3 Task 4), checked from the
+  log directly: every result entry's :abnormal-flag equals
+  ehr-testing-sim.order-profiles/abnormal-flag applied to its own value
+  and reference-range -- a flag that disagrees with its own value is a
+  bug, not a legitimate finding."
+  [ground-truth]
+  (for [event ground-truth
+        :when (= :result-available (:event event))
+        {:keys [value reference-range abnormal-flag]} (:results event)
+        :when (not= abnormal-flag (order-profiles/abnormal-flag value reference-range))]
+    {:invariant :abnormal-flags-consistent-with-value-vs-range :profile (:profile event) :at (:t event)}))
+
 (def catalog
   "The full invariant catalog needing only a ground-truth log, in
   reporting order."
@@ -5082,7 +5388,11 @@ one.
    #'cancel-references-existing-uncancelled-event
    #'bed-swap-both-admitted-before-swap
    #'merge-survivor-absorbs-merged-mrns
-   #'no-events-after-merged-terminal])
+   #'no-events-after-merged-terminal
+   #'step-rejected-reason-is-documented
+   #'order-only-when-admitted
+   #'result-references-existing-order-and-follows-it-in-time
+   #'abnormal-flags-consistent-with-value-vs-range])
 
 (def facility-catalog
   "Invariants that need the facility config, not just the log (checked
@@ -5096,25 +5406,37 @@ one.
   not just the log -- same reason `facility-catalog` is separate."
   [#'warm-up-mark-matches-window])
 
+(def order-profiles-catalog
+  "Invariants that need the order-profiles config, not just the log --
+  same reason `facility-catalog` is separate (Milestone M3)."
+  [#'result-analytes-match-order-profile])
+
 (defn check-all
   "Runs every invariant in the catalog over a ground-truth log.
   `facility-config` (default config/default-facility) is needed by the
   capacity/surge-ladder invariants; `warm-up-seconds` (default 0) is
-  needed by the warm-up-mark invariant. Existing 1-arg/2-arg call sites
-  are unaffected."
-  ([ground-truth] (check-all ground-truth config/default-facility 0))
-  ([ground-truth facility-config] (check-all ground-truth facility-config 0))
+  needed by the warm-up-mark invariant; `order-profiles-config`
+  (default ehr-testing-sim.order-profiles/default-profiles, Milestone
+  M3) is needed by result-analytes-match-order-profile. Existing
+  1-arg/2-arg/3-arg call sites are unaffected."
+  ([ground-truth] (check-all ground-truth config/default-facility 0 order-profiles/default-profiles))
+  ([ground-truth facility-config] (check-all ground-truth facility-config 0 order-profiles/default-profiles))
   ([ground-truth facility-config warm-up-seconds]
+   (check-all ground-truth facility-config warm-up-seconds order-profiles/default-profiles))
+  ([ground-truth facility-config warm-up-seconds order-profiles-config]
    (let [base-violations (into [] (mapcat #(% ground-truth)) catalog)
          facility-violations (into [] (mapcat #(% ground-truth facility-config)) facility-catalog)
          warmup-violations (into [] (mapcat #(% ground-truth warm-up-seconds)) warmup-catalog)
+         order-profiles-violations (into [] (mapcat #(% ground-truth order-profiles-config)) order-profiles-catalog)
          violations (-> base-violations
                         (into facility-violations)
-                        (into warmup-violations))]
+                        (into warmup-violations)
+                        (into order-profiles-violations))]
      (if (empty? violations)
        (result/ok {:invariants-checked (-> (mapv (comp :name meta) catalog)
                                             (into (mapv (comp :name meta) facility-catalog))
-                                            (into (mapv (comp :name meta) warmup-catalog)))
+                                            (into (mapv (comp :name meta) warmup-catalog))
+                                            (into (mapv (comp :name meta) order-profiles-catalog)))
                    :events (count ground-truth)})
        (result/rejected :invariant-violation {:violations violations})))))
 
@@ -5676,7 +5998,12 @@ one.
    :cancel-transfer {:type "ADT" :trigger "A12"}
    :cancel-discharge {:type "ADT" :trigger "A13"}
    :bed-swap {:type "ADT" :trigger "A17"}
-   :merge {:type "ADT" :trigger "A40"}})
+   :merge {:type "ADT" :trigger "A40"}
+   ;; M3: order/result. :step-rejected has NO entry, by design (ADR-0012:
+   ;; truth about the run, never wire traffic -- no real ADT/ORM/ORU feed
+   ;; carries a message for an attempt that never became a real action).
+   :order-placed {:type "ORM" :trigger "O01"}
+   :result-available {:type "ORU" :trigger "R01"}})
 
 (def ^:private hl7-timestamp-formatter
   (java.time.format.DateTimeFormatter/ofPattern "yyyyMMddHHmmss"))
@@ -5846,6 +6173,101 @@ one.
       (pv1-segment facility-name nil nil nil)
       (mrg-segment merged-mrn)))))
 
+;; --- M3: ORM^O01 + ORU^R01 (docs/sim-theory.edn's order-profiles
+;; catalytic, docs/operational-models.md) -----------------------------------
+
+(defn- cwe-field
+  "CWE (Coded With Exceptions): identifier^text^coding-system. \"LN\" is
+  LOINC's own HL7v2 Table 0396 coding-system abbreviation -- the coded-
+  triplet's :system rendered natively (ADR-0002), not translated."
+  [{:keys [code display]}]
+  (parser/create-field [code display "LN"]))
+
+(defn- orc-segment
+  "ORC-1: order control -- \"NW\" (new order) is the only value this
+  stage ever emits, since InjectChurn has no order-cancellation step
+  (v1 scope). ORC-2: placer order number, reusing this message's own
+  control-id (no separate order-numbering scheme needed yet)."
+  [control-id]
+  (parser/create-segment
+   "ORC"
+   (parser/create-field ["NW"])
+   (parser/create-field [control-id])))
+
+(defn- obr-segment
+  "OBR-4: universal service id -- the PANEL-level LOINC concept (CBC/BMP
+  itself, not its analytes; those are per-OBX below)."
+  [set-id concept]
+  (parser/create-segment
+   "OBR"
+   (parser/create-field [(str set-id)])
+   (parser/create-field [])
+   (parser/create-field [])
+   (cwe-field concept)))
+
+(defn- obx-segment
+  "One analyte per OBX (docs/operational-models.md's own spec for this
+  milestone): OBX-2 \"NM\" (numeric) -- every analyte in this
+  catalytic's starter set is a numeric lab value, no other value types
+  needed yet. OBX-7 renders the reference range as \"low-high\"; OBX-8
+  the abnormal flag, HL7v2's own N/L/H vocabulary (Table 0078) -- a
+  direct rendering of ehr-testing-sim.order-profiles/abnormal-flag's
+  own :normal/:low/:high, computed truth carried straight from the log,
+  never re-derived at emit time (the log already has the answer)."
+  [set-id {:keys [concept units value reference-range abnormal-flag]}]
+  (parser/create-segment
+   "OBX"
+   (parser/create-field [(str set-id)])
+   (parser/create-field ["NM"])
+   (cwe-field concept)
+   (parser/create-field [])
+   (parser/create-field [(str value)])
+   (parser/create-field [units])
+   (parser/create-field [(str (:low reference-range) "-" (:high reference-range))])
+   (parser/create-field [(case abnormal-flag :normal "N" :low "L" :high "H")])))
+
+(defn- orm-message
+  "ORM^O01: order placed. No EVN segment -- EVN is an ADT-specific
+  segment (HL7v2 convention), not part of the order-message family."
+  [reference-date utc-offset facility providers
+   {:keys [t active-mrn location attending concept]}]
+  (let [type+trigger (message-type-registry :order-placed)
+        ts (hl7-timestamp reference-date t utc-offset)
+        control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
+        facility-name (name (:id facility))
+        provider (provider-by-id providers attending)]
+    (parser/str-message
+     (parser/create-message
+      parser/DEFAULT-DELIMITERS
+      (msh-segment type+trigger control-id ts)
+      (pid-segment active-mrn)
+      (pv1-segment facility-name location nil provider)
+      (orc-segment control-id)
+      (obr-segment 1 concept)))))
+
+(defn- oru-message
+  "ORU^R01: result available -- OBR (order context) plus one OBX per
+  analyte, in the same order the profile's own :results carries them
+  (derived straight from the log, ehr-testing-sim.order-profiles'
+  sampling order -- no re-sorting here)."
+  [reference-date utc-offset facility providers
+   {:keys [t active-mrn location attending concept results]}]
+  (let [type+trigger (message-type-registry :result-available)
+        ts (hl7-timestamp reference-date t utc-offset)
+        control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
+        facility-name (name (:id facility))
+        provider (provider-by-id providers attending)
+        obx-segments (map-indexed (fn [i r] (obx-segment (inc i) r)) results)]
+    (parser/str-message
+     (apply parser/create-message
+      parser/DEFAULT-DELIMITERS
+      (msh-segment type+trigger control-id ts)
+      (pid-segment active-mrn)
+      (pv1-segment facility-name location nil provider)
+      (orc-segment control-id)
+      (obr-segment 1 concept)
+      obx-segments))))
+
 (defn event->messages
   "Renders one ground-truth event to a vector of 0+ ER7 message strings
   -- most types render exactly one message; M2b's genuinely two-
@@ -5860,6 +6282,8 @@ one.
     (not (message-type-registry event)) []
     (= :bed-swap event) [(bed-swap-message reference-date utc-offset facility providers ev)]
     (= :merge event) [(merge-message reference-date utc-offset facility providers ev)]
+    (= :order-placed event) [(orm-message reference-date utc-offset facility providers ev)]
+    (= :result-available event) [(oru-message reference-date utc-offset facility providers ev)]
     :else [(single-subject-message reference-date utc-offset facility providers ev)]))
 
 (def ^:private default-providers
@@ -5955,6 +6379,7 @@ one.
             [ehr-testing-sim.config :as config]
             [ehr-testing-sim.churn :as churn]
             [ehr-testing-sim.facility :as facility]
+            [ehr-testing-sim.order-profiles :as order-profiles]
             [malli.core :as m])
   (:import [java.util Random]))
 
@@ -6156,16 +6581,44 @@ one.
                             i))
                         ground-truth))))
 
+(def documented-step-rejection-reasons
+  "The closed enum every :step-rejected event's :reason must be drawn
+  from (ADR-0012's own invariant: 'every rejection's reason is from a
+  documented enum') -- check.clj's step-rejected-reason-is-documented
+  validates every log against exactly this set, so a new rejection path
+  earns an entry here in the same change (the co-landing convention,
+  extended to this event type)."
+  #{:illegal-cancel-admit
+    :illegal-cancel-transfer :illegal-cancel-transfer-bed-reoccupied
+    :illegal-cancel-discharge :illegal-cancel-discharge-bed-reoccupied
+    :illegal-bed-swap :illegal-merge})
+
 (defn- rejected-outcome
-  [reason patient-id extra]
-  {:events [] :advance 0 :rejected (merge {:reason reason :patient-id patient-id} extra)})
+  "ADR-0012 (M3): a decide-time rejection is no longer a silent no-op --
+  a :step-rejected ground-truth event now enters `:events` (folded via
+  `evolve`'s own identity method for this type, below, and logged like
+  any other event) alongside the pre-existing :rejected key callers
+  already read directly off decide's return value. `:participants`
+  names ONLY `patient-id`, the one attempting the step -- never a
+  possibly-nonexistent :with target named in `step` itself (that stays
+  in :attempted-step, plain data no invariant needs to resolve to a
+  real patient), so participant-ids-exist-in-run stays sound for every
+  rejection, including one that names a typo'd or never-admitted peer.
+  No RNG is drawn here: decide already drew everything it was going to
+  draw before discovering the rejection (determinism note, ADR-0012)."
+  [reason patient-id t step extra]
+  (let [event {:event :step-rejected :t t
+               :participants [{:patient-id patient-id :role :subject}]
+               :attempted-step step
+               :reason reason}]
+    {:events [event] :advance 0 :rejected (merge {:reason reason :patient-id patient-id} extra)}))
 
 (defmethod decide :cancel-admit
-  [_rng t world patient-id _step]
+  [_rng t world patient-id step]
   (let [ground-truth (:ground-truth world)
         idx (last-uncancelled-index ground-truth patient-id :admission :cancel-admit)]
     (if (nil? idx)
-      (rejected-outcome :illegal-cancel-admit patient-id nil)
+      (rejected-outcome :illegal-cancel-admit patient-id t step nil)
       (let [patient (get-in world [:patients patient-id])]
         {:events [{:event :cancel-admit :t t :active-mrn (:active-mrn patient)
                    :cancels-event-id idx
@@ -6201,7 +6654,7 @@ one.
   (nth candidates (.nextInt rng (count candidates))))
 
 (defmethod decide :bed-swap
-  [rng t world patient-id {:keys [with]}]
+  [rng t world patient-id {:keys [with] :as step}]
   (let [{:keys [patients]} world
         self (get patients patient-id)
         eligible (->> patients
@@ -6214,7 +6667,7 @@ one.
                   :else nil)
         peer (get patients peer-id)]
     (if (or (nil? peer-id) (nil? peer) (not= :admitted (:status peer)) (nil? (:location peer)))
-      (rejected-outcome :illegal-bed-swap patient-id {:with with})
+      (rejected-outcome :illegal-bed-swap patient-id t step {:with with})
       {:events [{:event :bed-swap :t t
                  :participants [{:patient-id patient-id :role :subject}
                                 {:patient-id peer-id :role :subject}]
@@ -6225,7 +6678,7 @@ one.
        :advance 0})))
 
 (defmethod decide :merge
-  [rng t world patient-id {:keys [with]}]
+  [rng t world patient-id {:keys [with] :as step}]
   (let [{:keys [patients ground-truth]} world
         survivor (get patients patient-id)
         ;; :new (never admitted -- no :admission event exists yet for
@@ -6249,7 +6702,7 @@ one.
                               ground-truth)]
     (if (or (nil? merged-id) (= patient-id merged-id) (nil? merged)
             (never-mergeable? merged) already-merged?)
-      (rejected-outcome :illegal-merge patient-id {:with with})
+      (rejected-outcome :illegal-merge patient-id t step {:with with})
       {:events [{:event :merge :t t
                  :participants [{:patient-id patient-id :role :survivor}
                                 {:patient-id merged-id :role :merged}]
@@ -6257,6 +6710,67 @@ one.
                  :merged-mrn (:active-mrn merged)
                  :merged-mrns (:mrns merged)}]
        :advance 0})))
+
+;; --- M3: order/result (auto-paired, docs/sim-theory.edn's order-profiles
+;; catalytic) ---------------------------------------------------------------
+
+(defmethod decide :order
+  [rng t world patient-id {:keys [profile]}]
+  (let [{:keys [patients ground-truth order-profiles]} world
+        patient (get patients patient-id)
+        prof (get order-profiles profile)
+        order-idx (count ground-truth)
+        order-event {:event :order-placed :t t :active-mrn (:active-mrn patient)
+                     :profile profile :concept (:concept prof)
+                     :location (:location patient) :attending (:attending patient)
+                     :participants [{:patient-id patient-id :role :subject}]}
+        ;; :turnaround-minutes is authored (in the profile) the same
+        ;; minutes-authored way :delay's IR is (docs/patient-state-
+        ;; model.md's durations rule); converted to seconds here, the
+        ;; same one place :delay's own decide method already converts.
+        turnaround-seconds (* 60 (rand-int-in rng (get-in prof [:turnaround-minutes :from])
+                                              (get-in prof [:turnaround-minutes :to])))
+        results (mapv (fn [analyte]
+                        (let [value (order-profiles/sample-analyte-value rng analyte)]
+                          {:concept (:concept analyte) :units (:units analyte) :value value
+                           :reference-range (:reference-range analyte)
+                           ;; Computed truth, not sampled (Task 4's mini-law):
+                           ;; the flag is DERIVED from value vs range, here
+                           ;; and nowhere else.
+                           :abnormal-flag (order-profiles/abnormal-flag value (:reference-range analyte))}))
+                      (:analytes prof))
+        result-t (+ t turnaround-seconds)
+        ;; :location/:attending are the patient's state AT ORDER TIME
+        ;; (decide has no access to a FUTURE fold -- ADR-0008 -- and the
+        ;; result event's own values were already fully computed atomically
+        ;; back here); PV1 context for both messages reflects where the
+        ;; specimen was ordered, the same convention real order/result
+        ;; pairs use when a patient's location changes between the two.
+        result-event {:event :result-available :t result-t :active-mrn (:active-mrn patient)
+                      :profile profile :order-event-id order-idx :concept (:concept prof)
+                      :location (:location patient) :attending (:attending patient)
+                      :results results
+                      :participants [{:patient-id patient-id :role :subject}]}]
+    ;; The result event is fully computed NOW (all its RNG draws happen
+    ;; in this one decide call, same "decided atomically" precedent
+    ;; transfer-in-error already sets) but is NEVER returned directly in
+    ;; :events -- a future-t event spliced into THIS call's :events
+    ;; would enter ground-truth at this call's OWN log position, ahead
+    ;; of other patients' events with SMALLER :t that get processed
+    ;; later in wall-loop order, breaking the log's global t-ordering
+    ;; (engine-test's own `(apply <= (map :t ground-truth))` sanity
+    ;; check, and the derivability law any emitter/consumer relies on).
+    ;; Instead it rides `:schedule-followup`: the run loop enqueues it
+    ;; as a genuine future queue entry, so it enters ground-truth at its
+    ;; own correct global [t seq-no] position, the same way every other
+    ;; scheduled event does.
+    {:events [order-event] :advance 0
+     :schedule-followup {:t result-t :patient-id patient-id
+                         :steps [{:type :result-followup :result-event result-event}]}}))
+
+(defmethod decide :result-followup
+  [_rng _t _world _patient-id {:keys [result-event]}]
+  {:events [result-event] :advance 0})
 
 (defmulti evolve
   "Folds one ground-truth event into ONE patient it names:
@@ -6312,6 +6826,25 @@ one.
       :survivor (-> patient (update :mrns into merged-mrns) (assoc :active-mrn surviving-mrn))
       :merged (assoc patient :status :merged))))
 
+;; --- ADR-0012: :step-rejected -- truth about the run, never a state
+;; transition (the attempted step never actually happened) --------------
+
+(defmethod evolve :step-rejected
+  [patient _event]
+  patient)
+
+;; --- M3: order/result -- neither changes any PatientState field today
+;; (docs/patient-state-model.md's accumulator has no order/result-history
+;; field; the log itself is the history, queried directly, ADR-0008) ------
+
+(defmethod evolve :order-placed
+  [patient _event]
+  patient)
+
+(defmethod evolve :result-available
+  [patient _event]
+  patient)
+
 (defn replay
   "Replays `ground-truth` through `evolve`, returning a parallel seq of
   {:event :patient-id :before :after :world-before :world-after} --
@@ -6365,34 +6898,81 @@ one.
       (and (some? occupant) (not= occupant patient-id)))))
 
 (defmethod decide :cancel-transfer
-  [_rng t world patient-id _step]
+  [_rng t world patient-id step]
   (let [ground-truth (:ground-truth world)
         idx (last-uncancelled-index ground-truth patient-id :transfer :cancel-transfer)]
     (if (nil? idx)
-      (rejected-outcome :illegal-cancel-transfer patient-id nil)
+      (rejected-outcome :illegal-cancel-transfer patient-id t step nil)
       (let [patient (get-in world [:patients patient-id])
             {:keys [home-ward location]} (:before (nth (replay ground-truth) idx))]
         (if (bed-reoccupied-by-someone-else? world patient-id location)
-          (rejected-outcome :illegal-cancel-transfer-bed-reoccupied patient-id {:location location})
+          (rejected-outcome :illegal-cancel-transfer-bed-reoccupied patient-id t step {:location location})
           {:events [{:event :cancel-transfer :t t :active-mrn (:active-mrn patient)
                      :cancels-event-id idx :home-ward home-ward :location location
                      :participants [{:patient-id patient-id :role :subject}]}]
            :advance 0})))))
 
 (defmethod decide :cancel-discharge
-  [_rng t world patient-id _step]
+  [_rng t world patient-id step]
   (let [ground-truth (:ground-truth world)
         idx (last-uncancelled-index ground-truth patient-id :discharge :cancel-discharge)]
     (if (nil? idx)
-      (rejected-outcome :illegal-cancel-discharge patient-id nil)
+      (rejected-outcome :illegal-cancel-discharge patient-id t step nil)
       (let [patient (get-in world [:patients patient-id])
             {:keys [home-ward location attending]} (:before (nth (replay ground-truth) idx))]
         (if (bed-reoccupied-by-someone-else? world patient-id location)
-          (rejected-outcome :illegal-cancel-discharge-bed-reoccupied patient-id {:location location})
+          (rejected-outcome :illegal-cancel-discharge-bed-reoccupied patient-id t step {:location location})
           {:events [{:event :cancel-discharge :t t :active-mrn (:active-mrn patient)
                      :cancels-event-id idx :home-ward home-ward :location location :attending attending
                      :participants [{:patient-id patient-id :role :subject}]}]
            :advance 0})))))
+
+;; --- M3-adjacent: per-patient pathway assignment (roadmap.md's M3 entry,
+;; SimHospital's percentage_of_patients analogue -- the distribution layer
+;; M5's CompileTrajectory will also need, one pathway per patient) --------
+
+(defn- weighted-pick
+  "Which pool member `draw` (a uniform double in [0,1), already
+  consumed by the caller) falls into, among `pool` ({:pathway :weight}
+  maps) -- cumulative-weight bucketing, falling through to the last
+  member on any floating-point-boundary edge case rather than nil."
+  [pool draw]
+  (let [total (reduce + (map :weight pool))
+        target (* draw total)]
+    (loop [members pool acc 0.0]
+      (let [m (first members)
+            more (rest members)
+            acc' (+ acc (double (:weight m)))]
+        (if (or (empty? more) (< target acc'))
+          (:pathway m)
+          (recur more acc'))))))
+
+(defn assign-pathway
+  "Resolves the pathway `pathways-config` (ehr-testing-sim.pathway/
+  PathwaysConfig) assigns to patient ordinal `i` (0-indexed arrival
+  order): an explicit {:patient-ordinal i :pathway ...} entry when one
+  names this ordinal, otherwise a weighted pick among the config's
+  {:pathway :weight} pool entries. Today's single-:pathway `run` config
+  is this function's degenerate case, expressed as a one-entry weighted
+  pool with :weight 1 -- see `run`'s own docstring for why that case is
+  NOT wired to skip the draw below (it would perturb the very law this
+  paragraph states next).
+
+  ALWAYS consumes exactly one `.nextDouble` from `rng`, whether the
+  outcome is the explicit override or the weighted pick -- fixed RNG
+  consumption per patient, ADR-0009's own rejected-alternative reasoning
+  extended here: making draw count depend on whether THIS patient
+  happens to have an explicit override would mean adding one scripted
+  override for patient N shifts every OTHER patient's downstream draws,
+  the exact surprising coupling ADR-0009 already rejected for bed
+  choice (there: 'consumption changed once, for a documented reason' is
+  the accepted property; making it depend on candidate count is not)."
+  [^Random rng pathways-config i]
+  (let [draw (.nextDouble rng)
+        explicit (first (filter #(= i (:patient-ordinal %)) pathways-config))]
+    (if explicit
+      (:pathway explicit)
+      (weighted-pick (filterv :weight pathways-config) draw))))
 
 (defn- pop-min
   "Removes and returns the earliest queue entry. Queue is a sorted-map
@@ -6407,6 +6987,20 @@ one.
     :seed             long (required)
     :patients         number of patients (default 1)
     :pathway          a pathway IR map (default pathway/sample-admission-discharge)
+    :pathways         M3-adjacent: ehr-testing-sim.pathway/PathwaysConfig
+                      -- a vector of weighted-pool ({:pathway :weight})
+                      and/or explicit ({:patient-ordinal :pathway})
+                      entries, `assign-pathway`'s own input. When
+                      present, EVERY patient's pathway comes from this
+                      (not :pathway, which is then ignored) and consumes
+                      one additional RNG draw per patient (fixed
+                      consumption, see `assign-pathway`'s docstring).
+                      ABSENT ENTIRELY (not merely nil) -- the default --
+                      means every patient gets the plain :pathway
+                      config, exactly as before this option existed: no
+                      new draw, byte-identical output, the reason the
+                      pinned fixture (no :pathways key) survives this
+                      milestone untouched.
     :arrival-gap      max MINUTES between successive patient arrivals
                       (default 60; actual gaps sampled from the seeded
                       RNG). Stays minutes, converted to seconds at the
@@ -6430,6 +7024,9 @@ one.
     :facility         facility config (default config/default-facility)
     :providers        provider templates (default config/default-provider-templates;
                        NPIs are generated from THIS run's seed -- ADR-0007)
+    :order-profiles   M3: ehr-testing-sim.order-profiles/OrderProfiles map
+                      (default order-profiles/default-profiles) -- :order
+                      steps look up their :profile key here.
     :churn-profile    ehr-testing-sim.churn/ChurnProfile map (default nil
                        -- churn OFF). M2b: when present, InjectChurn runs
                        ONCE PER PATIENT (in arrival-ordinal order, a fixed
@@ -6461,14 +7058,16 @@ one.
   rather than assumed; the engine computes it as a byproduct of the
   loop below because decide needs live world state to make its next
   decision, not because it's a second source of truth."
-  [{:keys [seed patients pathway arrival-gap warm-up-seconds facility providers churn-profile]
+  [{:keys [seed patients pathway pathways arrival-gap warm-up-seconds facility providers churn-profile order-profiles]
     :or {patients 1
          pathway pathway/sample-admission-discharge
          arrival-gap 60
          warm-up-seconds 0
          facility config/default-facility
-         providers config/default-provider-templates}}]
-  {:pre [(some? seed) (pathway/valid? pathway)]}
+         providers config/default-provider-templates
+         order-profiles order-profiles/default-profiles}}]
+  {:pre [(some? seed) (pathway/valid? pathway)
+         (or (nil? pathways) (pathway/valid-pathways-config? pathways))]}
   (let [rng (Random. ^long seed)
         ;; Provider NPIs are generated from this run's seed (ADR-0007),
         ;; drawn once up front -- before arrival staggering -- so
@@ -6483,12 +7082,18 @@ one.
                                                   #(* 60 (rand-int-in rng 0 arrival-gap)))))
         mrn-for (fn [i] (format "MRN%06d" (inc i)))
         pid-for (fn [i] (patient-id-for seed i))
+        ;; M3-adjacent: :pathways ABSENT entirely -- the pinned-fixture
+        ;; path -- means every patient gets the same plain :pathway, no
+        ;; assign-pathway call, no new draw (see `run`'s docstring).
+        pathway-for (if pathways
+                      (fn [i] (assign-pathway rng pathways i))
+                      (fn [_i] pathway))
         ;; InjectChurn (M2b): ONLY when :churn-profile is actually
         ;; present does this stage run at all -- absent, `steps-for` is
         ;; a no-op and consumes no RNG (see the docstring's fixture note).
         steps-for (if churn-profile
-                    (fn [_i] (:steps (churn/inject pathway churn-profile rng)))
-                    (fn [_i] (:steps pathway)))
+                    (fn [i] (:steps (churn/inject (pathway-for i) churn-profile rng)))
+                    (fn [i] (:steps (pathway-for i))))
         init-queue (into (sorted-map)
                          (map-indexed
                           (fn [i arrival-t]
@@ -6499,6 +7104,7 @@ one.
                                     arrivals)
                     :facility facility
                     :providers materialized-providers
+                    :order-profiles order-profiles
                     ;; Task 1 (M2b): cancel-family/transfer-in-error decide
                     ;; methods query the log directly for the event they
                     ;; reinstate from (docs/patient-state-model.md's
@@ -6536,7 +7142,7 @@ one.
             ;; no-events-after-merged-terminal, not just a check.clj
             ;; invariant asserted after the fact.
             (recur queue' seq-no world ground-truth state-history)
-            (let [{:keys [events advance exhausted]} (decide rng t world patient-id step)]
+            (let [{:keys [events advance exhausted schedule-followup]} (decide rng t world patient-id step)]
               ;; A :rejected decide outcome (an illegal cancel/bed-swap/
               ;; merge -- Task 1's validity-table enforcement) is NOT a
               ;; run-halting condition, unlike :exhausted: it means THIS
@@ -6567,11 +7173,24 @@ one.
                                                       (update sh2 patient-id (fnil conj [])
                                                               (get-in world' [:patients patient-id])))
                                                     sh (:participants ev)))
-                                          state-history events)]
+                                          state-history events)
+                  ;; M3: :order's decide may ask for a follow-up queue
+                  ;; entry (the auto-paired :result -- see engine's :order
+                  ;; docstring for why it rides the REAL queue instead of
+                  ;; being spliced into :events directly). Scheduled at
+                  ;; its own [t seq-no], same as any other event -- this
+                  ;; is what keeps ground-truth in true global time order
+                  ;; even though the result's CONTENT was fully decided
+                  ;; back when the order was placed.
+                  [queue'' seq-no'] (if schedule-followup
+                                      [(assoc queue' [(:t schedule-followup) seq-no]
+                                             (select-keys schedule-followup [:patient-id :steps]))
+                                       (inc seq-no)]
+                                      [queue' seq-no])]
               (if (seq remaining)
-                (recur (assoc queue' [(+ t advance) seq-no] {:patient-id patient-id :steps (vec remaining)})
-                       (inc seq-no) world'' ground-truth' state-history')
-                (recur queue' seq-no world'' ground-truth' state-history')))))))))))
+                (recur (assoc queue'' [(+ t advance) seq-no'] {:patient-id patient-id :steps (vec remaining)})
+                       (inc seq-no') world'' ground-truth' state-history')
+                (recur queue'' seq-no' world'' ground-truth' state-history')))))))))))
 
 ========== END FILE ==========
 
@@ -6749,8 +7368,19 @@ one.
 
 (def MirroredManifest
   "Structural mirror of tools' ManifestV1_1 (verified against its
-  source 2026-07-26; re-verify on tools schema changes)."
+  source 2026-07-26; re-verify on tools schema changes).
+
+  LESSON (M3 Task 0): this mirror once omitted :schema-version entirely
+  -- both here and in `build` -- and its own tripwire test
+  (manifest-test) stayed green throughout, because a mirror validates
+  its OWN output against its OWN copy of the schema; it agreed with
+  itself perfectly while both disagreed with the authoritative source.
+  A mirror cannot catch itself agreeing with its own mistake. That is
+  exactly why the BINDING contract test lives host-side, in tools'
+  test-integration tree (sim-manifest-contract-test), where the real
+  ManifestV1_1 is on the classpath to validate against -- not here."
   [:map
+   [:schema-version [:= "1.1"]]
    [:stage :keyword]
    [:generator [:map
                 [:name :string]
@@ -6782,7 +7412,8 @@ one.
   acceptable pre-release, but the fields are mandatory so nothing
   downstream learns to tolerate their absence)."
   [{:keys [seed engine-params config invocation version sha256]}]
-  {:stage :simulated
+  {:schema-version "1.1"
+   :stage :simulated
    :generator {:name "ehr-testing-sim"
                :version (or version "0.0.0-SNAPSHOT")
                :sha256 (or sha256 (apply str (repeat 64 "0")))}
@@ -6794,6 +7425,123 @@ one.
    :environment (environment)})
 
 (defn valid? [manifest] (m/validate MirroredManifest manifest))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/order_profiles.clj ==========
+(ns ehr-testing-sim.order-profiles
+  "The order-profiles catalytic (docs/sim-theory.edn's `:execute` stage,
+  target 3 -- hashed repo-authored config, docs/sim-theory.md's
+  Catalytic resolution table): a small, hand-curated starter set of lab
+  order/result profiles (`resources/order-profiles.edn`) -- CBC and BMP
+  panels, real LOINC codes verified against loinc.org
+  (notes/facts-register.md F7), US conventional units, typical adult
+  reference ranges, and a per-analyte value distribution.
+
+  Concepts ride as {:system :loinc :code :display} triplets, the same
+  coded-triplet shape ehr-testing-sim.pathway/Concept already
+  establishes (ADR-0002's code-provenance law) -- no CPT anywhere
+  (docs/third-party-sources.md's standing constraint).
+
+  Value sampling law: `sample-analyte-value` draws a 3-way categorical
+  choice (normal / abnormal-low / abnormal-high, an analyte's own
+  :weights) then a uniform value within whichever range was chosen,
+  rounded to that analyte's own reporting :precision. `abnormal-flag` is
+  a SEPARATE, pure function of value vs reference-range -- the flag is
+  computed truth, never sampled independently (Milestone M3 Task 4's
+  own mini-law; this namespace is where that law's mechanism lives, the
+  order/result step types (engine.clj) just call it)."
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [ehr-testing-sim.pathway :as pathway]
+            [malli.core :as m])
+  (:import [java.util Random]))
+
+(def Range
+  [:map [:low number?] [:high number?]])
+
+(def Weights
+  [:map [:normal :double] [:low :double] [:high :double]])
+
+(def AnalyteDistribution
+  [:map
+   [:weights Weights]
+   [:abnormal-low-range Range]
+   [:abnormal-high-range Range]])
+
+(def Analyte
+  [:map
+   [:concept pathway/Concept]
+   [:units :string]
+   [:precision :int]
+   [:reference-range Range]
+   [:distribution AnalyteDistribution]])
+
+(def Turnaround
+  "Authored in MINUTES (docs/patient-state-model.md's durations rule) --
+  the engine converts to seconds at decide-time, same treatment
+  :delay's IR already gets."
+  [:map [:from :int] [:to :int]])
+
+(def OrderProfile
+  [:map
+   [:concept pathway/Concept]
+   [:turnaround-minutes Turnaround]
+   [:analytes [:vector Analyte]]])
+
+(def OrderProfiles
+  [:map-of :keyword OrderProfile])
+
+(defn valid-profiles? [profiles] (m/validate OrderProfiles profiles))
+
+(defn explain-profiles [profiles] (m/explain OrderProfiles profiles))
+
+(def default-profiles
+  "Loaded once at namespace load: resources/order-profiles.edn, this
+  repo's own hashed-config catalytic content (target 3 -- committed,
+  repo-authored, not fetched or generated)."
+  (edn/read-string (slurp (io/resource "order-profiles.edn"))))
+
+(defn- round-to
+  [^double v ^long precision]
+  (let [scale (Math/pow 10 precision)]
+    (/ (Math/round (* v scale)) scale)))
+
+(defn- uniform-in
+  [^Random rng lo hi]
+  (+ lo (* (.nextDouble rng) (- hi lo))))
+
+(defn sample-analyte-value
+  "Samples one value for `analyte` from `rng`: a categorical draw among
+  :normal/:low/:high (the analyte's own :weights, which sum to 1.0),
+  then a uniform value within whichever range was chosen (the
+  reference-range for :normal, the distribution's own abnormal-*-range
+  otherwise), rounded to the analyte's own :precision. Consumes exactly
+  two draws from `rng` (one categorical, one uniform) regardless of
+  which branch is taken -- fixed consumption, the same law
+  ehr-testing-sim.engine/assign-pathway and ehr-testing-sim.churn
+  already establish for this project's other categorical/probabilistic
+  choices."
+  [^Random rng {:keys [reference-range distribution precision]}]
+  (let [{:keys [weights abnormal-low-range abnormal-high-range]} distribution
+        {:keys [normal low]} weights
+        category-draw (.nextDouble rng)
+        [lo hi] (cond
+                  (< category-draw normal) [(:low reference-range) (:high reference-range)]
+                  (< category-draw (+ normal low)) [(:low abnormal-low-range) (:high abnormal-low-range)]
+                  :else [(:low abnormal-high-range) (:high abnormal-high-range)])]
+    (round-to (uniform-in rng lo hi) precision)))
+
+(defn abnormal-flag
+  "The computed-truth mini-law (Milestone M3 Task 4): a value's
+  abnormal flag is DERIVED from comparing it against `reference-range`,
+  never sampled independently. :normal when within [low, high]
+  inclusive, :low when below, :high when above."
+  [value {:keys [low high]}]
+  (cond
+    (< value low) :low
+    (> value high) :high
+    :else :normal))
 
 ========== END FILE ==========
 
@@ -6883,7 +7631,18 @@ one.
    ;; target dynamically" shape the bed-ready transfer already uses, so
    ;; InjectChurn (M2b) can insert these without knowing patient-ids.
    [:bed-swap [:map [:type [:= :bed-swap]] [:with {:optional true} :string]]]
-   [:merge [:map [:type [:= :merge]] [:with {:optional true} :string]]]])
+   [:merge [:map [:type [:= :merge]] [:with {:optional true} :string]]]
+   ;; M3: order-profiles catalytic (docs/sim-theory.edn, docs/operational-
+   ;; models.md). :profile keys into ehr-testing-sim.order-profiles'
+   ;; catalog (world's :order-profiles, default order-profiles/default-
+   ;; profiles). NO authorable :result step -- the engine auto-pairs a
+   ;; result-available event after a profile-sampled turnaround
+   ;; (engine.clj's own :order decide method), the choice this
+   ;; milestone documents there: it keeps authored pathways ergonomic
+   ;; (just write the order; the result follows automatically) and
+   ;; avoids inventing an :order-ref authoring burden a hand-authored
+   ;; :result step would need.
+   [:order [:map [:type [:= :order]] [:profile :keyword]]]])
 
 (def Pathway
   [:map
@@ -6893,6 +7652,29 @@ one.
 (defn valid? [pathway] (m/validate Pathway pathway))
 
 (defn explain [pathway] (m/explain Pathway pathway))
+
+;; --- M3-adjacent: per-patient pathway assignment (roadmap.md's M3 entry,
+;; SimHospital's percentage_of_patients analogue) -------------------------
+
+(def PathwayAssignment
+  "One entry in a :pathways run-config vector -- EITHER a weighted-pool
+  member ({:pathway :weight}, a sampled mixture across the patient
+  population) OR an explicit per-patient override ({:patient-ordinal
+  :pathway}, a scripted assignment for a specific arrival), never both
+  at once. `ehr-testing-sim.engine/run`'s degenerate case -- today's
+  single :pathway config -- is a :pathways vector of exactly one
+  weighted entry with :weight 1, unchanged behavior for every other
+  entry shape."
+  [:or
+   [:map {:closed true} [:pathway Pathway] [:weight [:or :int :double]]]
+   [:map {:closed true} [:patient-ordinal :int] [:pathway Pathway]]])
+
+(def PathwaysConfig
+  [:vector PathwayAssignment])
+
+(defn valid-pathways-config? [config] (m/validate PathwaysConfig config))
+
+(defn explain-pathways-config [config] (m/explain PathwaysConfig config))
 
 (def sample-admission-discharge
   "The walking-skeleton pathway: admit, dwell, discharge. Mirrors
@@ -7062,6 +7844,7 @@ one.
             [ehr-testing-sim.check :as check]
             [ehr-testing-sim.config :as config]
             [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.order-profiles :as order-profiles]
             [ehr-testing-sim.result :as result]))
 
 (def test-facility
@@ -7270,6 +8053,87 @@ one.
                   {:event :discharge :t 20 :participants (subject "P2")})]
     (is (seq (check/no-events-after-merged-terminal log)))))
 
+;; --- ADR-0012: :step-rejected -------------------------------------------
+
+(deftest step-rejected-reason-is-documented-detects-an-undocumented-reason
+  (let [log [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+             {:event :step-rejected :t 10 :participants (subject "P1")
+              :attempted-step {:type :cancel-admit} :reason :not-a-real-reason}]]
+    (is (seq (check/step-rejected-reason-is-documented log)))))
+
+(deftest step-rejected-reason-is-documented-holds-for-every-real-reason
+  (is (empty? (check/step-rejected-reason-is-documented
+               (for [reason engine/documented-step-rejection-reasons]
+                 {:event :step-rejected :t 10 :participants (subject "P1")
+                  :attempted-step {:type :cancel-admit} :reason reason})))))
+
+;; --- M3: order/result -----------------------------------------------------
+
+(def ^:private cbc-profile (:cbc order-profiles/default-profiles))
+
+(defn- legit-order-result-log
+  []
+  [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+    :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}
+   {:event :order-placed :t 10 :profile :cbc :concept (:concept cbc-profile) :participants (subject "P1")}
+   {:event :result-available :t 100 :profile :cbc :order-event-id 1 :concept (:concept cbc-profile)
+    :participants (subject "P1")
+    :results (mapv (fn [a] {:concept (:concept a) :units (:units a) :value (:low (:reference-range a))
+                            :reference-range (:reference-range a) :abnormal-flag :normal})
+                    (:analytes cbc-profile))}])
+
+(deftest order-only-when-admitted-holds-for-legit-log
+  (is (empty? (check/order-only-when-admitted (legit-order-result-log)))))
+
+(deftest order-only-when-admitted-detects-order-before-admission
+  (let [log [{:event :order-placed :t 0 :profile :cbc :concept (:concept cbc-profile) :participants (subject "P1")}]]
+    (is (seq (check/order-only-when-admitted log)))))
+
+(deftest order-only-when-admitted-allows-a-result-arriving-after-discharge
+  (testing "async turnaround: a result legitimately arrives after
+            discharge (pending labs at discharge is real clinical
+            traffic) -- NOT a violation"
+    (let [log (conj (legit-order-result-log)
+                    {:event :discharge :t 200 :participants (subject "P1")}
+                    {:event :result-available :t 300 :profile :cbc :order-event-id 1
+                     :concept (:concept cbc-profile) :participants (subject "P1")
+                     :results []})]
+      (is (empty? (check/order-only-when-admitted log))))))
+
+(deftest result-references-existing-order-and-follows-it-in-time-holds-for-legit-log
+  (is (empty? (check/result-references-existing-order-and-follows-it-in-time (legit-order-result-log)))))
+
+(deftest result-references-existing-order-and-follows-it-in-time-detects-phantom-order
+  (let [log [{:event :result-available :t 10 :profile :cbc :order-event-id 5
+              :concept (:concept cbc-profile) :participants (subject "P1") :results []}]]
+    (is (seq (check/result-references-existing-order-and-follows-it-in-time log)))))
+
+(deftest result-references-existing-order-and-follows-it-in-time-detects-time-travel
+  (let [log (update (legit-order-result-log) 2 assoc :t 5)] ;; before its own order's t=10
+    (is (seq (check/result-references-existing-order-and-follows-it-in-time log)))))
+
+(deftest result-analytes-match-order-profile-holds-for-legit-log
+  (is (empty? (check/result-analytes-match-order-profile (legit-order-result-log) order-profiles/default-profiles))))
+
+(deftest result-analytes-match-order-profile-detects-a-missing-analyte
+  (let [log (update-in (legit-order-result-log) [2 :results] #(vec (rest %)))]
+    (is (seq (check/result-analytes-match-order-profile log order-profiles/default-profiles)))))
+
+(deftest abnormal-flags-consistent-with-value-vs-range-holds-for-legit-log
+  (is (empty? (check/abnormal-flags-consistent-with-value-vs-range (legit-order-result-log)))))
+
+(deftest abnormal-flags-consistent-with-value-vs-range-detects-a-lying-flag
+  (let [log (update-in (legit-order-result-log) [2 :results 0] assoc :abnormal-flag :high)]
+    (is (seq (check/abnormal-flags-consistent-with-value-vs-range log)))))
+
+(deftest engine-run-with-order-profiles-satisfies-check-all
+  (let [pathway {:name "cbc" :steps [{:type :admission :location "Renal"}
+                                     {:type :order :profile :cbc}
+                                     {:type :discharge}]}
+        {:keys [ground-truth]} (engine/run {:seed 3 :patients 4 :pathways [{:pathway pathway :weight 1}]})]
+    (is (result/ok? (check/check-all ground-truth)))))
+
 ;; --- check-all: facility-aware, backward-compatible arity ---------------
 
 (deftest check-all-defaults-facility-when-omitted
@@ -7294,21 +8158,36 @@ one.
   exercising the compound cases the catalog names --
   docs/clinical-realities.md's newborn-merge entry (merge-while-
   boarding), transfer-in-error then cancel-then-retransfer, and a
-  bed-swap between a licensed and a surge occupant. Each scenario
-  asserts the EXACT ground-truth event sequence AND the exact rendered
-  HL7v2 message sequence, not just that some invariant holds -- these
-  are regression fixtures, driving decide/evolve directly (the same
-  scripted-two-patient pattern ehr-testing-sim.engine-test's
-  bed-ready-transfer-scripted-two-patients already established, since
-  ehr-testing-sim.engine/run has no per-patient pathway mechanism for
-  authoring a SPECIFIC two-patient interaction -- decide/evolve driven
-  by hand IS the authored pathway here)."
+  bed-swap between a licensed and a surge occupant.
+
+  M3-adjacent (roadmap.md's per-patient pathway assignment): migrated to
+  run end-to-end through `ehr-testing-sim.engine/run`'s :pathways option
+  -- each scenario is now an explicit {:patient-ordinal :pathway}
+  assignment per participant, exercising the REAL event loop (arrivals,
+  the work queue, decide/evolve folding) rather than hand-driving
+  decide/evolve one call at a time. `:with` fields that name a specific
+  peer patient-id are computed via `engine/patient-id-for` -- a PURE
+  function of this run's own seed and arrival ordinal (ADR-0010), so a
+  scripted scenario can name 'the 3rd patient' without engine/run having
+  run yet. `:arrival-gap 0` makes every patient arrive at t=0; the queue's
+  own seq-no tiebreak (assigned in arrival-ordinal order, then
+  monotonically for every re-queued step) is what still guarantees each
+  scenario's prerequisite admissions are fully processed before any
+  patient's SECOND step fires -- every prerequisite patient's pathway
+  here is exactly one step (:admission) long, so its only queue entry is
+  its ORIGINAL arrival (seq < patient count); any patient's second step
+  is re-queued with a freshly assigned seq (>= patient count, monotonic)
+  by construction, so it can never be processed before any first-round
+  arrival. See ehr-testing-sim.engine-test's own
+  bed-ready-transfer-scripted-two-patients for the ONE test this session
+  deliberately keeps as a direct decide/evolve-driven API-level
+  regression, per the roadmap's own migration note -- not everything
+  needs to move to engine/run, just this scripted fleet."
   (:require [clojure.test :refer [deftest is testing]]
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.emit-hl7 :as emit-hl7]
             [com.nervestaple.hl7-parser.parser :as parser]
-            [com.nervestaple.hl7-parser.message :as message])
-  (:import [java.util Random]))
+            [com.nervestaple.hl7-parser.message :as message]))
 
 (def ^:private ref-date "2024-01-01")
 (def ^:private utc-offset "+00:00")
@@ -7323,32 +8202,9 @@ one.
            {:id :renal :name "Renal" :beds 1 :surge-slots 1
             :surge-format "%s-H%02d" :class :inpatient}]})
 
-(def ^:private providers
-  [{:id "1234567893" :name {:family "Chen" :given "A"} :role :attending
+(def ^:private provider-templates
+  [{:name {:family "Chen" :given "A"} :role :attending
     :specialty "Nephrology" :wards [:renal :ed]}])
-
-(defn- world-of
-  [patients]
-  {:patients patients :facility one-bed-one-surge-facility :providers providers :ground-truth []})
-
-(defn- fold-events
-  [world events]
-  (-> (reduce (fn [w ev]
-                (reduce (fn [w2 {:keys [patient-id]}]
-                          (update-in w2 [:patients patient-id] engine/evolve ev))
-                        w (:participants ev)))
-              world events)
-      (update :ground-truth into events)))
-
-(defn- step!
-  "Decides+folds `step` for `patient-id` at `t`, asserting it neither
-  exhausted nor rejected (a scripted scenario's own steps are all meant
-  to be legal) -- returns the updated world."
-  [world t patient-id step]
-  (let [{:keys [events exhausted rejected] :as outcome} (engine/decide (Random. 1) t world patient-id step)]
-    (assert (nil? exhausted) (str "unexpected exhaustion: " exhausted))
-    (assert (nil? rejected) (str "unexpected rejection: " rejected))
-    (fold-events world events)))
 
 (defn- triggers
   "The ordered A-trigger sequence a ground-truth log renders to, for
@@ -7356,6 +8212,21 @@ one.
   [ground-truth facility providers]
   (mapv #(second (re-find #"\^(A\d+)" %))
         (emit-hl7/emit ground-truth ref-date utc-offset facility providers)))
+
+(defn- run-scenario
+  "Runs `pathways-by-ordinal` (a seq of pathway IR maps, one per patient
+  in arrival order) end-to-end through engine/run, with churn OFF (these
+  scenarios author their own churn steps directly in the IR -- no
+  InjectChurn needed) and arrivals collapsed to t=0 (see namespace
+  docstring)."
+  [seed pathways-by-ordinal]
+  (engine/run {:seed seed
+               :patients (count pathways-by-ordinal)
+               :arrival-gap 0
+               :facility one-bed-one-surge-facility
+               :providers provider-templates
+               :pathways (vec (map-indexed (fn [i p] {:patient-ordinal i :pathway p})
+                                            pathways-by-ordinal))}))
 
 ;; --- Scenario 1: merge-while-boarding --------------------------------------
 ;; docs/clinical-realities.md's newborn Babyboy/Babygirl entry: "a natural
@@ -7369,31 +8240,31 @@ one.
   ;; NOT boarding), and P3 -- with both Renal rungs now exhausted -- boards
   ;; in ED surge (rung 4: home-ward Renal, physically ED). P3 is then
   ;; merged into P1 while still boarding.
-  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
-                          "P2" (engine/initial-patient "P2" "MRN000002")
-                          "P3" (engine/initial-patient "P3" "MRN000003")})
-        world1 (-> world0
-                  (step! 0 "P1" {:type :admission :location "Renal"})   ;; licensed
-                  (step! 5 "P2" {:type :admission :location "Renal"})  ;; surge
-                  (step! 6 "P3" {:type :admission :location "Renal"})) ;; boards (ED)
-        p3-before-merge (get-in world1 [:patients "P3"])
-        _ (testing "sanity: P3 is genuinely boarding at this point"
-            (is (= "Renal" (:home-ward p3-before-merge)))
-            (is (= "ED" (get-in p3-before-merge [:location :ward]))))
-        world2 (step! world1 10 "P1" {:type :merge :with "P3"})
-        survivor (get-in world2 [:patients "P1"])
-        merged (get-in world2 [:patients "P3"])]
+  (let [seed 100
+        p3-id (engine/patient-id-for seed 2)
+        {:keys [ground-truth]} (run-scenario
+                                 seed
+                                 [{:name "p1" :steps [{:type :admission :location "Renal"}
+                                                       {:type :merge :with p3-id}]}
+                                  {:name "p2" :steps [{:type :admission :location "Renal"}]}
+                                  {:name "p3" :steps [{:type :admission :location "Renal"}]}])
+        p3-before-merge (first (filter #(and (= :admission (:event %))
+                                              (= p3-id (:patient-id (first (:participants %)))))
+                                        ground-truth))
+        survivor (last (filter #(and (= :merge (:event %))) ground-truth))]
+    (testing "sanity: P3 is genuinely boarding at this point"
+      (is (= "Renal" (get-in p3-before-merge [:home-ward])))
+      (is (= "ED" (get-in p3-before-merge [:location :ward]))))
     (testing "exact ground-truth event sequence"
-      (is (= [:admission :admission :admission :merge] (mapv :event (:ground-truth world2)))))
-    (testing "the merged patient was boarding at the moment of merge, and stays merged, not reverted to any prior status"
-      (is (= :merged (:status merged)))
-      (is (= #{"MRN000001" "MRN000003"} (:mrns survivor)))
-      (is (= "MRN000001" (:active-mrn survivor))))
+      (is (= [:admission :admission :admission :merge] (mapv :event ground-truth))))
+    (testing "the merge names P3 as :merged, P1 as :survivor"
+      (is (= #{[:survivor (engine/patient-id-for seed 0)] [:merged p3-id]}
+             (set (map (juxt :role :patient-id) (:participants survivor))))))
     (testing "exact rendered message sequence: A01 A01 A01 A40"
       (is (= ["A01" "A01" "A01" "A40"]
-             (triggers (:ground-truth world2) one-bed-one-surge-facility providers))))
+             (triggers ground-truth one-bed-one-surge-facility provider-templates))))
     (testing "the A40 carries PID=survivor, MRG=merged's prior mrn"
-      (let [a40 (last (emit-hl7/emit (:ground-truth world2) ref-date utc-offset one-bed-one-surge-facility providers))
+      (let [a40 (last (emit-hl7/emit ground-truth ref-date utc-offset one-bed-one-surge-facility provider-templates))
             parsed (parser/parse a40)]
         (is (= "MRN000001" (message/get-field-first-value parsed "PID" 3)))
         (is (= "MRN000003" (message/get-field-first-value parsed "MRG" 1)))))))
@@ -7401,53 +8272,49 @@ one.
 ;; --- Scenario 2: transfer-in-error, then cancel-then-retransfer -----------
 
 (deftest transfer-in-error-then-cancel-then-retransfer
-  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
-        world1 (step! world0 0 "P1" {:type :admission :location "Renal"})
-        ;; transfer-in-error: an erroneous transfer to ED, corrected atomically
-        world2 (step! world1 10 "P1" {:type :transfer-in-error :location "ED"})
-        after-error (get-in world2 [:patients "P1"])
-        ;; a genuine, INTENDED transfer to ED follows -- the "retransfer"
-        world3 (step! world2 20 "P1" {:type :transfer :location "ED"})
-        after-retransfer (get-in world3 [:patients "P1"])]
-    (testing "the in-error correction left the patient exactly where they started"
-      (is (= "Renal" (:home-ward after-error)))
-      (is (= "Renal" (get-in after-error [:location :ward]))))
-    (testing "the retransfer that follows is a REAL, uncorrected move"
-      (is (= "ED" (get-in after-retransfer [:location :ward]))))
+  (let [seed 100
+        {:keys [ground-truth]} (run-scenario
+                                 seed
+                                 [{:name "p1" :steps [{:type :admission :location "Renal"}
+                                                       ;; transfer-in-error: an erroneous
+                                                       ;; transfer to ED, corrected atomically
+                                                       {:type :transfer-in-error :location "ED"}
+                                                       ;; a genuine, INTENDED transfer to ED
+                                                       ;; follows -- the "retransfer"
+                                                       {:type :transfer :location "ED"}]}])]
     (testing "exact ground-truth event sequence: admission, transfer(err), cancel-transfer(err), transfer(real)"
-      (is (= [:admission :transfer :cancel-transfer :transfer] (mapv :event (:ground-truth world3))))
-      (is (= [nil true nil] (mapv :in-error (rest (:ground-truth world3))))))
+      (is (= [:admission :transfer :cancel-transfer :transfer] (mapv :event ground-truth)))
+      (is (= [nil true nil] (mapv :in-error (rest ground-truth)))))
+    (testing "the in-error correction left the patient exactly where they started, and the retransfer is a real move"
+      (is (= "Renal" (get-in (nth ground-truth 2) [:home-ward])))
+      (is (= "Renal" (get-in (nth ground-truth 2) [:location :ward])))
+      (is (= "ED" (get-in (nth ground-truth 3) [:location :ward]))))
     (testing "exact rendered message sequence: A01 A02 A12 A02"
       (is (= ["A01" "A02" "A12" "A02"]
-             (triggers (:ground-truth world3) one-bed-one-surge-facility providers))))))
+             (triggers ground-truth one-bed-one-surge-facility provider-templates))))))
 
 ;; --- Scenario 3: bed-swap between a licensed and a surge occupant ---------
 
 (deftest bed-swap-between-licensed-and-surge-occupant
-  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
-                          "P2" (engine/initial-patient "P2" "MRN000002")})
-        world1 (-> world0
-                  (step! 0 "P1" {:type :admission :location "Renal"})   ;; licensed (rung 1)
-                  (step! 5 "P2" {:type :admission :location "Renal"})) ;; surge (rung 2)
-        p1-before (get-in world1 [:patients "P1"])
-        p2-before (get-in world1 [:patients "P2"])
-        _ (testing "sanity: one licensed, one surge, same ward"
-            (is (= :licensed (get-in p1-before [:location :placement])))
-            (is (= :surge (get-in p2-before [:location :placement]))))
-        world2 (step! world1 10 "P1" {:type :bed-swap :with "P2"})
-        p1-after (get-in world2 [:patients "P1"])
-        p2-after (get-in world2 [:patients "P2"])]
-    (testing "placements are exchanged, home-wards untouched, both still admitted"
-      (is (= (:location p2-before) (:location p1-after)))
-      (is (= (:location p1-before) (:location p2-after)))
-      (is (= :surge (get-in p1-after [:location :placement])))
-      (is (= :licensed (get-in p2-after [:location :placement])))
-      (is (= :admitted (:status p1-after) (:status p2-after))))
+  (let [seed 100
+        p2-id (engine/patient-id-for seed 1)
+        {:keys [ground-truth]} (run-scenario
+                                 seed
+                                 [{:name "p1" :steps [{:type :admission :location "Renal"}
+                                                       {:type :bed-swap :with p2-id}]}
+                                  {:name "p2" :steps [{:type :admission :location "Renal"}]}])
+        [p1-admit p2-admit bed-swap] ground-truth]
+    (testing "sanity: one licensed, one surge, same ward"
+      (is (= :licensed (get-in p1-admit [:location :placement])))
+      (is (= :surge (get-in p2-admit [:location :placement]))))
     (testing "exact ground-truth event sequence"
-      (is (= [:admission :admission :bed-swap] (mapv :event (:ground-truth world2)))))
+      (is (= [:admission :admission :bed-swap] (mapv :event ground-truth))))
+    (testing "placements are exchanged"
+      (is (= (:location p2-admit) (get-in bed-swap [:swap (engine/patient-id-for seed 0) :to])))
+      (is (= (:location p1-admit) (get-in bed-swap [:swap p2-id :to]))))
     (testing "exact rendered message sequence: A01 A01 A17"
       (is (= ["A01" "A01" "A17"]
-             (triggers (:ground-truth world2) one-bed-one-surge-facility providers))))))
+             (triggers ground-truth one-bed-one-surge-facility provider-templates))))))
 
 ========== END FILE ==========
 
@@ -8032,6 +8899,94 @@ one.
     (is (= (emit-hl7/emit (:ground-truth world2) ref-date utc-offset churn-facility churn-providers)
            (emit-hl7/emit (:ground-truth world2) ref-date utc-offset churn-facility churn-providers)))))
 
+;; --- ADR-0012: :step-rejected renders NO message, by design ---------------
+
+(deftest step-rejected-has-no-message-type-registry-entry
+  (is (nil? (emit-hl7/message-type-registry :step-rejected))))
+
+(deftest step-rejected-event-renders-no-message
+  (testing "truth about the run, never wire traffic (ADR-0012): a
+            :step-rejected event produces the SAME empty vector any
+            unregistered event type does"
+    (let [world0 {:patients {"P1" (engine/initial-patient "P1" "MRN000001")}
+                  :facility churn-facility :providers churn-providers :ground-truth []}
+          world1 (admit world0 0 "P1" "Renal")
+          {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :cancel-transfer})
+          rejected-event (first events)]
+      (is (= :step-rejected (:event rejected-event)))
+      (is (= [] (emit-hl7/event->messages ref-date utc-offset churn-facility churn-providers rejected-event))))))
+
+;; --- M3: ORM^O01 + ORU^R01 --------------------------------------------
+
+(def ^:private cbc-order-pathway
+  {:name "cbc-order" :steps [{:type :admission :location "Renal"}
+                             {:type :order :profile :cbc}
+                             {:type :discharge}]})
+
+(defn- run-with-order
+  [seed]
+  (engine/run {:seed seed :patients 1 :pathways [{:pathway cbc-order-pathway :weight 1}]}))
+
+(deftest message-type-registry-has-orm-and-oru
+  (is (= {:type "ORM" :trigger "O01"} (emit-hl7/message-type-registry :order-placed)))
+  (is (= {:type "ORU" :trigger "R01"} (emit-hl7/message-type-registry :result-available))))
+
+(defn- find-message
+  [messages trigger]
+  (first (filter #(re-find (re-pattern (str "\\^" trigger)) %) messages)))
+
+(deftest order-placed-emits-orm-with-orc-and-obr
+  (let [{:keys [ground-truth facility providers]} (run-with-order 1)
+        order-event (first (filter #(= :order-placed (:event %)) ground-truth))
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+        orm (find-message messages "O01")
+        parsed (parser/parse orm)]
+    (testing "ORC-1: new order"
+      (is (= "NW" (message/get-field-first-value parsed "ORC" 1))))
+    (testing "OBR-4: universal service id, CWE with the panel-level LOINC concept"
+      (let [{:keys [code display]} (:concept order-event)]
+        (is (= (str code "^" display "^LN") (message/get-field-first-value parsed "OBR" 4)))))
+    (testing "PID/PV1 context, same conventions as every other message type"
+      (is (= "MRN000001" (message/get-field-first-value parsed "PID" 3)))
+      (is (= (str (get-in order-event [:location :ward]) "^^"
+                  (get-in order-event [:location :bed]) "^" (name (:id facility)))
+             (message/get-field-first-value parsed "PV1" 3))))))
+
+(deftest result-available-emits-oru-with-one-obx-per-analyte-in-profile-order
+  (let [{:keys [ground-truth facility providers]} (run-with-order 1)
+        result-event (first (filter #(= :result-available (:event %)) ground-truth))
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+        oru (find-message messages "R01")
+        parsed (parser/parse oru)
+        obx-segments (message/get-segments parsed "OBX")]
+    (testing "one OBX per analyte, same count and order as the result's own :results"
+      (is (= (count (:results result-event)) (count obx-segments)) "CBC has 5 analytes"))
+    (doseq [[i {:keys [concept units value reference-range abnormal-flag]}]
+            (map-indexed vector (:results result-event))]
+      (let [obx (nth obx-segments i)
+            field #(parser/pr-field (:delimiters parsed) (message/get-segment-field-raw obx %))]
+        (testing (str "OBX #" (inc i) ": " (:code concept))
+          (is (= (str (inc i)) (field 1)) "OBX-1: set id")
+          (is (= "NM" (field 2)) "OBX-2: value type")
+          (is (= (str (:code concept) "^" (:display concept) "^LN") (field 3)) "OBX-3: CWE, LOINC triplet")
+          (is (= (str value) (field 5)) "OBX-5: value")
+          (is (= units (field 6)) "OBX-6: units")
+          (is (= (str (:low reference-range) "-" (:high reference-range)) (field 7)) "OBX-7: reference range")
+          (is (= (case abnormal-flag :normal "N" :low "L" :high "H") (field 8)) "OBX-8: abnormal flag"))))))
+
+(deftest order-and-result-round-trip-deterministically
+  (let [{:keys [ground-truth facility providers]} (run-with-order 1)]
+    (is (= (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+           (emit-hl7/emit ground-truth ref-date utc-offset facility providers)))))
+
+(defspec order-and-result-messages-derive-bijectively-from-the-log 50
+  (prop/for-all [seed gen/large-integer]
+    (let [{:keys [ground-truth facility providers]} (run-with-order seed)
+          order-result-events (filterv #(#{:order-placed :result-available} (:event %)) ground-truth)
+          messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+          order-result-messages (filter #(or (re-find #"\^O01" %) (re-find #"\^R01" %)) messages)]
+      (= 2 (count order-result-events) (count order-result-messages)))))
+
 (defspec timestamp-anchoring-property 100
   (prop/for-all [seconds (gen/choose 0 6000000)]
     (let [ts (emit-hl7/hl7-timestamp ref-date seconds utc-offset)
@@ -8167,6 +9122,8 @@ one.
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.pathway :as pathway]
+            [ehr-testing-sim.order-profiles :as order-profiles]
             [ehr-testing-sim.check :as check]
             [ehr-testing-sim.result :as result])
   (:import [java.util Random]))
@@ -8255,6 +9212,25 @@ one.
               (count (engine/events-for-patient ground-truth id-b)))))))
 
 ;; --- M1: facility, providers, transfer, bed-ready coupling --------------
+
+;; --- ADR-0012: :step-rejected -- test helper --------------------------
+
+(defn- assert-step-rejected!
+  "ADR-0012: a decide-time rejection is no longer a silent no-op --
+  exactly one :step-rejected event enters `outcome`'s :events, naming
+  ONLY the attempting patient as :participants (never a possibly-
+  nonexistent :with target -- participant-ids-exist-in-run stays sound)
+  and carrying the documented `reason` keyword. The pre-existing
+  :rejected outcome key (read directly by callers/tests, never entering
+  the log) is unchanged by this milestone."
+  [outcome patient-id reason]
+  (is (= 1 (count (:events outcome))))
+  (let [ev (first (:events outcome))]
+    (is (= :step-rejected (:event ev)))
+    (is (= reason (:reason ev)))
+    (is (= [{:patient-id patient-id :role :subject}] (:participants ev))))
+  (is (some? (:rejected outcome)))
+  (is (= patient-id (:patient-id (:rejected outcome)))))
 
 (def ^:private crowded-facility
   "One inpatient ward (Renal) with exactly one licensed bed and no
@@ -8379,7 +9355,8 @@ one.
 
 (defn- world-of
   [patients]
-  {:patients patients :facility churn-facility :providers churn-providers :ground-truth []})
+  {:patients patients :facility churn-facility :providers churn-providers :ground-truth []
+   :order-profiles order-profiles/default-profiles})
 
 (defn- fold-events
   "Test helper: applies `events` to `world`'s patients (every named
@@ -8423,9 +9400,7 @@ one.
 (deftest cancel-admit-on-never-admitted-patient-is-a-structured-rejection-not-a-throw
   (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
         outcome (engine/decide (Random. 1) 10 world0 "P1" {:type :cancel-admit})]
-    (is (empty? (:events outcome)))
-    (is (some? (:rejected outcome)))
-    (is (= "P1" (:patient-id (:rejected outcome))))))
+    (assert-step-rejected! outcome "P1" :illegal-cancel-admit)))
 
 ;; --- cancel-transfer -> A12: the shadow-field dissolution -----------------
 
@@ -8463,8 +9438,7 @@ one.
   (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
         world1 (admit world0 0 "P1" "Renal")
         outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :cancel-transfer})]
-    (is (empty? (:events outcome)))
-    (is (some? (:rejected outcome)))))
+    (assert-step-rejected! outcome "P1" :illegal-cancel-transfer)))
 
 ;; --- cancel-discharge -> A13 -----------------------------------------------
 
@@ -8487,8 +9461,7 @@ one.
     (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
           world1 (admit world0 0 "P1" "Renal")
           outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :cancel-discharge})]
-      (is (empty? (:events outcome)))
-      (is (some? (:rejected outcome))))))
+      (assert-step-rejected! outcome "P1" :illegal-cancel-discharge))))
 
 (deftest cancel-transfer-cannot-be-applied-twice-to-the-same-transfer
   (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
@@ -8498,8 +9471,7 @@ one.
         {c1-events :events} (engine/decide (Random. 1) 20 world2 "P1" {:type :cancel-transfer})
         world3 (fold-events world2 c1-events)
         second-attempt (engine/decide (Random. 1) 30 world3 "P1" {:type :cancel-transfer})]
-    (is (empty? (:events second-attempt)))
-    (is (some? (:rejected second-attempt)))))
+    (assert-step-rejected! second-attempt "P1" :illegal-cancel-transfer)))
 
 ;; --- transfer-in-error -----------------------------------------------------
 
@@ -8550,8 +9522,7 @@ one.
   (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
         world1 (admit world0 0 "P1" "Renal")
         outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :bed-swap})]
-    (is (empty? (:events outcome)))
-    (is (some? (:rejected outcome)))))
+    (assert-step-rejected! outcome "P1" :illegal-bed-swap)))
 
 ;; --- merge -> A40: the identity payoff --------------------------------------
 
@@ -8580,15 +9551,15 @@ one.
   (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
         world1 (admit world0 0 "P1" "Renal")
         outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :merge :with "P1"})]
-    (is (empty? (:events outcome)))
-    (is (some? (:rejected outcome)))))
+    (assert-step-rejected! outcome "P1" :illegal-merge)))
 
 (deftest merge-referencing-unknown-patient-id-is-rejected
   (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
         world1 (admit world0 0 "P1" "Renal")
         outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :merge :with "GHOST"})]
-    (is (empty? (:events outcome)))
-    (is (some? (:rejected outcome)))))
+    (assert-step-rejected! outcome "P1" :illegal-merge)
+    (testing "the ghost id never enters :participants (participant-ids-exist-in-run stays sound)"
+      (is (= "GHOST" (:with (:attempted-step (first (:events outcome)))))))))
 
 (deftest double-merge-of-the-same-patient-id-is-rejected
   (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
@@ -8598,8 +9569,7 @@ one.
         {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :merge :with "P2"})
         world2 (fold-events world1 events)
         outcome (engine/decide (Random. 1) 20 world2 "P3" {:type :merge :with "P2"})]
-    (is (empty? (:events outcome)))
-    (is (some? (:rejected outcome)))))
+    (assert-step-rejected! outcome "P3" :illegal-merge)))
 
 ;; --- M2b: InjectChurn wiring ------------------------------------------
 
@@ -8631,6 +9601,172 @@ one.
                   (some #{:cancel-admit :cancel-transfer :cancel-discharge :bed-swap :merge}
                         (map :event ground-truth))))
               (range 1 50)))))
+
+;; --- M3-adjacent: per-patient pathway assignment (roadmap.md's M3 entry,
+;; SimHospital's percentage_of_patients analogue) -------------------------
+
+(def ^:private pathway-a
+  "Two clinical events (admission, discharge) once rendered -- :delay
+  itself emits none."
+  pathway/sample-admission-discharge)
+
+(def ^:private pathway-b
+  "One clinical event -- distinguishable from pathway-a by shape alone."
+  {:name "b" :steps [{:type :admission :location "Renal"}]})
+
+(deftest assign-pathway-with-a-single-weighted-entry-always-picks-it
+  (let [config [{:pathway pathway-a :weight 1}]]
+    (doseq [i (range 20)]
+      (is (= pathway-a (engine/assign-pathway (Random. i) config i))))))
+
+(deftest assign-pathway-explicit-ordinal-overrides-the-weighted-pool
+  (let [config [{:pathway pathway-a :weight 1}
+                {:patient-ordinal 2 :pathway pathway-b}]]
+    (is (= pathway-a (engine/assign-pathway (Random. 1) config 0)))
+    (is (= pathway-b (engine/assign-pathway (Random. 1) config 2)))))
+
+(deftest assign-pathway-is-deterministic-for-a-fixed-seed-and-ordinal
+  (let [config [{:pathway pathway-a :weight 1} {:pathway pathway-b :weight 1}]]
+    (is (= (engine/assign-pathway (Random. 99) config 4)
+           (engine/assign-pathway (Random. 99) config 4)))))
+
+(deftest weighted-pathway-assignment-favors-the-heavier-entry-overwhelmingly
+  (testing "an extreme weight ratio (1e6:1e-6) should never pick the
+            light entry across a range of rng seeds -- a statistical
+            sanity check on `weighted-pick`'s math, not a flaky test
+            (the light entry's selection probability is ~1e-12 per draw)"
+    (let [config [{:pathway pathway-a :weight 1000000} {:pathway pathway-b :weight 0.000001}]]
+      (is (every? #(= pathway-a (engine/assign-pathway (Random. %) config 0))
+                  (range 200))))))
+
+(def ^:private single-admission-renal
+  "Same step SHAPE as single-admission-renal-tagged below (one
+  :admission to the same ward) so swapping between them changes no
+  downstream RNG consumption (bed/attending choice depend on step type
+  and target ward, never on inert fields like :reason) -- isolating
+  assign-pathway's OWN fixed-consumption law from the unrelated (and
+  expected) fact that pathways of DIFFERENT shape consume different
+  amounts of RNG once executed."
+  {:name "solo" :steps [{:type :admission :location "Renal"}]})
+
+(def ^:private single-admission-renal-tagged
+  {:name "solo-tagged" :steps [{:type :admission :location "Renal" :reason "tagged"}]})
+
+(deftest explicit-override-does-not-perturb-other-patients-downstream-draws
+  (testing "fixed consumption (ADR-0009's own law, extended): exactly
+            one assign-pathway draw per patient whether the outcome is
+            explicit or weighted -- adding an explicit override (here,
+            to a same-shaped pathway, isolating the assignment
+            mechanism's own draw from the unrelated fact that a
+            DIFFERENTLY-shaped pathway naturally consumes different
+            downstream RNG once executed) for one patient must not
+            shift RNG consumption, and therefore output, for any OTHER
+            patient"
+    (let [seed 42
+          pool [{:pathway single-admission-renal :weight 1}]
+          overridden (conj pool {:patient-ordinal 2 :pathway single-admission-renal-tagged})
+          run1 (engine/run {:seed seed :patients 5 :pathways pool})
+          run2 (engine/run {:seed seed :patients 5 :pathways overridden})]
+      (doseq [i [0 1 3 4]]
+        (let [id (engine/patient-id-for seed i)]
+          (is (= (engine/events-for-patient (:ground-truth run1) id)
+                 (engine/events-for-patient (:ground-truth run2) id))))))))
+
+(deftest pathways-config-assigns-distinct-pathways-per-patient-through-run
+  (testing "M3-adjacent: engine/run consumes :pathways end-to-end (not
+            just via the pure assign-pathway helper) -- two explicit
+            per-ordinal assignments, no weighted pool needed"
+    (let [config [{:patient-ordinal 0 :pathway pathway-a}
+                  {:patient-ordinal 1 :pathway pathway-b}]
+          {:keys [ground-truth]} (engine/run {:seed 1 :patients 2 :pathways config})
+          id0 (engine/patient-id-for 1 0)
+          id1 (engine/patient-id-for 1 1)]
+      (is (= [:admission :discharge] (mapv :event (engine/events-for-patient ground-truth id0))))
+      (is (= [:admission] (mapv :event (engine/events-for-patient ground-truth id1)))))))
+
+(deftest absent-pathways-key-is-unperturbed-by-this-milestone
+  (testing "the degenerate case (roadmap.md's M3 entry): a run with NO
+            :pathways key at all takes the SAME code path it always
+            has -- no new draw, byte-identical to the pinned fixture
+            (pinned-seed-survives-decide-evolve-refactor, below, is the
+            fixture-level proof; this is the same guarantee stated
+            directly against this milestone's own new option)"
+    (is (= (engine/run {:seed 42 :patients 5})
+           (engine/run {:seed 42 :patients 5 :pathways nil})))))
+
+(deftest churned-run-surfaces-rejected-churn-steps-as-step-rejected-events
+  (testing "ADR-0012: what used to be a silent no-op (M2b's own
+            conservative cancel-discharge-reinstatement guard, and
+            InjectChurn's other decide-time rejections generally) is now
+            VISIBLE in the ground-truth log -- across enough seeds at
+            least one churned run surfaces a :step-rejected event"
+    (let [aggressive-profile {:cancel-admit 1.0 :cancel-transfer 1.0 :cancel-discharge 1.0
+                              :transfer-in-error 1.0 :bed-swap 1.0 :merge 1.0}
+          runs (for [seed (range 1 40)]
+                 (:ground-truth (engine/run {:seed seed :patients 6
+                                             :facility churn-facility :providers churn-providers
+                                             :churn-profile aggressive-profile})))]
+      (is (some (fn [gt] (some #(= :step-rejected (:event %)) gt)) runs)))))
+
+;; --- M3: order/result (auto-paired) --------------------------------------
+
+(deftest order-decide-emits-order-placed-and-schedules-a-followup
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        outcome (engine/decide (Random. 1) 10 world1 "P1" {:type :order :profile :cbc})]
+    (testing "one event now: order-placed"
+      (is (= 1 (count (:events outcome))))
+      (let [ev (first (:events outcome))]
+        (is (= :order-placed (:event ev)))
+        (is (= 10 (:t ev)))
+        (is (= :cbc (:profile ev)))
+        (is (= [{:patient-id "P1" :role :subject}] (:participants ev)))))
+    (testing "a follow-up is scheduled -- the result, NOT emitted directly
+              here (that would break global time-monotonicity across
+              patients, see engine.clj's :order docstring)"
+      (is (some? (:schedule-followup outcome)))
+      (let [{:keys [t patient-id steps]} (:schedule-followup outcome)]
+        (is (> t 10) "strictly after the order, per a positive turnaround")
+        (is (= "P1" patient-id))
+        (is (= 1 (count steps)))
+        (is (= :result-followup (:type (first steps))))
+        (let [result-event (:result-event (first steps))]
+          (is (= :result-available (:event result-event)))
+          (is (= t (:t result-event)))
+          (is (= 1 (:order-event-id result-event)) "the order-placed event's OWN index -- 0 is P1's :admission")
+          (is (= :cbc (:profile result-event)))
+          (is (= 5 (count (:results result-event))) "CBC's 5 analytes")
+          (doseq [{:keys [value reference-range abnormal-flag]} (:results result-event)]
+            (is (= abnormal-flag (order-profiles/abnormal-flag value reference-range)))))))))
+
+(deftest order-decide-is-deterministic
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")]
+    (is (= (engine/decide (Random. 42) 10 world1 "P1" {:type :order :profile :cbc})
+           (engine/decide (Random. 42) 10 world1 "P1" {:type :order :profile :cbc})))))
+
+(deftest order-followup-produces-result-available-through-the-real-run-loop
+  (testing "M3-adjacent pathway-assignment mechanism (Task 1) makes this
+            an end-to-end engine/run test, not a hand-driven scripted one"
+    (let [pathway {:name "cbc-order" :steps [{:type :admission :location "Renal"}
+                                             {:type :order :profile :cbc}
+                                             {:type :delay :from 120 :to 120}
+                                             {:type :discharge}]}
+          {:keys [ground-truth]} (engine/run {:seed 7 :patients 1 :pathways [{:pathway pathway :weight 1}]})
+          kinds (mapv :event ground-truth)]
+      (testing "order-placed and result-available both appear, result strictly after order, before discharge"
+        (is (= [:admission :order-placed :result-available :discharge] kinds))
+        (let [[_ order result _] ground-truth]
+          (is (< (:t order) (:t result) (:t (last ground-truth))))
+          (is (= 1 (:order-event-id result))))))))
+
+(defspec order-and-result-round-trip-through-run-for-any-seed 100
+  (prop/for-all [seed gen/large-integer]
+    (let [pathway {:name "cbc-order" :steps [{:type :admission :location "Renal"}
+                                             {:type :order :profile :cbc}
+                                             {:type :discharge}]}
+          {:keys [ground-truth]} (engine/run {:seed seed :patients 3 :pathways [{:pathway pathway :weight 1}]})]
+      (result/ok? (check/check-all ground-truth)))))
 
 (deftest pinned-seed-survives-decide-evolve-refactor
   (testing "the fixture pins the POST-M2a baseline (ADR-0009/ADR-0010/
@@ -8833,9 +9969,94 @@ one.
                                     :sha256 (apply str (repeat 64 "a"))}
                            :invocation {:verb "run" :opts {:seed 42}}})]
     (is (manifest/valid? m))
+    (is (= "1.1" (:schema-version m))
+        "mirrors tools' ManifestV1_1 :schema-version exactly -- a mirror
+         that omits this key can't self-detect the drift; the binding
+         check lives in tools' own sim-manifest-contract-test")
     (is (= :simulated (:stage m)))
     (is (= {:primary 42} (:seeds m)))
     (is (= "ehr-testing-sim" (get-in m [:generator :name])))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/order_profiles_test.clj ==========
+(ns ehr-testing-sim.order-profiles-test
+  "Schema validity and sampling laws for the order-profiles catalytic
+  (docs/sim-theory.edn's `order-profiles`, target 3 -- hashed repo-
+  authored config). Written before ehr-testing-sim.order-profiles
+  exists (ADR-0004 test-first)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.order-profiles :as order-profiles])
+  (:import [java.util Random]))
+
+(deftest default-order-profiles-loads-and-validates
+  (is (order-profiles/valid-profiles? order-profiles/default-profiles))
+  (testing "the starter set is exactly CBC and BMP"
+    (is (= #{:cbc :bmp} (set (keys order-profiles/default-profiles))))))
+
+(deftest no-cpt-codes-anywhere-in-any-profile
+  (testing "docs/third-party-sources.md's standing constraint: CPT is
+            AMA-licensed and excluded -- every concept in every profile
+            (panel-level and analyte-level) is :loinc, never :cpt"
+    (doseq [[_id profile] order-profiles/default-profiles]
+      (is (= :loinc (:system (:concept profile))))
+      (doseq [analyte (:analytes profile)]
+        (is (= :loinc (:system (:concept analyte))))))))
+
+(deftest every-analyte-has-a-real-loinc-code-and-us-units
+  (testing "sanity spot-check against notes/facts-register.md F7"
+    (let [cbc-codes (set (map (comp :code :concept) (:analytes (:cbc order-profiles/default-profiles))))
+          bmp-codes (set (map (comp :code :concept) (:analytes (:bmp order-profiles/default-profiles))))]
+      (is (= #{"6690-2" "789-8" "718-7" "4544-3" "777-3"} cbc-codes))
+      (is (= #{"2339-0" "6299-2" "38483-4" "49765-1" "2947-0" "6298-4" "2069-3" "20565-8"} bmp-codes)))
+    (is (every? #{"K/uL" "M/uL" "g/dL" "%" "mg/dL" "mmol/L"}
+                (mapcat (fn [[_id p]] (map :units (:analytes p))) order-profiles/default-profiles)))))
+
+(def ^:private wbc
+  (first (:analytes (:cbc order-profiles/default-profiles))))
+
+(deftest sample-analyte-value-is-deterministic
+  (is (= (order-profiles/sample-analyte-value (Random. 42) wbc)
+         (order-profiles/sample-analyte-value (Random. 42) wbc))))
+
+(defspec sampled-values-always-fall-within-one-of-the-three-declared-ranges 200
+  (prop/for-all [seed gen/large-integer
+                 profile-id (gen/elements (keys order-profiles/default-profiles))]
+    (let [profile (get order-profiles/default-profiles profile-id)
+          rng (Random. seed)]
+      (every? (fn [analyte]
+                (let [v (order-profiles/sample-analyte-value rng analyte)
+                      {:keys [reference-range]} analyte
+                      {:keys [abnormal-low-range abnormal-high-range]} (:distribution analyte)]
+                  (or (<= (:low reference-range) v (:high reference-range))
+                      (<= (:low abnormal-low-range) v (:high abnormal-low-range))
+                      (<= (:low abnormal-high-range) v (:high abnormal-high-range)))))
+              (:analytes profile)))))
+
+(deftest abnormal-flag-is-computed-from-value-vs-reference-range
+  (testing "mini-law: the abnormal flag is DERIVED from value vs range,
+            never sampled independently (docs/patient-state-model.md
+            Task 4's own computed-flag mini-law, stated here at the
+            pure-function level order-profiles provides)"
+    (let [{:keys [low high]} (:reference-range wbc)]
+      (is (= :normal (order-profiles/abnormal-flag (/ (+ low high) 2) (:reference-range wbc))))
+      (is (= :low (order-profiles/abnormal-flag (- low 0.1) (:reference-range wbc))))
+      (is (= :high (order-profiles/abnormal-flag (+ high 0.1) (:reference-range wbc))))
+      (is (= :normal (order-profiles/abnormal-flag low (:reference-range wbc))) "boundary: low itself is in-range")
+      (is (= :normal (order-profiles/abnormal-flag high (:reference-range wbc))) "boundary: high itself is in-range"))))
+
+(defspec abnormal-flag-agrees-with-sample-analyte-value-for-any-draw 200
+  (prop/for-all [seed gen/large-integer]
+    (let [v (order-profiles/sample-analyte-value (Random. seed) wbc)
+          flag (order-profiles/abnormal-flag v (:reference-range wbc))
+          {:keys [low high]} (:reference-range wbc)]
+      (case flag
+        :normal (<= low v high)
+        :low (< v low)
+        :high (> v high)))))
 
 ========== END FILE ==========
 
@@ -8889,6 +10110,37 @@ one.
 (deftest merge-is-valid-ir-with-and-without-explicit-peer
   (is (pathway/valid? {:name "t" :steps [{:type :merge}]}))
   (is (pathway/valid? {:name "t" :steps [{:type :merge :with "PID-000001"}]})))
+
+;; --- M3-adjacent: per-patient pathway assignment (roadmap.md's M3 entry) --
+
+(deftest weighted-pool-entry-is-valid-pathways-config
+  (is (pathway/valid-pathways-config?
+       [{:pathway pathway/sample-admission-discharge :weight 1}])))
+
+(deftest explicit-ordinal-entry-is-valid-pathways-config
+  (is (pathway/valid-pathways-config?
+       [{:patient-ordinal 0 :pathway pathway/sample-admission-discharge}])))
+
+(deftest mixed-weighted-and-explicit-entries-are-valid-pathways-config
+  (is (pathway/valid-pathways-config?
+       [{:pathway pathway/sample-admission-discharge :weight 2}
+        {:pathway {:name "t" :steps [{:type :admission :location "Renal"}]} :weight 1}
+        {:patient-ordinal 3 :pathway pathway/sample-admission-discharge}])))
+
+(deftest entry-with-neither-weight-nor-ordinal-is-invalid
+  (is (not (pathway/valid-pathways-config? [{:pathway pathway/sample-admission-discharge}]))))
+
+(deftest entry-with-invalid-pathway-ir-is-invalid
+  (is (not (pathway/valid-pathways-config? [{:pathway {:steps "not-a-pathway"} :weight 1}]))))
+
+;; --- M3: order (result auto-pairs, never hand-authored -- see engine.clj) --
+
+(deftest order-step-is-valid-ir
+  (is (pathway/valid? {:name "t" :steps [{:type :admission :location "Renal"}
+                                          {:type :order :profile :cbc}]})))
+
+(deftest order-without-profile-is-invalid
+  (is (not (pathway/valid? {:name "t" :steps [{:type :order}]}))))
 
 ========== END FILE ==========
 
