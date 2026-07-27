@@ -1,9 +1,9 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-27T12:20:31Z
-HEAD: 05f7b642513bd39a9b123c12252ac46989b43a8b
+generated (UTC): 2026-07-27T15:00:09Z
+HEAD: 706f8059186ce22cee06ca242f9614d5c76c716a
 git status --porcelain:
-?? docs/.#README.md
+working tree clean
 elides: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
@@ -771,27 +771,120 @@ outpatient traffic and module-driven ORU/ADT content) — the
 tools-side review procedure named as genuinely due at the site-profiles
 milestone remains genuinely due, more so now.
 
-## M6 — EmitState (FHIR snapshots first); emitter-coherence property
+## M6 — EmitState (FHIR snapshots first); emitter-coherence property — **landed**
 
-Lands **EmitState** (`:planned`): state-document rendering from
-`state-history`, FHIR resources before CDA. This is also the natural
-point to resolve `sim-theory.md`'s open question #3 — whether
-`state-history` is primitive or derived from `ground-truth-log` —
-since EmitState existing is exactly the precondition that question's
-own deferral names. **Upstream-demand citation**
+Lands **EmitState** (`:planned` → `:built`, `ehr-testing-sim.emit-state`):
+FHIR R4 resources (JSON, `clojure.data.json` — no new dep) rendered from
+`state-history`, CDA deferred with its own contract note (the format
+dispatch's other arm, no XML shell, no half-finished document type).
+`sim-theory.md`'s open question #3 (state-history primitive or derived)
+was already resolved at ADR-0008; EmitState existing is what makes that
+resolution load-bearing rather than merely stated — `snapshot-at`
+consumes `ehr-testing-sim.engine/replay`'s own fold output directly, no
+independent log access. **Upstream-demand citation**
 (`docs/research/SimHospital-Synthea-limitations-considered.md` §5.3):
 SimHospital issue #11, a 2024 user requesting FHIR output because
 Synthea already had it and it was easier to use — the issue stayed
-open through the project's archival, so this milestone answers a real,
-still-unmet request rather than a hypothetical one.
+open through the project's archival; this milestone answers a real,
+still-unmet request rather than a hypothetical one. 388 tests / 1015
+assertions green (up from the M5b baseline 350/863), coverage
+96.39%/98.34% (up from 96.37%/98.30% — flat, no regression to justify).
+The pinned regression fixture
+(`test/ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn`) is
+UNTOUCHED — emission is rendering; nothing this milestone changed
+touches ground-truth content or RNG order (confirmed, not merely
+assumed: the fixture's own test only inspects `:ground-truth`, and
+every engine-side change this milestone made — the clinical-content
+accumulator, the config-conflict check — is either RNG-free or gated
+behind config keys the fixture doesn't set).
 
-Co-landing invariants: snapshot-at-instant (a state-document is a
-pure function of `state-history` at a queried instant, no access to
-the log, engine, or RNG); the cross-emitter **emitter-coherence**
-property — replaying `hl7v2-stream` reconstructs `state-history`, and
-a FHIR snapshot at instant *t* agrees with the state implied by
-messages up to *t* — becomes a real property test for the first time
-once there are two emitters to check against each other.
+**Task 0, landed first: the config-reachable `:self-check-failed`,
+recategorized.** The tools full-capability session (that repo's own
+ADR-0015) found that assigning one patient ordinal BOTH an authored
+encounter-opening pathway and a GMF module reached `engine/run` and
+blew up as `:self-check-failed` only once the invariant catalog caught
+the resulting double encounter — a config authoring error wearing a
+"bug in us" category. `ehr-testing-sim.run/incompatible-assignments`
+now catches this STATICALLY, before `engine/run` (and its RNG) ever
+starts: `:rejected :incompatible-assignment`, naming the conflicting
+ordinal and both sources. Purely structural (no RNG, no module content
+resolved — every vendored module is encounter-bearing by ADR-0013's own
+curation criterion, so any module assignment conflicts with any
+encounter-opening pathway regardless of which specific module); guarded
+by each config's own schema validity so the plumbing-completeness
+test's deliberately-malformed sentinel opts are skipped, not
+misdiagnosed. `docs/simulate-your-facility.md`'s config section gains a
+one-line note (pathway cohorts and module cohorts are per-patient
+disjoint).
+
+**Task 1: EmitState's own shape.** `ehr-testing-sim.engine/PatientState`
+gains a clinical-content accumulator (`:conditions`/`:observations`/
+`:medication-orders`, plus `:discharged-at` mirroring `:admitted-at`) —
+the concrete reason the snapshot-at-instant law is satisfiable at all:
+Condition/Observation/MedicationRequest content was previously a
+log-only fact (`evolve`'s own no-op treatment of `:observation`/
+`:medication-order`/`:medication-end`/condition annotations), and
+EmitState may touch nothing but folded state. `patient-bundle` renders
+exactly six resource types (Patient, Encounter, Condition, Observation,
+MedicationRequest, Coverage) — no Procedure, deliberately, "keep the
+resource set to what state actually holds" applied by never
+accumulating what nothing renders. Cross-emitter ids: `Patient.id` is
+the same `patient-id` `ehr-testing-sim.emit-hl7` uses internally,
+`Patient.identifier` carries the same active-mrn PID-3 renders —
+property-tested
+(`emit-state-test/fhir-patient-id-and-active-mrn-resolve-to-the-same-hl7-identity`,
+150 trials). `sim run --emit fhir [--at <seconds>]` (default: end of
+run) is the CLI surface, the same verb grammar `--emit hl7` already
+established; no new engine-side config key (purely emit-time).
+
+**Task 2, the session's own central obligation: the emitter-coherence
+property, made real.** `ehr-testing-sim.v2-replay` is an INDEPENDENT
+reconstruction of patient state — parses a run's own emitted ER7
+stream (the same parser `EmitHL7` renders through) and folds it,
+message by message, into state, never touching the engine, the log, or
+the RNG. `project-to-wire-visible-fields` — a deliverable in its own
+right, sibling of `ehr-testing-sim.site-profile`'s own dialect-masking
+function — is the formal statement of what the wire actually carries;
+applied identically to both sides of the comparison, so "what the wire
+carries" is answered once. The property
+(`emitter-coherence-reconstructed-state-matches-the-log-fold-at-every-boundary`,
+150 trials over pathways/order-result/non-two-participant churn, plus a
+150-trial sibling over module-driven trajectories) checks agreement at
+EVERY message boundary, the stronger claim the theory's own wording
+makes. Bootstrap-from-empty (a patient's first message self-initializes
+the accumulator) is asserted directly. **Documented scope boundary, not
+silent:** bed-swap (A17) and merge (A40) are genuinely two-participant
+messages whose own wire-identity reconstruction (a shared MRN
+reassigned mid-run) is real, separate engineering scope — excluded from
+this property's own churn generator, the same "deferred with a contract
+note" treatment EmitState's own CDA arm gets.
+
+**One genuine finding, fixed, not papered over.** The property surfaced
+a real gap in ground truth: a degenerate but structurally legal churn
+sequence (cancel-admit against an already-discharged patient's original
+admission, then cancel-discharge) left `:class` absent from folded
+state, while `EmitHL7`'s own PV1-2 rendering always asserts `:inpatient`
+for that message family regardless. `ehr-testing-sim.engine/evolve`'s
+own `:cancel-discharge` method now restores `:class` as part of its
+reinstatement — the fix closes the gap in ground truth; the projection
+was never loosened to tolerate it.
+
+**Task 3: the ecological loop.** `test/ehr_testing_sim/blaze_integration_test.clj`
+(skip-when-absent, the same pattern `ehr-testing-tools`' own
+`sim-harness/available?` establishes) POSTs a run's own end-of-run
+Bundle(s) to a locally reachable `samply/blaze` and round-trips Patient
+fields when one is present; unreachable, a clean skip with a
+docker-run one-liner. Uses `java.net.HttpURLConnection` (JDK 1.1+), not
+`java.net.http.HttpClient` (JDK 11+) — this session's own JDK 8 runtime
+doesn't carry the latter (`notes/facts-register.md` F13).
+
+**Note for the author: the tools-side gate-loop baseline review needs
+NO new delta from this session** — EmitState adds no `hl7v2-stream`
+messages (a pure rendering addition over an existing catalytic-free
+wire, no engine step type, no message-type-registry entry), so the
+sibling repo's own committed gate baselines are unaffected by this
+milestone, unlike every milestone before it that changed message
+shape. Said explicitly so the author needn't wonder.
 
 ## Later / triggers
 
@@ -1410,147 +1503,209 @@ pack-push: pack pack-skills
 ========== FILE: ./README.md ==========
 # ehr-testing-sim
 
-Deterministic, seeded generation of synthetic hospital traffic for
-testing EHR integrations: clinically plausible, operationally messy
-(ADT churn: transfers, cancellations, merges, corrections), US-coded
-patient event streams from minimal parameters — with a ground-truth
-trajectory log as a first-class output so test harnesses can assert
-against what *should* be true, independent of message parsing. See
-[`docs/problem-statement.md`](docs/problem-statement.md) for the full
-problem, constraints, black-box contract, and validation program.
+Deterministic synthetic hospital traffic for testing EHR systems and
+integrations: clinically coded, operationally messy, provably
+coherent, and safe by construction. One config and one seed produce
+an unbounded, byte-reproducible stream of HL7v2 messages — patients
+with names, insurers, lab results, hallway waits, cancelled
+transfers, and merged records — none of whom ever existed.
 
-**Status: pre-release walking skeleton.** Built: the engine, the
-invariant catalog, HL7v2 ADT emission (admission/discharge/transfer
-plus the full churn family — below), the facility and providers
-models (beds, the allocation ladder, boarding, bed-ready transfers,
-synthetic attendings — docs/operational-models.md), InjectChurn
-(cancel-admit/cancel-transfer/cancel-discharge, transfer-in-error,
-bed-swap, merge — docs/patient-state-model.md), order/result step
-types with a real CBC+BMP order-profiles catalytic (verified LOINC
-codes) plus ORM^O01/ORU^R01 emission (M3), a per-patient
-pathway-assignment layer (`:pathways`), `:step-rejected` ground-truth
-events for decide-time rejections (ADR-0012), Milestone M4's
-**Persona** — demographic sampling (name, DOB, sex, address, phone,
-SSN-shaped id) and age-linked payer sampling, folded into every
-patient's `:registered` event, with PID and IN1 segment enrichment —
-**site profiles** (docs/site-profiles.md): an MSH dialect, PV1-2/PV1-36
-code-table overrides, and a Z-segment template DSL, all bound at emit
-time and proven invariant to ground truth (two site profiles over one
-seed render the same facts in two accents) — and, landed most
-recently, Milestone M5's **RunModules + CompileTrajectory**
-(docs/gmf-interpreter.md): a GMF (Synthea Generic Module Framework)
-interpreter, the first real vendored module
-(`resources/modules/sinusitis.json`, provenance in its own `NOTICE`),
-and the compiled-trajectory step types it needs
-(`:outpatient-visit`/`:outpatient-visit-end`, `:procedure`,
-`:observation`, `:medication-order`/`:medication-end`) — module
-assignment composes with `:pathways`, both just IR entering the same
-union.
+## The problem it solves
 
-## Pipeline: now / next / later
+Teams testing EHR integrations are stuck between two bad options:
+real production feeds (PHI, HIPAA, un-shareable, slow to obtain) and
+hand-crafted test messages (sparse, static, unrealistically clean —
+they exercise the happy path and miss everything that actually breaks
+systems). This simulator is the third option: traffic with the
+statistical texture and administrative messiness of a real feed, and
+none of the risk. Because it contains no real person's data *by
+construction* — deterministic rules over public tables, no real
+records anywhere upstream — its output can be committed to repos,
+attached to bug reports, and published.
 
-<!-- Hand-derived from docs/sim-theory.edn's :status fields and its
-     ";; NEXT" marker (no generator reads status yet, unlike the full
-     diagram below) -- regenerate this block by hand whenever a stage
-     flips status or NEXT moves. External stages and the pathway-ir
-     union are omitted here to stay under ~12 nodes; see the detail
-     view for those. -->
+## What a run looks like
 
-```mermaid
-flowchart LR
-    Persona["Persona"]:::built
-    RunModules["RunModules"]:::built
-    CompileTrajectory["CompileTrajectory"]:::built
-    InjectChurn["InjectChurn"]:::built
-    Execute["Execute"]:::built
-    Check["Check"]:::built
-    EmitHL7["EmitHL7"]:::built
-    EmitState["EmitState"]:::next
-    Package["Package"]:::planned
-    Calibrate["Calibrate"]:::planned
-
-    Persona --> RunModules --> CompileTrajectory --> InjectChurn --> Execute
-    Execute --> Check
-    Execute --> EmitHL7
-    Execute --> EmitState
-    EmitHL7 --> Package
-    Package --> Calibrate
-    Calibrate -.-> InjectChurn
-
-    classDef built fill:#1b5e20,stroke:#2e7d32,color:#c8e6c9,stroke-width:2px;
-    classDef next fill:#e65100,stroke:#ff9800,color:#fff3e0,stroke-width:3px;
-    classDef planned fill:#37474f,stroke:#78909c,color:#cfd8dc,stroke-width:1px,stroke-dasharray: 3 3;
+```bash
+clojure -M:cli run --seed 42 --patients 20 --churn --emit hl7
 ```
 
-**Now** (green): Execute, Check, EmitHL7, InjectChurn (M2b), Execute's
-own order/result step types and EmitHL7's ORM/ORU cycle (M3), Milestone
-M4's **Persona** — demographics sampling from vendored, hashed tables
-plus a real `payer-pool` catalytic wire, folded into Execute's own step
-queue via the `:registered` event, plus PID/IN1 enrichment —
-EmitHL7's fourth catalytic, **site-profile** — MSH dialect, code-table
-overrides, Z-segment templates — and Milestone M5's **RunModules +
-CompileTrajectory**: a GMF interpreter (`ehr-testing-sim.gmf`/
-`ehr-testing-sim.gmf-interpreter`), the first real vendored module
-(`resources/modules/sinusitis.json`), and the actual persona → module
-walk → compiled-trajectory → IR wiring inside `engine/run` — all
-property-tested and green (350 tests / 863 assertions).
-**Next** (amber): **EmitState**, Milestone M6 — state-document
-rendering from `state-history`, FHIR resources before CDA.
-**Later** (dashed grey): everything else in the *want*.
+Excerpts from real seeded runs (composited across demos — complete
+traces with their exact commands live in [docs/demos/](docs/demos/)):
 
-[`docs/sim-theory-diagram.md`](docs/sim-theory-diagram.md) is the full
-detail view (every resource wire, catalytic input, and the
-`pathway-ir` union) generated mechanically from
-[`docs/sim-theory.edn`](docs/sim-theory.edn). [`.agents/plans/roadmap.md`](.agents/plans/roadmap.md)
-is the milestone plan this diagram's *next*/*later* stages resolve
-into. [`docs/site-profiles.md`](docs/site-profiles.md) answers "how do
-I make it simulate *my* hospital" — landed: `--config` a `:site-profile`
-(MSH dialect, code-table overrides, Z-segment templates) and get your
-own hospital's dialect, ground truth unchanged either way.
+```
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000||ADT^A01|...|P|2.3
+PID|1||MRN000002||O'Brien\S\...                        ← escaped, per spec
+PV1|1|I|ED^^ED-H01^general-hospital|...                ← admitted, boarding in an ED hallway slot
+...
+ADT^A03 (another patient discharges)  →  ADT^A02        ← the freed bed triggers the boarder's transfer
+PV1|1|I|Renal^^RENAL-01^...|...|ED^^ED-H01^...          ← new bed; prior location derived from the log
+...
+OBX|1|NM|6690-2^Leukocytes [#/volume] in Blood^LN||4.1|K/uL|4.5-11.0|L   ← real LOINC, computed abnormal flag
+ZPI|commercial-hmo|commercial|ALDRIC-PAYER-V1           ← only if YOUR site profile says so
+```
 
-## Relation to the ehr-testing-* family
+The boarding→transfer coupling above was not scripted. It *emerged*:
+the ward was full, the patient boarded in the hallway, and another
+patient's discharge freed the bed. Capacity pressure produces
+operational realism here the way it does in real hospitals — by
+constraint, not by authorship.
 
-- [`ehr-testing-guide`](https://github.com/pragsmike/ehr-testing-guide)
-  teaches the testing method.
-- [`ehr-testing-tools`](https://github.com/pragsmike/ehr-testing-tools)
-  makes it runnable (corpus construction, conformance gating).
-- **ehr-testing-sim** (this repo) is the traffic source — usable
-  standalone, and mountable inside tools' `ehr` CLI as the `sim`
-  subcommand (three exported values in `ehr-testing-sim.cli`; see
-  [`notes/ADRs.md`](notes/ADRs.md) ADR-0001). Dependency direction:
-  tools → sim, never the reverse.
+## The pipeline
+
+<!-- Hand-derived from docs/sim-theory.edn's :status fields and its
+     ;; NEXT marker. Regenerate on milestone flips. Detail view:
+     docs/sim-theory-diagram.md -->
+```mermaid
+flowchart TD
+    P[Persona] --> RM[RunModules]
+    RM --> CT[CompileTrajectory]
+    AP[Authored pathways] --> IR{{Pathway IR}}
+    CT --> IR
+    IR --> IC[InjectChurn]
+    IC --> EX[Execute]
+    EX --> GT[(Ground-truth log)]
+    GT --> CK[Check]
+    GT --> EH[EmitHL7]
+    EX --> ES[EmitState / FHIR]
+    CAL[Calibrate] -.-> IC
+    classDef built fill:#1b5e20,color:#e8f5e9
+    classDef next fill:#e65100,color:#fff3e0
+    classDef later fill:#424242,color:#eeeeee
+    class P,RM,CT,AP,IR,IC,EX,GT,CK,EH,ES built
+    class CAL later
+```
+
+Everything green is built and property-tested — **EmitState (FHIR R4
+snapshots) landed at M6**; **Calibrate is the one stage left (next)**.
+Full formal pipeline: [docs/sim-theory-diagram.md](docs/sim-theory-diagram.md);
+plan: [.agents/plans/roadmap.md](.agents/plans/roadmap.md).
+
+## What makes it different
+
+**The event log is the truth; formats are renderings.** An immutable,
+replayable event log is the single source; patient state is a fold of
+it; HL7v2 messages render the events and FHIR resources render the
+snapshots — mirroring what the standards themselves are (v2 feeds *are*
+event streams; FHIR *is* the materialized view), and now property-tested
+against each other, not merely asserted: replaying a run's own messages
+reconstructs the same state its FHIR snapshot shows, at every message
+boundary, over hundreds of randomized runs. See
+[docs/event-sourcing.md](docs/event-sourcing.md), including its
+honest scope: this architecture buys reproducibility, corrections,
+and audit — clinical realism comes from content and calibration, not
+storage design.
+
+**Realism is emergent, not scripted.** Boarding, hallway placements,
+outlier admissions, and bed-ready transfers arise from census
+pressure against configured capacity — a dimension the incumbent
+generators explicitly lack.
+
+**Churn is first-class.** Cancellations, error-entries, bed swaps,
+and record merges — the traffic that breaks real interfaces and that
+hand-crafted test data never contains — are generated with correct
+reversal semantics (derived from the log, not shadow bookkeeping).
+
+**Clinical content has provenance.** Disease trajectories come from
+Synthea's clinically reviewed, Apache-licensed module format,
+executed by our interpreter; every code (SNOMED CT, LOINC, RxNorm) is
+carried verbatim from inspectable module JSON and verified against
+official sources — never invented. Every generated event cites the
+module state that caused it.
+
+**(config + seed) IS the corpus.** Byte-identical reproduction,
+always. Ship a one-line manifest instead of 2 GB of messages;
+regenerate on demand. Any interesting run is a permanent, pinnable
+test case.
+
+**It speaks your hospital's dialect.** Site profiles render the same
+truth in different accents — local code values, MSH identity, HL7
+version, Z-segments — with a property-tested guarantee that dialect
+never alters ground truth. See
+[docs/site-profiles.md](docs/site-profiles.md).
+
+## Why you can trust it
+
+- **It is never graded on its own homework.** A sibling repo
+  (ehr-testing-tools) consumes the output as a real downstream
+  system: contract-validating the manifests, running the messages
+  through an independent conformance gate, tracking verdicts against
+  reviewed baselines. This loop has caught real defects the
+  simulator's own 850+ assertions missed — which is the point.
+- **Laws are property-tested, not asserted.** Determinism,
+  log↔state consistency, message↔truth derivability, occupancy
+  coherence, churn's clinical-content preservation, and — as of
+  Milestone M6 — emitter coherence itself (HL7v2 and FHIR agree at
+  every message boundary, replayed independently from the wire) — each
+  holds across hundreds of randomized runs per property, and these
+  tests have repeatedly caught real bugs. Every theory stage but
+  Calibrate is now both built and property-tested.
+- **Claims carry receipts.** Versions, licenses, verified codes, and
+  upstream findings live in a dated facts register; the docs include
+  an independently sourced research review that *tempers* our own
+  architectural claims, kept because corrections build more trust
+  than endorsements.
+- **Safety is structural.** No real records exist anywhere upstream
+  of the generator, so no leakage is possible — a stronger statement
+  than any de-identification process can make. The full validation
+  program (seven claims, each with its proof strategy):
+  [docs/problem-statement.md](docs/problem-statement.md).
 
 ## Quick start
 
 ```bash
-clojure -X:test                                  # run the suite
-clojure -M:cli run --seed 42 --patients 5        # a run, as EDN
-clojure -M:cli run --seed 42 | clojure -M:cli check   # self-check, exit 0
+clojure -X:test                                   # the suite
+clojure -M:cli run --seed 42 --patients 5 --emit hl7
+clojure -M:cli run --seed 42 --patients 5 --emit fhir              # FHIR R4 Bundle per patient (M6)
+clojure -M:cli run --seed 42 --patients 5 | clojure -M:cli check   # self-check, exit 0
+clojure -M:cli run --seed 7 --config my-site.edn --churn --emit hl7  # modules, profiles, churn
 clojure -M:cli help
 ```
 
-Same seed + config ⇒ byte-identical output, always — guarantee #1,
-enforced by property tests.
+Worked examples with real output: [docs/demos/](docs/demos/), including
+a same-seed HL7v2/FHIR pair (`docs/demos/emit-state/`) — one patient's
+final v2 message next to their FHIR `Patient`/`Observation` resources
+from the same instant, ids resolving across both. To check FHIR output
+against a real FHIR server (`samply/blaze`, a same-language Clojure
+implementation — `test/ehr_testing_sim/blaze_integration_test.clj`):
 
-## Design in three sentences
+```bash
+docker run -p 8080:8080 samply/blaze:latest
+```
 
-Pathways are data (a common IR shared by hand-authored scripts and,
-later, trajectories compiled from Synthea-style clinical modules); a
-seeded discrete-event engine executes them into a format-free
-ground-truth log. Wire formats (HL7v2 first; FHIR/CDA later) are
-emitters consuming that log, never the reverse. Codes (SNOMED CT,
-LOINC, RxNorm, ICD-10-CM) travel as data on patient state, so every
-emitter renders them natively (ADR-0002).
+Unfamiliar term (ours or the domain's):
+[docs/GLOSSARY.md](docs/GLOSSARY.md). Which document to read for your
+role: [docs/README.md](docs/README.md).
 
-Design lineage — what was mined from Google's Simulated Hospital
-(operational model, churn vocabulary, event queue) and Synthea
-(generative clinical modules, US demographics, embedded codes) — is
-recorded in [`.agents/memory/architecture.md`](.agents/memory/architecture.md)
-and summarized in [`docs/third-party-sources.md`](docs/third-party-sources.md).
+## The family, and a deliberate division of labor
 
-## License
+Three sibling projects:
+the [guide](https://github.com/pragsmike/ehr-testing-guide) teaches
+the testing method; the
+[tools](https://github.com/pragsmike/ehr-testing-tools) make it
+runnable (corpus construction, conformance gating, mutation);
+**this simulator generates the traffic.**
 
-MIT — see [LICENSE](LICENSE). No PHI anywhere, by construction.
+One boundary is worth stating plainly because it looks like a
+limitation and is actually a guarantee: **this simulator always
+produces plausible, coherent, time-ordered data.** Its laws forbid it
+from emitting incoherence — every message derives from the
+ground-truth log, in order, internally consistent. Adversarial
+delivery conditions — out-of-order arrival, dropped messages, missing
+fields, duplicates, mangled segments — are deliberately **not**
+generated here; they are introduced downstream by
+ehr-testing-tools' mutation operators, applied to a sim corpus with
+full lineage records. You get both realisms — coherent-but-messy
+truth from sim, damaged delivery from tools — and always know
+exactly which faults were injected, because the pristine original is
+one seed away.
+
+## Status
+
+Pre-release; MIT licensed; no PHI anywhere, by construction. The FHIR
+emitter landed at Milestone M6, end to end through the emitter-coherence
+property; a documentation alignment pass is next, then Calibrate — the
+one theory stage left unbuilt. Design lineage and decision history:
+[docs/](docs/), `notes/ADRs.md`, and `.agents/memory/architecture.md`.
 
 ========== END FILE ==========
 
@@ -1639,8 +1794,11 @@ simulation will do, not what a clinician should do.
 **Resource.** *Here (in sim-theory documents):* a typed value flowing
 between pipeline stages in the resource-theory notation — "the wires"
 in the diagrams. *In FHIR:* a Resource is a standardized data object
-(Patient, Encounter, Observation). When M6's FHIR emitter documentation
-says "renders resources," it means FHIR Resources; when
+(Patient, Encounter, Observation) — M6's `ehr-testing-sim.emit-state`
+renders exactly six: Patient, Encounter, Condition, Observation,
+MedicationRequest, Coverage, each only when the folded state actually
+holds the fact it would carry. When this project's own docs say
+"renders resources," they mean FHIR Resources; when
 [sim-theory.md](sim-theory.md) says "resource," it means a wire.
 
 **Profile.** *Here:* a **site profile** — configuration describing one
@@ -1663,6 +1821,15 @@ modeled version — a patient whose administrative status is "admitted
 to ward W" while their physical location is an ED surge slot; it
 emerges from capacity pressure rather than being scripted. See
 [operational-models.md](operational-models.md).
+
+**Diagnosis.** *Here and everywhere in this project family:* a clinical
+determination — the thing that gets an ICD-10-CM code and rides in a DG1
+segment; content the simulator *generates*. **Never** used for a conformance judge's
+explanation of a verdict — that is a set of **findings** (see the conformance
+vocabulary below). The restriction is deliberate: in a healthcare product, "the
+gate's diagnosis" would be parsed clinically by half the audience. (Pleasant
+coincidence: "findings" is also what clinicians call itemized observed facts, so
+the connotation transfers instead of colliding.)
 
 **Encounter.** *In clinical/EHR usage:* a discrete interaction between
 patient and health system (a visit, a hospitalization). *Here:* the
@@ -1734,10 +1901,12 @@ truth-invariant — MSH identity, code-table overrides, Z-segments);
 naming baked into bed IDs). See [site-profiles.md](site-profiles.md).
 
 **Emitter.** A pure function from the ground-truth log (or state
-history) to a wire format. HL7v2 messages are the first emitter;
-FHIR and CDA are planned emitters over the same truth. "Formats are
-just emitters of the patient state machine" is this project's founding
-sentence.
+history) to a wire format. HL7v2 messages (`EmitHL7`) and FHIR
+resources (`EmitState`, M6) are both built emitters over the same
+truth, property-tested against each other (see **coherence property**,
+below); CDA is a still-planned emitter, deferred with its own contract
+note rather than stubbed. "Formats are just emitters of the patient
+state machine" is this project's founding sentence.
 
 **Facts register.** [notes/facts-register.md](../notes/facts-register.md):
 externally verifiable claims (versions, licenses, code
@@ -1856,6 +2025,63 @@ trimmed) so steady-state corpora can filter the cold-start artifact
 without violating log completeness.
 
 ---
+## Conformance & gating vocabulary (family terms)
+
+These terms belong to the sibling
+[ehr-testing-tools](https://github.com/pragsmike/ehr-testing-tools)
+repository, which judges this simulator's output; sim's docs use
+them when discussing the consumer loop and the validation program.
+Tools' own code and ADRs are authoritative if any detail here
+drifts; this block exists so sim's readers need not switch repos
+mid-sentence. (The planned guide crosswalk reconciles against this
+definition set.)
+
+**Judge.** A component that examines one artifact against one tier
+of checks — e.g. the base-structural HL7v2 judge, or the FHIR
+judge. *Judging* is the act; a judge examines, it does not fix.
+
+**Verdict.** A judge's per-artifact classification. The enumeration
+is **pass / rejected / indeterminate / no-verdict** — deliberately
+not "pass/fail": *rejected* means the check ran and the answer is
+no (the same doctrine as this repo's `:rejected` Result arm);
+*indeterminate* means the judge examined the artifact but cannot
+classify it (e.g. a check needing a terminology tier this judge
+lacks); *no-verdict* means no determination was produced. Exit
+codes follow the ladder: 0 pass, 1 rejected, 2 error, 3 no-verdict.
+
+**Error (vs. rejected).** An *error* is the judge itself failing
+operationally — it could not run. A crashed judge yields an error,
+never a verdict. Rejected is an answer; error is the absence of the
+ability to answer. Keeping these apart is load-bearing: a corpus
+full of rejections is information, a corpus full of errors is a
+broken harness.
+
+**Findings.** The itemized, located reasons attached to any
+non-pass verdict: each names the check that fired, where in the
+artifact, and the stated reason. Findings are the actionable
+content of a verdict — and, in the cross-repo consumer loop, the
+currency in which the gate tells this simulator what to fix
+("findings, not failures" is that loop's assertion discipline:
+integration tests assert the gate *runs and verdicts*, never that
+everything passes).
+
+**Report.** The aggregate a gate run produces over a corpus: the
+verdict table plus all findings.
+
+**Baseline.** A pinned, committed report with a provenance header
+(date, the sim commit it was generated against, reason). Deltas
+against a baseline are how change is *reviewed*: a new corpus is
+diffed, findings are read, and only then is the baseline
+regenerated — ratification by regeneration, with the history in
+the headers.
+
+**Gate.** The workflow that runs judges across a corpus and
+produces the report; "gating" a corpus means putting it through.
+In this simulator's validation program, the gate is the independent
+examiner — the reason the output is never graded on its own
+homework.
+
+---
 
 ## Software concepts (for domain experts)
 
@@ -1886,6 +2112,22 @@ the authoritative record and all state is derived by replaying it.
 observation that HL7v2 feeds *are* event streams and FHIR resources
 *are* materialized views, so hospital integration has been doing this
 for decades without the name.
+
+**State-document.** This project's name (`sim-theory.edn`'s own
+`EmitState` stage) for a snapshot rendering of `state-history` at one
+instant — a FHIR Bundle today, a CDA document once that arm is built.
+Contrast **event**: a state-document describes what's true *now*
+(or at a queried *t*); an event describes what *happened*.
+
+**Coherence property** (also: emitter coherence). The property test
+(M6) that two independently-built emitters of the same ground truth —
+`EmitHL7`'s messages and `EmitState`'s FHIR snapshots — never
+disagree: replaying a run's own emitted messages reconstructs the same
+state its FHIR snapshot shows, at every message boundary. See
+[event-sourcing.md](event-sourcing.md#the-coherence-property-tested)
+for the mechanism (`ehr-testing-sim.v2-replay`) and
+[sim-theory.md](sim-theory.md)'s own global-laws section for the law's
+formal statement.
 
 **Red → green (test-first).** House discipline (ADR-0006 in tools,
 ADR-0004 here): a failing test is written and *observed to fail*
@@ -1923,8 +2165,11 @@ register for what our parser dependency does and doesn't handle.
 
 **FHIR.** Fast Healthcare Interoperability Resources — HL7's modern
 REST/JSON standard. State-based: Resources describe current state.
-Planned emitter (M6), with the Blaze server as the ecological test
-target.
+Emitter landed at M6 (`ehr-testing-sim.emit-state`, R4 JSON) — a Bundle
+of Patient/Encounter/Condition/Observation/MedicationRequest/Coverage
+per patient snapshot; CDA is the format dispatch's other, still-deferred
+arm. The Blaze server is the ecological test target
+(`test/ehr_testing_sim/blaze_integration_test.clj`, skip-when-absent).
 
 **HL7 (organization) / HL7v2.** Health Level Seven International, the
 standards body; and its version-2 messaging standard (1980s-vintage,
@@ -1979,6 +2224,9 @@ profiles exist. The guide's opening chapters treat this at length.
 HAPI's v2 parser and NIST's validation suite — used (via
 ehr-testing-tools) to judge generated messages, so the simulator is
 never graded by its own homework.
+
+See the conformance & gating vocabulary above for how judging is organized
+(judges, verdicts, findings, baselines)."
 
 ---
 
@@ -2059,7 +2307,9 @@ exactly what came from where.
 ER7 parse/emit structures. Known limitation (no escape handling)
 receipted in the facts register with this repo's workaround.
 **Blaze** (samply). An open-source FHIR server, written in Clojure —
-M6's planned ecological target for the FHIR emitter.
+M6's ecological target for the FHIR emitter
+(`test/ehr_testing_sim/blaze_integration_test.clj`; unreachable ->
+clean skip, no dependency on it being present).
 **Mirth Connect.** A widely-deployed open-source interface engine; a
 representative real-world consumer.
 **ehr-testing-guide / ehr-testing-tools.** The sibling repositories:
@@ -2067,6 +2317,163 @@ the guide teaches the testing method; tools makes it runnable
 (corpus construction, conformance gating) and is this simulator's
 first real consumer. Terms shared with the guide defer to the
 guide's fuller treatment; a crosswalk reconciliation is planned.
+
+========== END FILE ==========
+
+========== FILE: ./docs/README.md ==========
+# Reading this documentation
+
+This directory documents a simulator that generates realistic,
+deterministic hospital traffic — clinically coded, operationally
+messy, safely synthetic — for testing EHR systems and integrations.
+Different readers need different doors into it. This page is the
+doorman: it tells you who you probably are, what to read in what
+order, how much to trust each document, and where the receipts are.
+
+**If any term reads wrong or unfamiliar — start with
+[GLOSSARY.md](GLOSSARY.md).** It exists for exactly two situations:
+you build software and the healthcare words are new, or you know
+healthcare and the software words (or our shorthand) are new. It
+opens with the words that *collide* — terms like "pathway,"
+"resource," and "profile" that mean different things here than in
+your home field.
+
+## Who you are, and your reading path
+
+**A clinician, informaticist, or health-IT domain expert asking "is
+this clinically and operationally credible?"**
+Read [clinical-realities.md](clinical-realities.md) first — it is
+the document most likely to convince you we understand your world
+(post-mortem event streams, hallway boarding, Babyboy/Babygirl
+merges, results pending at discharge), and each entry says how the
+phenomenon is modeled and why testers need it. Then
+[operational-models.md](operational-models.md) (beds, surge slots,
+providers, payers — how the hospital itself is modeled) and
+[patient-state-model.md](patient-state-model.md) (the patient
+lifecycle and which events are legal when). If you want to know
+where the clinical content comes from and why you should trust it:
+[third-party-sources.md](third-party-sources.md) and the validation
+program in [problem-statement.md](problem-statement.md).
+
+**A software or integration engineer asking "what would I actually
+get, and how does it work?"**
+Read [problem-statement.md](problem-statement.md) §Black-Box first
+(inputs, outputs, guarantees), then
+[event-sourcing.md](event-sourcing.md) — the architecture in three
+pages, including why HL7v2 feeds are event streams and FHIR
+documents are snapshots, which is the observation the whole design
+rests on. Then [sim-theory.md](sim-theory.md) with its
+[diagram](sim-theory-diagram.md) for the full pipeline, and
+[demos/](demos/) for real command lines with real output. The
+engine's rules of legality live in
+[patient-state-model.md](patient-state-model.md).
+
+**An interface analyst or QA lead asking "how do I make it simulate
+*my* hospital?"**
+[site-profiles.md](site-profiles.md) is your document: local code
+values, MSH identity, HL7 version literal, Z-segments — and the
+guarantee that changing the dialect never changes the underlying
+truth. The knobs that *do* change the truth (ward layouts, surge
+naming, churn rates) live in
+[operational-models.md](operational-models.md).
+
+**A skeptic — a reviewer, a security or compliance function, or
+anyone deciding whether to rely on this.**
+Go straight to [problem-statement.md](problem-statement.md)'s
+Validation & Evidence table: seven claims, each with its proof
+strategy, from syntactic validity through no-PHI-by-construction.
+Then [../notes/facts-register.md](../notes/facts-register.md) — every
+externally checkable claim (versions, licenses, verified codes,
+upstream findings) as numbered rows with evidence and dates — and
+[research/](research/), an independently sourced review of the
+upstream tools' limitations, including where it *tempers* our own
+claims. We keep the corrections, not just the endorsements.
+
+**A contributor — human or AI agent.**
+Docs are downstream of decisions: `../notes/ADRs.md` is the
+reasoning-of-record and outranks anything here that disagrees with
+it; `../AGENTS.md` and `../AUTHORS-GUIDE.md` are the working rules;
+`../.agents/plans/roadmap.md` is what's landed and what's next. Read
+those before editing anything in this directory.
+
+## The map
+
+Foundations: [problem-statement.md](problem-statement.md) (the
+contract: problem, audiences, constraints, black box, validation
+program) · [sim-theory.md](sim-theory.md) +
+[sim-theory.edn](sim-theory.edn) (the pipeline as a formal resource
+theory; the EDN is the source of truth, read via the now/next/want
+convention) · [event-sourcing.md](event-sourcing.md) (the
+architecture and its scope — what it buys and, honestly, what it
+doesn't, including Milestone M6's own "coherence property, tested"
+section: how EmitHL7 and EmitState are checked against each other).
+
+Domain models: [operational-models.md](operational-models.md) ·
+[patient-state-model.md](patient-state-model.md) ·
+[clinical-realities.md](clinical-realities.md) ·
+[gmf-interpreter.md](gmf-interpreter.md) (how Synthea-format disease
+modules are executed here, including the as-built record of every
+deviation from the original design).
+
+Configuration & provenance: [site-profiles.md](site-profiles.md) ·
+[third-party-sources.md](third-party-sources.md) (what was mined
+from where, and the load-bearing fact that only one runtime
+dependency exists).
+
+Evidence & scratch: [research/](research/) ·
+[positioning-notes.md](positioning-notes.md) (raw material for a
+future positioning doc — argument drafts, not commitments) ·
+[demos/](demos/) (CLI-produced traces; also the future log-player's
+fixtures).
+
+Reference: [GLOSSARY.md](GLOSSARY.md).
+
+## How much to trust what you read
+
+Not all documents carry the same authority, and pretending otherwise
+would waste your time. The classes:
+
+- **Contract**: problem-statement.md. Changes rarely and
+  deliberately.
+- **Reasoning-of-record**: the ADRs (in `../notes/`). Append-only;
+  never silently reverted; outrank everything else on "why."
+- **Specs and as-built records**: the domain-model docs. Written
+  *before* their milestones, then annotated as built — deviations
+  are recorded with reasons, never silent (gmf-interpreter.md §7 is
+  the pattern).
+- **Generated artifacts**: sim-theory-diagram.md and the `.mermaid`
+  file are produced mechanically from sim-theory.edn. Do not
+  hand-edit them; regenerate.
+- **Catalogs**: clinical-realities.md and the GLOSSARY grow by
+  convention (four-part entries; collision-first ordering).
+- **Scratch**: positioning-notes.md and research mining notes —
+  honest raw material, clearly marked.
+
+Claims are kept true by machinery, not vigilance: checkable facts
+carry facts-register rows with verification dates; the pipeline
+diagram regenerates from the theory file; every capability lands
+with its invariants in the same change; and an independent
+consumer (the sibling ehr-testing-tools repo) exercises the output
+against its own conformance gate. Where a document says something
+the code contradicts, that is a bug — please report it rather than
+assuming the doc is aspirational.
+
+## Status
+
+Pre-release. The pipeline is built end-to-end through the FHIR/state
+emitter (M6) — every theory stage but Calibrate is now both built and
+property-tested, including the emitter-coherence law itself. A full
+documentation alignment pass is next — expect minor staleness in
+cross-references and counts until then, and treat the ADRs and the
+theory EDN as tiebreakers. This project
+is one of three siblings: the
+[guide](https://github.com/pragsmike/ehr-testing-guide) teaches the
+testing method, the
+[tools](https://github.com/pragsmike/ehr-testing-tools) make it
+runnable, and this simulator generates the traffic. Terms and
+concepts shared with the guide defer to the guide's fuller
+treatment; a crosswalk reconciliation is planned as part of the
+alignment pass.
 
 ========== END FILE ==========
 
@@ -2354,6 +2761,13 @@ generating throwaway ones.
   `ZPI` payer Z-segment) — one `ground-truth.edn` (byte-identical
   either way), two `messages-*.txt` files that differ only on the
   declared dialect surfaces.
+- [`emit-state/`](emit-state/) — Milestone M6's own demo pair: the SAME
+  seed as `order-result/`, rendered once as HL7v2 (`--emit hl7`) and
+  once as FHIR R4 (`--emit fhir`) — two renderings, one truth, with
+  `Patient.id`/`Patient.identifier` resolving to the same patient-id/MRN
+  `ehr-testing-sim.emit-hl7` uses, and the same computed LOINC/abnormal-
+  flag truth visible in both an OBX segment and an `Observation`
+  resource.
 
 Each subdirectory holds:
 
@@ -2372,6 +2786,559 @@ SAME ground truth under two different site profiles, so it holds
 verified when generating this demo), and `messages-default.txt` /
 `messages-aldric.txt` in place of a single `messages.txt`.
 
+========== END FILE ==========
+
+========== FILE: ./docs/demos/emit-state/README.md ==========
+# Demo: EmitState — one seed, two renderings, one truth
+
+Milestone M6's own demo pair: the SAME `--seed 42 --patients 3` run as
+[`../order-result/`](../order-result/) (identical `config.edn`, reused
+here — the ground truth these two demos share is byte-identical by
+construction, the emitter-coherence law made visible), rendered once as
+HL7v2 (`--emit hl7`) and once as FHIR R4 (`--emit fhir`). The pairing is
+the point: two renderings of one immutable ground-truth log, with the
+SAME identifiers resolving across both.
+
+## Commands
+
+```bash
+clojure -M:cli run --seed 42 --patients 3 \
+  --config docs/demos/order-result/config.edn --emit hl7
+
+clojure -M:cli run --seed 42 --patients 3 \
+  --config docs/demos/order-result/config.edn --emit fhir
+```
+
+## What to look for
+
+- [`ground-truth.edn`](ground-truth.edn) — the shared truth both
+  renderings derive from (identical to `order-result/ground-truth.edn`).
+- [`messages.txt`](messages.txt) — the HL7v2 stream (`--emit hl7`), same
+  as `order-result/messages.txt`.
+- [`fhir-bundle-patient1.json`](fhir-bundle-patient1.json) — patient
+  1's own end-of-run FHIR Bundle (`--emit fhir`, `ehr-testing-sim.emit-state/bundle-run`):
+  `Patient`, `Encounter`, five `Observation`s (the CBC panel), and
+  `Coverage` — no `Condition`/`MedicationRequest` here, since this
+  patient's pathway is a plain admission + order + discharge (no module,
+  no medication).
+
+## The ids resolving across both — patient 1 (MRN000001)
+
+Patient 1's opening ADT^A01, verbatim from `messages.txt` (segments
+shown one per line for readability; the real wire format uses `\r`):
+
+```
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ADT^A01|MRN000001-A01-0|P|2.3
+EVN|A01|20240101000000+0000
+PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157
+PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^Amara
+IN1|1||medicare-65|Medicare
+```
+
+The same patient's `Patient` and one `Observation` resource, from
+`fhir-bundle-patient1.json`:
+
+```json
+{
+  "resourceType": "Patient",
+  "id": "PID-000000-918175ce",
+  "identifier": [{"system": "urn:ehr-testing-sim:mrn", "value": "MRN000001"}],
+  "name": [{"family": "Gonzalez", "given": ["Barbara"]}],
+  "gender": "female",
+  "birthDate": "1935-02-21",
+  "address": [{"line": ["22 Chestnut Ct"], "city": "Providence", "state": "RI", "postalCode": "02903"}],
+  "telecom": [{"system": "phone", "value": "607-335-0157"}]
+}
+```
+
+```json
+{
+  "resourceType": "Observation",
+  "id": "PID-000000-918175ce-obs-0",
+  "status": "final",
+  "code": {"coding": [{"system": "http://loinc.org", "code": "6690-2",
+                        "display": "Leukocytes [#/volume] in Blood by Automated count"}]},
+  "valueQuantity": {"value": 21.0, "unit": "K/uL"},
+  "referenceRange": [{"low": {"value": 4.5}, "high": {"value": 11.0}}],
+  "interpretation": [{"coding": [{"code": "H"}]}]
+}
+```
+
+Resolving across both:
+
+- **`Patient.id` ("PID-000000-918175ce") is `ehr-testing-sim.engine/patient-id-for`'s
+  own internal id for patient ordinal 0** — never rendered on the wire
+  itself (HL7 has no field for it), but the SAME id `ehr-testing-sim.emit-hl7`
+  uses internally to know which patient a message is about; the
+  cross-emitter id property test
+  (`ehr-testing-sim.emit-state-test/fhir-patient-id-and-active-mrn-resolve-to-the-same-hl7-identity`)
+  checks exactly this correspondence.
+- **`Patient.identifier[0].value` ("MRN000001") is PID-3, verbatim** —
+  the one identifier both formats actually put on the wire/document.
+- **The Observation's LOINC code (`6690-2`, Leukocytes) and abnormal
+  interpretation (`H`, high) are the SAME computed truth** rendered
+  twice: OBX-8 `H` in the ORU^R01 message (`messages.txt`, not shown
+  above — see `../order-result/README.md`'s own excerpt for the full
+  ORU), and `interpretation[0].coding[0].code "H"` here — both derived
+  from the identical `ehr-testing-sim.order-profiles/abnormal-flag`
+  computation over the identical sampled value, never re-derived
+  independently by either emitter.
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/emit-state/fhir-bundle-patient1.json ==========
+{"resourceType":"Bundle",
+ "type":"collection",
+ "entry":
+ [{"resource":
+   {"resourceType":"Patient",
+    "id":"PID-000000-918175ce",
+    "identifier":
+    [{"system":"urn:ehr-testing-sim:mrn", "value":"MRN000001"}],
+    "name":[{"family":"Gonzalez", "given":["Barbara"]}],
+    "gender":"female",
+    "birthDate":"1935-02-21",
+    "address":
+    [{"line":["22 Chestnut Ct"],
+      "city":"Providence",
+      "state":"RI",
+      "postalCode":"02903"}],
+    "telecom":[{"system":"phone", "value":"607-335-0157"}]}},
+  {"resource":
+   {"resourceType":"Encounter",
+    "id":"PID-000000-918175ce-encounter",
+    "status":"finished",
+    "class":{"code":"IMP"},
+    "subject":{"reference":"Patient\/PID-000000-918175ce"},
+    "period":
+    {"start":"2024-01-01T00:00:00+00:00",
+     "end":"2024-01-01T00:00:00+00:00"}}},
+  {"resource":
+   {"referenceRange":[{"low":{"value":4.5}, "high":{"value":11.0}}],
+    "interpretation":[{"coding":[{"code":"H"}]}],
+    "encounter":
+    {"reference":"Encounter\/PID-000000-918175ce-encounter"},
+    "valueQuantity":{"value":21.0, "unit":"K\/uL"},
+    "resourceType":"Observation",
+    "effectiveDateTime":"2024-01-01T01:21:00+00:00",
+    "status":"final",
+    "id":"PID-000000-918175ce-obs-0",
+    "code":
+    {"coding":
+     [{"system":"http:\/\/loinc.org",
+       "code":"6690-2",
+       "display":
+       "Leukocytes [#\/volume] in Blood by Automated count"}]},
+    "subject":{"reference":"Patient\/PID-000000-918175ce"}}},
+  {"resource":
+   {"referenceRange":[{"low":{"value":4.2}, "high":{"value":5.9}}],
+    "interpretation":[{"coding":[{"code":"N"}]}],
+    "encounter":
+    {"reference":"Encounter\/PID-000000-918175ce-encounter"},
+    "valueQuantity":{"value":4.7, "unit":"M\/uL"},
+    "resourceType":"Observation",
+    "effectiveDateTime":"2024-01-01T01:21:00+00:00",
+    "status":"final",
+    "id":"PID-000000-918175ce-obs-1",
+    "code":
+    {"coding":
+     [{"system":"http:\/\/loinc.org",
+       "code":"789-8",
+       "display":
+       "Erythrocytes [#\/volume] in Blood by Automated count"}]},
+    "subject":{"reference":"Patient\/PID-000000-918175ce"}}},
+  {"resource":
+   {"referenceRange":[{"low":{"value":12.0}, "high":{"value":17.5}}],
+    "interpretation":[{"coding":[{"code":"H"}]}],
+    "encounter":
+    {"reference":"Encounter\/PID-000000-918175ce-encounter"},
+    "valueQuantity":{"value":19.6, "unit":"g\/dL"},
+    "resourceType":"Observation",
+    "effectiveDateTime":"2024-01-01T01:21:00+00:00",
+    "status":"final",
+    "id":"PID-000000-918175ce-obs-2",
+    "code":
+    {"coding":
+     [{"system":"http:\/\/loinc.org",
+       "code":"718-7",
+       "display":"Hemoglobin [Mass\/volume] in Blood"}]},
+    "subject":{"reference":"Patient\/PID-000000-918175ce"}}},
+  {"resource":
+   {"referenceRange":[{"low":{"value":36.0}, "high":{"value":50.0}}],
+    "interpretation":[{"coding":[{"code":"N"}]}],
+    "encounter":
+    {"reference":"Encounter\/PID-000000-918175ce-encounter"},
+    "valueQuantity":{"value":41.2, "unit":"%"},
+    "resourceType":"Observation",
+    "effectiveDateTime":"2024-01-01T01:21:00+00:00",
+    "status":"final",
+    "id":"PID-000000-918175ce-obs-3",
+    "code":
+    {"coding":
+     [{"system":"http:\/\/loinc.org",
+       "code":"4544-3",
+       "display":
+       "Hematocrit [Volume Fraction] of Blood by Automated count"}]},
+    "subject":{"reference":"Patient\/PID-000000-918175ce"}}},
+  {"resource":
+   {"referenceRange":[{"low":{"value":150}, "high":{"value":450}}],
+    "interpretation":[{"coding":[{"code":"N"}]}],
+    "encounter":
+    {"reference":"Encounter\/PID-000000-918175ce-encounter"},
+    "valueQuantity":{"value":280.0, "unit":"K\/uL"},
+    "resourceType":"Observation",
+    "effectiveDateTime":"2024-01-01T01:21:00+00:00",
+    "status":"final",
+    "id":"PID-000000-918175ce-obs-4",
+    "code":
+    {"coding":
+     [{"system":"http:\/\/loinc.org",
+       "code":"777-3",
+       "display":
+       "Platelets [#\/volume] in Blood by Automated count"}]},
+    "subject":{"reference":"Patient\/PID-000000-918175ce"}}},
+  {"resource":
+   {"resourceType":"Coverage",
+    "id":"PID-000000-918175ce-coverage",
+    "status":"active",
+    "beneficiary":{"reference":"Patient\/PID-000000-918175ce"},
+    "payor":[{"display":"Medicare"}],
+    "type":{"text":"medicare"}}}]}
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/emit-state/ground-truth.edn ==========
+[{:event :registered,
+  :t 0,
+  :active-mrn "MRN000001",
+  :persona
+  {:name {:family "Gonzalez", :given "Barbara"},
+   :sex :female,
+   :dob "1935-02-21",
+   :age 89,
+   :address
+   {:street "22 Chestnut Ct",
+    :city "Providence",
+    :state "RI",
+    :zip "02903"},
+   :phone "607-335-0157",
+   :ssn "900-89-4064",
+   :payer {:id "medicare-65", :name "Medicare", :type :medicare}},
+  :participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :active-mrn "MRN000001",
+  :attending "0384055899",
+  :warm-up false,
+  :reason nil,
+  :event :admission,
+  :t 0,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :forced false}
+ {:participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :active-mrn "MRN000001",
+  :attending "0384055899",
+  :warm-up false,
+  :event :order-placed,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 0,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :profile :cbc}
+ {:event :discharge,
+  :t 0,
+  :active-mrn "MRN000001",
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :attending "0384055899",
+  :participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :warm-up false}
+ {:event :registered,
+  :t 3480,
+  :active-mrn "MRN000002",
+  :persona
+  {:name {:family "Smith", :given "Olivia"},
+   :sex :female,
+   :dob "2021-10-17",
+   :age 3,
+   :address
+   {:street "17 Elm Ct", :city "Columbus", :state "OH", :zip "43215"},
+   :phone "944-598-4479",
+   :ssn "900-46-3298",
+   :payer
+   {:id "commercial-ppo", :name "Commercial PPO", :type :commercial}},
+  :participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :active-mrn "MRN000002",
+  :attending "3903633105",
+  :warm-up false,
+  :reason nil,
+  :event :admission,
+  :t 3480,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :forced false}
+ {:participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :active-mrn "MRN000002",
+  :attending "3903633105",
+  :warm-up false,
+  :event :order-placed,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 3480,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :profile :cbc}
+ {:event :discharge,
+  :t 3480,
+  :active-mrn "MRN000002",
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :attending "3903633105",
+  :participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :warm-up false}
+ {:event :registered,
+  :t 4680,
+  :active-mrn "MRN000003",
+  :persona
+  {:name {:family "Williams", :given "Dorothy"},
+   :sex :female,
+   :dob "1945-07-13",
+   :age 79,
+   :address
+   {:street "9 Willow Ct",
+    :city "Richmond",
+    :state "VA",
+    :zip "23219"},
+   :phone "633-802-2352",
+   :ssn "900-99-1868",
+   :payer {:id "self-pay", :name "Self-Pay", :type :self-pay}},
+  :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :active-mrn "MRN000003",
+  :attending "3903633105",
+  :warm-up false,
+  :reason nil,
+  :event :admission,
+  :t 4680,
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :forced false}
+ {:participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :active-mrn "MRN000003",
+  :attending "3903633105",
+  :warm-up false,
+  :event :order-placed,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 4680,
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :profile :cbc}
+ {:event :discharge,
+  :t 4680,
+  :active-mrn "MRN000003",
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :attending "3903633105",
+  :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :warm-up false}
+ {:participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :active-mrn "MRN000001",
+  :attending "0384055899",
+  :warm-up false,
+  :order-event-id 2,
+  :event :result-available,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 4860,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :profile :cbc,
+  :results
+  [{:concept
+    {:system :loinc,
+     :code "6690-2",
+     :display "Leukocytes [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 21.0,
+    :reference-range {:low 4.5, :high 11.0},
+    :abnormal-flag :high}
+   {:concept
+    {:system :loinc,
+     :code "789-8",
+     :display "Erythrocytes [#/volume] in Blood by Automated count"},
+    :units "M/uL",
+    :value 4.7,
+    :reference-range {:low 4.2, :high 5.9},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "718-7",
+     :display "Hemoglobin [Mass/volume] in Blood"},
+    :units "g/dL",
+    :value 19.6,
+    :reference-range {:low 12.0, :high 17.5},
+    :abnormal-flag :high}
+   {:concept
+    {:system :loinc,
+     :code "4544-3",
+     :display
+     "Hematocrit [Volume Fraction] of Blood by Automated count"},
+    :units "%",
+    :value 41.2,
+    :reference-range {:low 36.0, :high 50.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "777-3",
+     :display "Platelets [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 280.0,
+    :reference-range {:low 150, :high 450},
+    :abnormal-flag :normal}]}
+ {:participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :active-mrn "MRN000002",
+  :attending "3903633105",
+  :warm-up false,
+  :order-event-id 6,
+  :event :result-available,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 7020,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :profile :cbc,
+  :results
+  [{:concept
+    {:system :loinc,
+     :code "6690-2",
+     :display "Leukocytes [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 8.1,
+    :reference-range {:low 4.5, :high 11.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "789-8",
+     :display "Erythrocytes [#/volume] in Blood by Automated count"},
+    :units "M/uL",
+    :value 5.49,
+    :reference-range {:low 4.2, :high 5.9},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "718-7",
+     :display "Hemoglobin [Mass/volume] in Blood"},
+    :units "g/dL",
+    :value 12.4,
+    :reference-range {:low 12.0, :high 17.5},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "4544-3",
+     :display
+     "Hematocrit [Volume Fraction] of Blood by Automated count"},
+    :units "%",
+    :value 40.1,
+    :reference-range {:low 36.0, :high 50.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "777-3",
+     :display "Platelets [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 226.0,
+    :reference-range {:low 150, :high 450},
+    :abnormal-flag :normal}]}
+ {:participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :active-mrn "MRN000003",
+  :attending "3903633105",
+  :warm-up false,
+  :order-event-id 10,
+  :event :result-available,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 9600,
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :profile :cbc,
+  :results
+  [{:concept
+    {:system :loinc,
+     :code "6690-2",
+     :display "Leukocytes [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 7.7,
+    :reference-range {:low 4.5, :high 11.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "789-8",
+     :display "Erythrocytes [#/volume] in Blood by Automated count"},
+    :units "M/uL",
+    :value 4.26,
+    :reference-range {:low 4.2, :high 5.9},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "718-7",
+     :display "Hemoglobin [Mass/volume] in Blood"},
+    :units "g/dL",
+    :value 15.6,
+    :reference-range {:low 12.0, :high 17.5},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "4544-3",
+     :display
+     "Hematocrit [Volume Fraction] of Blood by Automated count"},
+    :units "%",
+    :value 49.2,
+    :reference-range {:low 36.0, :high 50.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "777-3",
+     :display "Platelets [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 344.0,
+    :reference-range {:low 150, :high 450},
+    :abnormal-flag :normal}]}]
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/emit-state/messages.txt ==========
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ADT^A01|MRN000001-A01-0|P|2.3EVN|A01|20240101000000+0000PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^Amara|||||||||||||||||||||||||||||IN1|1||medicare-65|Medicare
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ORM^O01|MRN000001-O01-0|P|2.3PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^Amara|||||||||||||||||||||||||||||ORC|NW|MRN000001-O01-0OBR|1|||58410-2^CBC panel - Blood by Automated count^LN
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ADT^A03|MRN000001-A03-0|P|2.3EVN|A03|20240101000000+0000PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^Amara|||||||||||||||||||||||||||||01
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101005800+0000||ADT^A01|MRN000002-A01-3480|P|2.3EVN|A01|20240101005800+0000PID|1||MRN000002||Smith^Olivia||20211017|F|||17 Elm Ct^^Columbus^OH^43215||944-598-4479PV1|1|I|Renal^^RENAL-01^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||IN1|1||commercial-ppo|Commercial PPO
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101005800+0000||ORM^O01|MRN000002-O01-3480|P|2.3PID|1||MRN000002||Smith^Olivia||20211017|F|||17 Elm Ct^^Columbus^OH^43215||944-598-4479PV1|1|I|Renal^^RENAL-01^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||ORC|NW|MRN000002-O01-3480OBR|1|||58410-2^CBC panel - Blood by Automated count^LN
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101005800+0000||ADT^A03|MRN000002-A03-3480|P|2.3EVN|A03|20240101005800+0000PID|1||MRN000002||Smith^Olivia||20211017|F|||17 Elm Ct^^Columbus^OH^43215||944-598-4479PV1|1|I|Renal^^RENAL-01^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||01
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101011800+0000||ADT^A01|MRN000003-A01-4680|P|2.3EVN|A01|20240101011800+0000PID|1||MRN000003||Williams^Dorothy||19450713|F|||9 Willow Ct^^Richmond^VA^23219||633-802-2352PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||IN1|1||self-pay|Self-Pay
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101011800+0000||ORM^O01|MRN000003-O01-4680|P|2.3PID|1||MRN000003||Williams^Dorothy||19450713|F|||9 Willow Ct^^Richmond^VA^23219||633-802-2352PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||ORC|NW|MRN000003-O01-4680OBR|1|||58410-2^CBC panel - Blood by Automated count^LN
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101011800+0000||ADT^A03|MRN000003-A03-4680|P|2.3EVN|A03|20240101011800+0000PID|1||MRN000003||Williams^Dorothy||19450713|F|||9 Willow Ct^^Richmond^VA^23219||633-802-2352PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||01
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101012100+0000||ORU^R01|MRN000001-R01-4860|P|2.3PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^Amara|||||||||||||||||||||||||||||ORC|NW|MRN000001-R01-4860OBR|1|||58410-2^CBC panel - Blood by Automated count^LNOBX|1|NM|6690-2^Leukocytes [#/volume] in Blood by Automated count^LN||21.0|K/uL|4.5-11.0|HOBX|2|NM|789-8^Erythrocytes [#/volume] in Blood by Automated count^LN||4.7|M/uL|4.2-5.9|NOBX|3|NM|718-7^Hemoglobin [Mass/volume] in Blood^LN||19.6|g/dL|12.0-17.5|HOBX|4|NM|4544-3^Hematocrit [Volume Fraction] of Blood by Automated count^LN||41.2|%|36.0-50.0|NOBX|5|NM|777-3^Platelets [#/volume] in Blood by Automated count^LN||280.0|K/uL|150-450|N
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101015700+0000||ORU^R01|MRN000002-R01-7020|P|2.3PID|1||MRN000002||Smith^Olivia||20211017|F|||17 Elm Ct^^Columbus^OH^43215||944-598-4479PV1|1|I|Renal^^RENAL-01^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||ORC|NW|MRN000002-R01-7020OBR|1|||58410-2^CBC panel - Blood by Automated count^LNOBX|1|NM|6690-2^Leukocytes [#/volume] in Blood by Automated count^LN||8.1|K/uL|4.5-11.0|NOBX|2|NM|789-8^Erythrocytes [#/volume] in Blood by Automated count^LN||5.49|M/uL|4.2-5.9|NOBX|3|NM|718-7^Hemoglobin [Mass/volume] in Blood^LN||12.4|g/dL|12.0-17.5|NOBX|4|NM|4544-3^Hematocrit [Volume Fraction] of Blood by Automated count^LN||40.1|%|36.0-50.0|NOBX|5|NM|777-3^Platelets [#/volume] in Blood by Automated count^LN||226.0|K/uL|150-450|N
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101024000+0000||ORU^R01|MRN000003-R01-9600|P|2.3PID|1||MRN000003||Williams^Dorothy||19450713|F|||9 Willow Ct^^Richmond^VA^23219||633-802-2352PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||ORC|NW|MRN000003-R01-9600OBR|1|||58410-2^CBC panel - Blood by Automated count^LNOBX|1|NM|6690-2^Leukocytes [#/volume] in Blood by Automated count^LN||7.7|K/uL|4.5-11.0|NOBX|2|NM|789-8^Erythrocytes [#/volume] in Blood by Automated count^LN||4.26|M/uL|4.2-5.9|NOBX|3|NM|718-7^Hemoglobin [Mass/volume] in Blood^LN||15.6|g/dL|12.0-17.5|NOBX|4|NM|4544-3^Hematocrit [Volume Fraction] of Blood by Automated count^LN||49.2|%|36.0-50.0|NOBX|5|NM|777-3^Platelets [#/volume] in Blood by Automated count^LN||344.0|K/uL|150-450|N
 ========== END FILE ==========
 
 ========== FILE: ./docs/demos/order-result/README.md ==========
@@ -3376,9 +4343,9 @@ This simulator emits both sides *naturally*, not as two independent
 rendering efforts that happen to agree, because the underlying engine
 already has the shape that makes both sides cheap: `hl7v2-stream`
 (`EmitHL7`, built) is the log rendered as messages; `state-document`
-(`EmitState`, planned — M6) will be `state-history` — itself a
-derived fold, per ADR-0008 — rendered as FHIR resources or CDA
-documents at a queried instant. The **emitter-coherence** law
+(`EmitState`, built — M6, FHIR R4 first, CDA deferred) is
+`state-history` — itself a derived fold, per ADR-0008 — rendered as
+FHIR resources at a queried instant. The **emitter-coherence** law
 (`docs/sim-theory.md`'s global laws) — replaying `hl7v2-stream`
 reconstructs `state-history`, and a FHIR snapshot at instant *t* agrees
 with the state implied by messages up to *t* — is not a hoped-for
@@ -3387,6 +4354,63 @@ direct consequence of both emitters consuming the same log-is-primitive
 architecture the domain already implied. This project didn't invent a
 clever trick to keep two output formats in sync; it made explicit a
 structure HL7v2 and FHIR were already, silently, two views of.
+
+## The coherence property, tested
+
+Milestone M6 is where the paragraph above stops being an architectural
+argument and becomes a property test — the first time this project has
+had two emitters to check against each other at all.
+`ehr-testing-sim.v2-replay` is an INDEPENDENT reconstruction of patient
+state, built the wire-consumer's way: parse a run's own emitted ER7
+stream (the same `org.clojars.cmiles74/clojure-hl7-parser` structures
+`EmitHL7` renders through) and fold it, message by message
+(`fold-message`), into state — never touching `ehr-testing-sim.engine`,
+the ground-truth log, or the RNG. This is the same shape `EmitState`'s
+own `snapshot-at` embodies from the log-fold side (ADR-0008's `replay`),
+mirrored from the wire side: two independent folds of two independent
+renderings, checked against each other rather than against a shared
+implementation either could quietly share a bug with.
+
+The comparison needs one more piece, because the two folds don't carry
+identical information by design — the wire is a lossy rendering of
+truth, on purpose (no PV1 field distinguishes a licensed bed from a
+surge slot; DG1/RXO segments for conditions and medications were never
+built). `ehr-testing-sim.v2-replay/project-to-wire-visible-fields` is
+the formal statement of exactly what's wire-visible and what isn't —
+sibling of `ehr-testing-sim.site-profile`'s own dialect-masking function
+(that one states what a *dialect* may touch; this one states what the
+wire carries *at all*, truth-only or not) — applied identically to both
+the log-folded state and the message-reconstructed state before they're
+compared, so "what the wire carries" is answered once, not maintained
+as two hand-tuned shapes that could drift from each other.
+
+The property
+(`ehr-testing-sim.v2-replay-test/emitter-coherence-reconstructed-state-matches-the-log-fold-at-every-boundary`,
+150 trials over pathways, order/result, and non-two-participant churn,
+plus a 150-trial sibling over module-driven trajectories) checks
+agreement at EVERY message boundary, not just end-of-run — the stronger
+claim `docs/sim-theory.md`'s own wording ("a snapshot at instant *t*
+agrees with the state implied by messages up to *t*") actually makes.
+One genuine finding surfaced along the way, not papered over: a
+degenerate but structurally legal churn sequence (a cancel-admit against
+an already-discharged patient's original admission, followed by a
+cancel-discharge) left ground truth's own `:class` field absent, while
+`EmitHL7`'s own PV1-2 rendering always asserts `:inpatient` for that
+message family regardless. The fix landed in `ehr-testing-sim.engine`'s
+own `:cancel-discharge` fold (restoring `:class` as part of what it
+reinstates) — the property caught a real gap in ground truth, and the
+fix closed the gap rather than loosening what the projection would
+tolerate.
+
+The cross-emitter id sub-law (`docs/sim-theory.md`'s global laws,
+originally a named gap this document's own determinism table below
+flagged as open) is checked the same way, from the other direction:
+`ehr-testing-sim.emit-state-test/fhir-patient-id-and-active-mrn-resolve-to-the-same-hl7-identity`
+asserts that a FHIR `Patient.id` is the same `patient-id`
+`ehr-testing-sim.engine/patient-id-for` assigns, and `Patient.identifier`
+carries the same active MRN that patient's own HL7 messages render as
+PID-3 — over 150 random runs, not merely by construction of one
+hand-picked demo.
 
 ## The upstream contrasts: what happens without this made explicit
 
@@ -3515,7 +4539,7 @@ checklist against this project's own defenses.
 | Unordered-collection iteration | Mostly defended (the engine's work queue is a `sorted-map`); gap closed this session — `emitter-order-independence-test` (`test/ehr_testing_sim/emitter_order_independence_test.clj`) guards that `emit-hl7` never depends on a map's or set's own iteration order when building segments |
 | Reference *date* vs full timestamp | Defended: relative seconds (ADR-0011) plus an explicit `:reference-date` and a fixed `:utc-offset`, both pinned in the run manifest, never a bare current-time reference |
 | Locale/OS differences | Partially defended (locale/timezone recorded in the manifest); revisit once CI exists (`.agents/plans/roadmap.md`'s CI trigger) |
-| Cross-format id divergence (CDA vs FHIR vs CSV) | **Gap, open**: "the same event ids and patient ids across every emitter" is not yet a named law — see the cross-emitter id sub-law noted alongside `sim-theory.md`'s emitter-coherence law, testable once EmitState (M6) gives this project a second emitter to check the first against |
+| Cross-format id divergence (CDA vs FHIR vs CSV) | Defended for HL7v2/FHIR, property-tested: `Patient.id`/`Patient.identifier` resolve to the SAME `patient-id`/active-mrn `EmitHL7` uses (`sim-theory.md`'s cross-emitter id sub-law, `emit-state-test/fhir-patient-id-and-active-mrn-resolve-to-the-same-hl7-identity`, 150 trials). CDA is out of scope until it's built (EmitState's own format-dispatch contract note) — not a gap in what's landed, a boundary of what hasn't |
 
 The structural defense behind the first four rows is already argued
 elsewhere in this document (`:patient-id`/`:mrns` generation, the
@@ -5670,7 +6694,30 @@ provenance that these milestones answer real requests.
      way the two prior sessions each recorded. A future session with
      Python (or a WSL shell) available should actually run the
      regeneration once to confirm this argument rather than continue
-     trusting it by inspection alone. -->
+     trusting it by inspection alone.
+
+     M6 NOTE (EmitState, this session): docs/sim-theory.edn's
+     :emit-state flips :planned -> :built. No node, wire, or catalytic
+     input changes -- EmitState's own node and its Execute --
+     state-history --> EmitState wire were both ALREADY present in this
+     file (state-history was always a real output of Execute); the
+     diagram's own documented gap (this file's own "Verified in this
+     render" section, above) means built-vs-planned renders identically
+     regardless, so the ONLY change is docs/sim-theory-equations.txt's
+     own "# planned: EmitState" comment line, now removed. This session
+     ALSO removed two comment lines that were already stale BEFORE this
+     session started ("# planned: RunModules"/"# planned:
+     CompileTrajectory" -- both stages flipped :built at M5a/M5b,
+     several sessions ago; the comments were simply never cleaned up) --
+     a small, adjacent correction, not new drift this session introduced.
+     Python was NOT available in this session's own environment (the
+     python/python3 names on PATH resolve to the Windows Store's
+     install-shim, not a real interpreter) -- the same gap the M5b
+     session recorded for itself. This note records the argument for why
+     no structural change is expected, the same way that session's own
+     note did; a future session with Python (or WSL) available should
+     run the actual regeneration once to confirm, rather than continue
+     trusting inspection alone. -->
 
 # The simulator's resource theory — diagram
 
@@ -5957,10 +7004,8 @@ flowchart LR
 
 sim-config × demographics-tables × payer-pool → persona  [Persona]  {catalytic: demographics-tables, payer-pool}
 
-# planned: RunModules
 persona × gmf-module-set × gmf-interpreter → clinical-trajectory  [RunModules]  {catalytic: gmf-module-set, gmf-interpreter}
 
-# planned: CompileTrajectory
 clinical-trajectory → compiled-pathway  [CompileTrajectory]
 
 pathway-ir × churn-profile → operational-pathway  [InjectChurn]
@@ -5971,7 +7016,6 @@ ground-truth-log × invariant-catalog → pass + rejected  [Check]  {catalytic: 
 
 ground-truth-log × hl7-parser-dep × message-type-registry × snomed-icd10-map × site-profile → hl7v2-stream  [EmitHL7]  {catalytic: hl7-parser-dep, message-type-registry, snomed-icd10-map, site-profile}
 
-# planned: EmitState
 state-history → state-document  [EmitState]
 
 # planned: Package
@@ -6093,18 +7137,15 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
           "dialect invariance (docs/site-profiles.md, the site-profiles milestone's own thesis): for a fixed (config, seed), ground-truth-log is byte-identical across any two site-profile catalytic values -- site-profile can only change hl7v2-stream's rendering (MSH-3/4/5/6/12, code-table-overridden fields, Z-segment content), never a fact -- property-tested (emit-hl7-test/invariance-messages-agree-after-masking-dialect-surfaces, 100 trials green 2026-07-26) alongside the structural guarantee that :site-profile is not a member of ehr-testing-sim.engine/config-keys at all"]
    :contract "v0 scope was ADT^A01 (admission) and ADT^A03 (discharge) only; M1 added A02 (transfer); M2b adds the full churn family -- A11/A12/A13 (cancel-admit/cancel-transfer/cancel-discharge), A17 (bed-swap, ONE message carrying both patients' PID/PV1 pairs -- the real HL7v2 A17 shape), and A40 (merge, PID carries the surviving MRN, MRG-1 the prior/merged-away one). MSH/EVN/PID/PV1(/MRG) populated minimally, on org.clojars.cmiles74/clojure-hl7-parser's structures (the emitter's only runtime dependency, docs/third-party-sources.md). Timestamps render from a pinned :reference-date run-config input (ehr-testing-sim.emit-hl7/default-reference-date), never wall-clock. M3: ORM^O01 (order-placed -- ORC-1 \"NW\", OBR-4 the panel-level LOINC concept as CWE) and ORU^R01 (result-available -- OBR-4 the same panel concept, one OBX per analyte: OBX-3 CWE with the analyte's own LOINC triplet, OBX-5 value, OBX-6 units, OBX-7 reference range as \"low-high\", OBX-8 the abnormal flag rendered in HL7's own N/L/H vocabulary, Table 0078). Neither carries EVN (an ADT-specific segment, not part of the order-message family, HL7v2 convention). :step-rejected renders NOTHING -- no message-type-registry entry, by design (ADR-0012): truth about the run, never wire traffic. The site-profiles milestone (this session): `site-profile` (ehr-testing-sim.site-profile/SiteProfile, catalytic target 3 -- an optional, all-keys-optional config value, absent/nil/{} all rendering identically to the pre-milestone baseline) lands as a REAL catalytic wire, not merely declared -- MSH-3/4/5/6/12 (sending/receiving app+facility, version id -- SimHospital issue #17's own citation, .agents/plans/roadmap.md), PV1-2/PV1-36 (patient-class/discharge-disposition code-table overrides, rendering-time substitutions over the SAME underlying state value), and a Z-segment template DSL (field->state/persona/event-path bindings, rendered after standard segments on their own declared trigger, escaped per ER7, unbound paths empty rather than throwing -- SimHospital issue #21's own citation for the custom-segment scope item). `:naming :surge-format`'s migration to the profile is the one documented exception bound at CONFIG time rather than emit time (ehr-testing-sim.site-profile/apply-naming, a facility-config transform a caller applies before Execute, never auto-wired) -- named here so this stage's own catalytic doesn't silently claim credit for it."}
 
-  ;; NEXT -- Milestone M6 (.agents/plans/roadmap.md): EmitState,
-  ;; state-document rendering from state-history, FHIR before CDA.
-  ;; Moved here from :trajectory once M5b landed the real vendored
-  ;; module and the persona -> modules -> trajectory -> IR wiring.
   {:id :emit-state
    :label "EmitState"
    :kind :transform
-   :status :planned
+   :status :built
    :inputs ["state-history"]
    :outputs ["state-document"]
-   :laws ["snapshot-at-instant: a state-document is a pure function of state-history at a queried simulated instant -- no access to the log, the engine, or the RNG"
-          "format dispatch: \"state-document\" is FHIR resources or a CDA document, resolved at call time -- one equation for both formats, the same deliberate collapsing tools' Gate documents for judge.fhir/judge.v2 rather than duplicating the equation per format"]}
+   :laws ["snapshot-at-instant: a state-document is a pure function of state-history at a queried simulated instant -- no access to the log, the engine, or the RNG -- property-tested (v2-replay-test/emitter-coherence-reconstructed-state-matches-the-log-fold-at-every-boundary, 150 trials green, plus its own module-driven-outpatient sibling, 150 trials green, 2026-07-27)"
+          "format dispatch: \"state-document\" is FHIR resources or a CDA document, resolved at call time -- one equation for both formats, the same deliberate collapsing tools' Gate documents for judge.fhir/judge.v2 rather than duplicating the equation per format"]
+   :contract "M6 (landed): FHIR R4 only (ehr-testing-sim.emit-state) -- a Bundle (JSON, data.json) of Patient/Encounter/Condition/Observation/MedicationRequest/Coverage, minimal-but-valid, built entirely from ehr-testing-sim.engine's own folded PatientState (extended this milestone: :conditions/:observations/:medication-orders/:discharged-at now land in the fold itself, the same reason :location/:persona already do -- state-history could not otherwise hold what EmitState needed to render without reading the log directly, which the snapshot-at-instant law forbids). CDA is the format dispatch's OTHER arm, deferred with this contract note -- no XML shell, no half-finished document type, a future session adds a sibling emitter namespace and a dispatch key, not an extension of this one. `sim run --emit fhir [--at <seconds>]` (default: end of run) is the CLI surface, the same verb grammar `--emit hl7` already established. Cross-emitter id sub-law (below): every resource id/reference derives from patient-id/active-mrn, the SAME identifiers EmitHL7 renders -- property-tested (emit-state-test/fhir-patient-id-and-active-mrn-resolve-to-the-same-hl7-identity, 150 trials green, 2026-07-27)."}
 
   {:id :package
    :label "Package"
@@ -6115,6 +7156,12 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
    :laws ["appends provenance: the manifest records every pinned input (seed, engine params, config hash, environment) in the tools-ingestible ManifestV1_1 mirror shape (ADR-0001 clause 5; ehr-testing-sim.manifest, :built ahead of its stage)"]
    :contract "manifest construction is :built (manifest-test green); packaging around it is :planned -- a stage may be further along than its equation's status when a component shipped early"}
 
+  ;; NEXT -- Milestone M6's own roadmap entry names Calibrate as the
+  ;; last planned stage once EmitState lands (this session). Package
+  ;; stays :planned too (only its manifest component shipped early,
+  ;; its own :contract note above) -- Calibrate is where the marker
+  ;; moves per the roadmap's own ordering, not a claim that Package is
+  ;; equally far along.
   {:id :calibrate
    :label "Calibrate"
    :kind :feedback
@@ -6167,29 +7214,36 @@ One file describes three systems:
   current guess at the envisioned system; it will change, and changes
   land as edits to the EDN with ADRs where they're structural.
 - **now** — the `:status :built` subset: **Execute**, **Check**,
-  **EmitHL7**, **InjectChurn** (M2b), **Persona** (M4), and, as of
-  Milestone M5b, **RunModules** and **CompileTrajectory** (each
-  walking-skeleton, v1-slice, or v0-slice scope, per their `:contract`
-  notes), plus the manifest component inside Package that shipped ahead
-  of its stage. As of Milestone M3, Execute's own step vocabulary
-  further grows (`:order`/`:result-followup`, the `order-profiles`
-  catalytic now real) and EmitHL7 gains ORM^O01/ORU^R01. As of the
-  site-profiles milestone, EmitHL7 gains a fourth catalytic
-  (`site-profile`) — MSH dialect, code-table overrides, and Z-segment
-  templates, all property-tested against the dialect-invariance law
-  stated on that stage's own equation entry. As of Milestone M5b,
-  Execute's step vocabulary grows again (`:outpatient-visit`/
-  `:outpatient-visit-end`/`:procedure`/`:observation`/
-  `:medication-order`/`:medication-end`) and EmitHL7 gains A04
-  (outpatient visit) and a second ORU^R01 rendering (an unsolicited
-  Observation, no order context). Everything the *now* claims is
-  property-tested and green (350 tests / 863 assertions, 2026-07-27).
-- **next** — the single stage marked `;; NEXT` in the EDN: **EmitState**,
-  Milestone M6 — state-document rendering from `state-history`, FHIR
-  resources before CDA. RunModules/CompileTrajectory's own two-session
-  split (M5a the interpreter library, M5b the real vendored module plus
-  the actual persona → modules → trajectory → IR wiring) is complete;
-  both stages are `:built` and the `;; NEXT` marker has moved on.
+  **EmitHL7**, **InjectChurn** (M2b), **Persona** (M4), **RunModules**
+  and **CompileTrajectory** (M5b; each walking-skeleton, v1-slice, or
+  v0-slice scope, per their `:contract` notes), and, as of Milestone M6,
+  **EmitState** (FHIR R4 only, CDA deferred with its own contract note)
+  — plus the manifest component inside Package that shipped ahead of
+  its stage. As of Milestone M3, Execute's own step vocabulary further
+  grows (`:order`/`:result-followup`, the `order-profiles` catalytic now
+  real) and EmitHL7 gains ORM^O01/ORU^R01. As of the site-profiles
+  milestone, EmitHL7 gains a fourth catalytic (`site-profile`) — MSH
+  dialect, code-table overrides, and Z-segment templates, all
+  property-tested against the dialect-invariance law stated on that
+  stage's own equation entry. As of Milestone M5b, Execute's step
+  vocabulary grows again (`:outpatient-visit`/`:outpatient-visit-end`/
+  `:procedure`/`:observation`/`:medication-order`/`:medication-end`) and
+  EmitHL7 gains A04 (outpatient visit) and a second ORU^R01 rendering
+  (an unsolicited Observation, no order context). As of Milestone M6,
+  `ehr-testing-sim.engine`'s own fold (`PatientState`) grows a
+  clinical-content accumulator (`:conditions`/`:observations`/
+  `:medication-orders`/`:discharged-at`) so EmitState can render from
+  folded state alone, never the log directly — the concrete mechanism
+  behind the now-property-tested emitter-coherence global law, below.
+  Everything the *now* claims is property-tested and green (388 tests /
+  1015 assertions, 2026-07-27).
+- **next** — the single stage marked `;; NEXT` in the EDN: **Calibrate**,
+  the feedback stage that fits a run's churn parameters to a site's own
+  observed feed statistics — the last stage with nothing built yet.
+  EmitState (Milestone M6) is complete: FHIR R4 resources render from
+  folded state, the emitter-coherence global law (below) is a real
+  property test for the first time, and the `;; NEXT` marker has moved
+  on.
 
 No schema keys were invented for this convention — it lives in
 comments and here, keeping the EDN loadable by tools' Pipeline Malli
@@ -6396,8 +7450,8 @@ whose name binds to nothing is malformed. Bindings, with build status:
 | `compiled-pathway`, `authored-pathway`, `pathway-ir`, `operational-pathway` | Malli, `ehr-testing-sim.pathway` — the union binds to `[:or …]` of its members per the notation; `operational-pathway`'s type IS the IR type (the endomorphism law). `compiled-pathway` is real as of M5b (`ehr-testing-sim.compile-trajectory`, six new step types plus the `:citation`/`:conditions` provenance fields) | v1 built |
 | `ground-truth-log` | Malli, planned as data; shape established by `engine/run` and consumed by `check` | de-facto built |
 | `state-history` | Malli, planned — per-patient `[t → state]`; today implicit in the pure fold, the want makes it a first-class output | planned |
-| `hl7v2-stream` | ER7 messages over the parser's structures | planned |
-| `state-document` | FHIR JSON or CDA XML (format dispatch) | planned |
+| `hl7v2-stream` | ER7 messages over the parser's structures | v1 built |
+| `state-document` | FHIR R4 JSON (`ehr-testing-sim.emit-state`) now; CDA XML deferred with a contract note | M6 built (FHIR arm) |
 | `run-manifest` | Malli, `ehr-testing-sim.manifest/MirroredManifest` (tools' ManifestV1_1 mirror) | built |
 | `sim-corpus` | directory layout + manifest, planned | planned |
 | `churn-profile` | Malli, `ehr-testing-sim.churn/ChurnProfile` — step-type → per-insertion-point probability | v1 built |
@@ -6451,20 +7505,53 @@ distributions), never raw feed content, and Calibrate's own law
 confines its influence to churn parameters — operational realism may
 learn from a site; clinical content never does.
 
-**Emitter coherence.** `hl7v2-stream` and every `state-document` are
-renderings of the same ground truth: replaying the message stream
-reconstructs `state-history`, and a snapshot at instant *t* agrees
-with the state implied by the messages up to *t*. This is the
-problem-statement guarantee "every message derivable from the log, and
-vice versa," extended across emitters — a *want*-level law that
-becomes a cross-emitter property test when EmitState lands. A named
-sub-law, surfaced by mining Synthea's own cross-format id divergence
-between CDA, FHIR, and CSV exports
+**Emitter coherence — PROPERTY-TESTED, Milestone M6.** `hl7v2-stream`
+and every `state-document` are renderings of the same ground truth:
+replaying the message stream reconstructs `state-history`, and a
+snapshot at instant *t* agrees with the state implied by the messages
+up to *t*. This is the problem-statement guarantee "every message
+derivable from the log, and vice versa," extended across emitters —
+stated as a *want*-level law since this file's own earlier drafts, now
+a real property test:
+`ehr-testing-sim.v2-replay-test/emitter-coherence-reconstructed-state-matches-the-log-fold-at-every-boundary`
+(150 trials, pathways + order/result + non-two-participant churn) and
+its sibling `emitter-coherence-holds-for-module-driven-outpatient-trajectories`
+(150 trials, module-driven trajectories), both green 2026-07-27. The
+mechanism: `ehr-testing-sim.v2-replay` folds a run's own emitted ER7
+stream through an independent reconstruction (`fold-message`), and
+`ehr-testing-sim.v2-replay/project-to-wire-visible-fields` — a
+deliverable in its own right, the formal statement of what the wire
+actually carries, sibling of `ehr-testing-sim.site-profile`'s own
+dialect-masking function — projects BOTH the reconstructed and the
+log-folded state down to the same comparable shape before comparing.
+Documented scope boundary, not silent: the property excludes bed-swap
+(A17) and merge (A40), genuinely two-participant messages whose own
+wire-identity reconstruction (a shared MRN reassigned mid-run) is real,
+separate engineering scope — `ehr-testing-sim.v2-replay`'s own header
+comment and `unsupported-triggers` name this precisely, the same
+"deferred with a contract note" treatment EmitState's own CDA arm gets.
+One genuine finding surfaced and fixed during this property's own
+development: a degenerate but structurally legal churn sequence
+(cancel-admit against an already-discharged patient's original
+admission, followed by cancel-discharge) left ground truth's own
+`:class` absent while the wire always asserts `:inpatient` for that
+message family regardless — `ehr-testing-sim.engine/evolve`'s own
+`:cancel-discharge` method now restores `:class` as part of its
+reinstatement, closing the gap in ground truth rather than loosening
+the projection to hide it.
+
+A named sub-law, surfaced by mining Synthea's own cross-format id
+divergence between CDA, FHIR, and CSV exports
 (`docs/research/SimHospital-Synthea-limitations-considered.md` §4.1):
 **every emitter renders the same event ids and patient ids for the
 same ground-truth facts** — no format-local id scheme, no re-derivation
 that could drift from another emitter's choice for the same event.
-Testable at M6, once EmitState exists to check EmitHL7 against.
+PROPERTY-TESTED alongside the law above:
+`ehr-testing-sim.emit-state-test/fhir-patient-id-and-active-mrn-resolve-to-the-same-hl7-identity`
+(150 trials, green 2026-07-27) — FHIR `Patient.id` is the same
+`patient-id` `ehr-testing-sim.engine/patient-id-for` assigns, and
+`Patient.identifier`'s MRN matches PID-3 on that same patient's own
+HL7 messages, over random runs.
 
 **Code provenance.** Concept triplets flow unchanged from module JSON
 through trajectory, IR, and log; emitters render codes natively and
@@ -6519,6 +7606,224 @@ Recorded here rather than silently decided:
    transport below the theory's level of description, not a stage. If
    paced/real-time emission ever acquires laws of its own (e.g.
    bounded reordering), it earns an equation then.
+
+========== END FILE ==========
+
+========== FILE: ./docs/simulate-your-facility.md ==========
+# Simulate *your* facility — an FAQ for domain experts
+
+You know your hospital: which units board patients in hallways, what
+your registration system calls an observation stay, which Z-segment
+your downstream systems will reject a feed without. This page is for
+you. It answers, in order: what you can customize, what information
+to gather, where it goes, how to run it, how to check the output
+"sounds like us," and — honestly — what this simulator can't do for
+you yet.
+
+You will not write code. Everything below is one configuration file.
+Unfamiliar words (ours or the domain's) are in the
+[glossary](GLOSSARY.md).
+
+<!-- MAINTENANCE: the example config below must be validated against
+     config.clj's schemas (m/validate) whenever schemas change; the
+     committing session for this file should run that check. -->
+
+## What can I actually customize today?
+
+Two kinds of knobs, and the distinction matters:
+
+**Knobs that change what happens** — your facility's structure and
+behavior:
+- **Units and beds**: your ward list, bed counts per ward, how many
+  hallway/surge spots each has, and the naming scheme for them
+  (every hospital labels hallway spots differently; yours is
+  config, not our guess).
+- **Load**: how fast patients arrive relative to your capacity.
+  Crowding effects — boarding, hallway placement, transfers when a
+  bed frees — are not scripted; they *emerge* from pressure, the
+  way they do in your building. Want a corpus that feels like your
+  worst Tuesday? Turn up arrivals.
+- **People**: a provider pool (names, roles, which wards they
+  cover) and a payer mix (Medicare/Medicaid/commercial/self-pay
+  weights; age-linked automatically).
+- **Mess**: how often transfers get cancelled, discharges get
+  reversed, beds get swapped, duplicate registrations get merged —
+  the administrative churn that breaks interfaces, at rates you
+  choose.
+- **Clinical content**: which visit/order scenarios run and how
+  often (weighted), which disease modules drive patient
+  trajectories, which lab panels exist (with real LOINC codes,
+  units, and reference ranges).
+
+**Knobs that change only how it's written down** — your dialect:
+- Your **message-header identity** (sending/receiving application
+  and facility, the HL7 version your systems expect in MSH-12).
+- Your **local code values** — what YOUR site puts in patient class
+  (PV1-2) and discharge disposition (PV1-36), including values no
+  standard table lists.
+- Your **Z-segments** — house segments with fields drawn from
+  patient state (payer type, ward, whatever your downstream
+  expects).
+
+The guarantee behind the split: dialect never changes the underlying
+events. Run the same seed with two different site profiles and you
+get the *same hospital day* written in two accents — which also
+means you can share findings across configurations meaningfully.
+
+## What information should I gather first?
+
+The site interview — most analysts can fill this from memory:
+
+1. Unit list: name, bed count, hallway/surge spot count, and your
+   labeling scheme for surge spots (e.g. `ED-H01`, `4W-HALL-3`).
+2. Which unit is your ED.
+3. A handful of attending physicians per unit (names can be
+   invented — see the safety note below).
+4. Your rough payer mix, as percentages.
+5. Your MSH identities: sending app/facility, receiving
+   app/facility, HL7 version.
+6. Your local patient-class and disposition code values, if they
+   differ from the standard tables (they do).
+7. Any Z-segments your downstream systems expect, and what data
+   rides in each field.
+8. Optional, for realism tuning: rough rates — cancellations per
+   hundred admissions, how often your ED boards, typical
+   length-of-stay range. Summary numbers only.
+
+## Where does it all go?
+
+One EDN file (EDN is JSON's tidier cousin; edit it in any text
+editor). An annotated sketch — section by section, matching the
+interview:
+
+```clojure
+{;; 1–2: your units
+ :facility {:id "stmarys"
+            :wards [{:id "ED"    :name "Emergency"  :beds 20
+                     :surge-slots 8 :surge-format "%s-H%02d" :class :ed}
+                    {:id "MED4W" :name "4 West Med" :beds 24
+                     :surge-slots 4 :surge-format "%s-HALL-%d" :class :inpatient}
+                    {:id "TELE"  :name "Telemetry"  :beds 16
+                     :surge-slots 0 :class :inpatient}]}
+
+ ;; 3: your people (synthetic names; NPIs are generated, valid-format)
+ :providers [{:name {:family "Okafor" :given "A."} :role :attending
+              :specialty "Hospital Medicine" :wards ["MED4W" "TELE"]}
+             {:name {:family "Reyes" :given "M."} :role :attending
+              :specialty "Emergency Medicine" :wards ["ED"]}]
+
+ ;; 4: your payer mix
+ :payers [{:id :medicare   :name "Medicare"        :type :medicare   :weight 45}
+          {:id :bcbs       :name "BCBS Commercial" :type :commercial :weight 35}
+          {:id :medicaid   :name "State Medicaid"  :type :medicaid   :weight 15}
+          {:id :self       :name "Self-pay"        :type :self-pay   :weight 5}]
+
+ ;; clinical content: weighted scenarios and/or disease modules.
+ ;; A patient may have a pathway OR a module, never both -- a pathway
+ ;; that admits/visits AND a module (which also opens its own
+ ;; encounter) would double-book one patient's single visit and is
+ ;; rejected at config time, before a run ever starts.
+ :pathways [{:pathway "admit-cbc-discharge" :weight 3}
+            {:pathway "simple-admission"    :weight 7}]
+ :modules ["sinusitis"]
+
+ ;; 8: your mess, at your rates
+ :churn-profile {:cancel-transfer 0.05 :cancel-discharge 0.02
+                 :bed-swap 0.03 :merge 0.01}
+
+ ;; 5–7: your dialect (changes rendering only, never the events)
+ :site-profile
+ {:name "stmarys-prod-dialect"
+  :msh {:version "2.5.1"
+        :sending-app "STM-EHR" :sending-facility "STMARYS"
+        :receiving-app "RHAPSODY" :receiving-facility "STM-HUB"}
+  :code-tables {:patient-class {:inpatient "IN" :outpatient "CLI"}
+                :discharge-disposition {:home "01H"}}
+  :z-segments [{:segment "ZPI"
+                :on [:admission]
+                :fields [[:persona :payer :type]
+                         [:location :ward]
+                         "STM-PAYER-V2"]}]}}
+```
+
+Field names above are illustrative of the real schema — the shipped
+examples in [demos/](demos/) are always exact and runnable; start
+from one of those and edit.
+
+## How do I run it, and get messages?
+
+```bash
+clojure -M:cli run --seed 42 --patients 40 --churn \
+        --config stmarys.edn --emit hl7
+```
+
+Same seed + same file = byte-identical output, every time, on any
+machine. That means: pin a seed you like and it's a permanent test
+case; share the config file instead of gigabytes of messages; and
+when something interesting happens at seed 4217, everyone can see
+exactly the same thing.
+
+## How do I check it "sounds like us"?
+
+Three passes, cheapest first: read a page of messages next to a page
+of your real feed (identities, code values, Z-segments should look
+native); confirm the operational texture (with load turned up, you
+should see boarding in YOUR hallway labels, transfers when beds
+free, and your configured churn); and if you have downstream test
+environments, point the output at one — messages arrive as files
+today (see "not yet" for delivery).
+
+## Is any of this a privacy risk?
+
+No real patient exists anywhere in the pipeline — the generator is
+rules plus public statistical tables, so there is nothing to leak,
+by construction. Two practices keep it that way on your side: invent
+provider names rather than listing your actual staff, and when
+tuning realism, provide *summary statistics* (rates, mixes) — never
+excerpts of your real feed.
+
+## What if synthetic data ever reached a real system — how would we find and remove it?
+
+You wouldn't have to hunt for it; you can list it exactly. The same
+config-plus-seed that generated a corpus regenerates it byte-for-byte, so the
+complete inventory of every identifier it ever contained (MRNs, visit numbers,
+message control IDs, FHIR resource ids) is always recoverable — feed that list
+to your system's purge tooling. On the FHIR side, every resource additionally
+carries the standard HTEST "test data" security label and a generator tag, so
+it's searchable and bulk-deletable by query. On the HL7v2 side, synthetic
+identifiers are deliberately fingerprinted (invalid-range SSNs, documented MRN
+and control-ID formats). And the write-safety gates exist so this question stays
+hypothetical.
+
+## What can't it do yet? (Honest list)
+
+- **Learn your rates automatically.** Today you hand-tune churn and
+  load to your observed numbers; a calibration mode that fits them
+  from your summary statistics is designed but not built.
+- **Guarantor (GT1) and version-specific message restructuring.**
+  The MSH-12 version is your literal; segment layouts don't reshape
+  per version yet.
+- **Your order catalog wholesale.** Lab panels ship with a starter
+  set (real LOINC); adding your own panels is a config-format away
+  rather than a today feature — ask.
+- **Network delivery.** Output is files/streams; MLLP delivery is
+  deliberately out of scope here (point your interface engine's
+  file reader at it, or ask about the tools sibling).
+- **Broken-feed conditions.** This simulator *always* produces
+  coherent, ordered traffic — that's a guarantee, not a gap.
+  Out-of-order, dropped, or mangled delivery is injected downstream
+  by the [tools](https://github.com/pragsmike/ehr-testing-tools)
+  sibling, with a record of exactly what was damaged.
+
+## Who do I ask?
+
+If your facility has a quirk this page doesn't cover — a location
+scheme, a code value, a workflow — there's a good chance it's in
+[clinical-realities.md](clinical-realities.md) already (post-mortem
+transfers, hallway parking, newborn merges, results after
+discharge...). If it isn't, that catalog is exactly where it should
+be added: open an issue describing the reality, and how you'd know
+the simulation got it right.
 
 ========== END FILE ==========
 
@@ -8021,6 +9326,7 @@ row, replacing "OPEN."
 | F10 | SNOMED CT `36971009` is "Sinusitis (disorder)"; `185345009` is "Encounter for symptom"; `315618009` is "FESS - Functional endoscopic sinus surgery - sphenoethmoidectomy" (a procedure concept). Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` (M5a's hand-written GMF interpreter fixture, ADR-0013 point 6 — this project's own authored data, not vendored Synthea content, so no NOTICE obligation) for `ConditionOnset`/`Encounter`/`Procedure` state concept triplets. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | NCBO BioPortal SNOMED CT US Edition concept pages (`bioportal.bioontology.org/ontologies/SNOMEDCT?p=classes&conceptid=<id>`), confirmed by web search this session (no direct browser fetch — `browser.ihtsdotools.org` and `clinicaltables.nlm.nih.gov` both returned 403/unreachable to this session's fetch tools) | 2026-07-27 | verified this session (search-engine-mediated, not a direct primary-source fetch — see this row's own evidence note) |
 | F11 | LOINC `8310-5` is "Body temperature" (component "Body temperature", `LP65487-8`). Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` for its `Observation` state's concept triplet. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | `loinc.org/8310-5` (title confirmed via web search this session; direct fetch returned HTTP 403) | 2026-07-27 | verified this session (search-engine-mediated) |
 | F12 | RxNorm RXCUI `308191` is "Amoxicillin 500 MG Oral Capsule". Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` for its `MedicationOrder` state's concept triplet. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | RxNorm/NDC crosswalk data, confirmed via web search this session (direct fetch to `rxnav.nlm.nih.gov` timed out — DNS/network unreachable to this session's fetch tools) | 2026-07-27 | verified this session (search-engine-mediated, not a direct RxNav API fetch — see this row's own evidence note) |
+| F13 | This repo's own development/test JVM (as invoked by `clojure -X:test` in the M6 session's own environment) is JDK 8 (`1.8.0_311`) — `java.net.http.HttpClient` (JDK 11+) is therefore unavailable; `test/ehr_testing_sim/blaze_integration_test.clj`'s own HTTP calls use `java.net.HttpURLConnection` (JDK 1.1+) instead, for exactly this reason. This is an observation about ONE session's own runtime, not a repo-wide pinned minimum-JDK claim (`deps.edn` states no `:min-jdk` and this repo has no CI yet to enforce one) — recorded so a future session doesn't reintroduce `java.net.http` without re-checking. | `test/ehr_testing_sim/blaze_integration_test.clj` (its own header docstring) | `(System/getProperty "java.version")`, run directly this session | 2026-07-27 | verified this session (this session's own runtime only, not a pinned repo-wide claim) |
 
 ========== END FILE ==========
 
@@ -9704,6 +11010,7 @@ logic, not patient records.
    :patients {:coerce :long}
    :arrival-gap {:coerce :long}
    :emit {:coerce :string}
+   :at {:coerce :long}
    :reference-date {:coerce :string}
    :utc-offset {:coerce :string}
    :warm-up-seconds {:coerce :long}
@@ -9724,7 +11031,8 @@ logic, not patient records.
      :flags [{:flag "--seed" :doc "RNG seed (required; same config+seed => identical output)"}
              {:flag "--patients" :doc "number of patients" :default "1"}
              {:flag "--arrival-gap" :doc "max minutes between arrivals" :default "60"}
-             {:flag "--emit" :doc "render messages into the payload (\"hl7\" for ADT^A01/A03)"}
+             {:flag "--emit" :doc "render output into the payload (\"hl7\" for ADT/ORM/ORU messages, \"fhir\" for a Bundle per patient)"}
+             {:flag "--at" :doc "with --emit fhir: seconds from run start to snapshot (default: end of run)"}
              {:flag "--reference-date" :doc "ISO date anchoring HL7 timestamps (pinned input)" :default "2024-01-01"}
              {:flag "--utc-offset" :doc "fixed ISO offset suffixed onto HL7 timestamps (pinned input, no DST)" :default "+00:00"}
              {:flag "--warm-up-seconds" :doc "events before this mark :warm-up true (log stays complete)" :default "0"}
@@ -10913,6 +12221,228 @@ logic, not patient records.
 
 ========== END FILE ==========
 
+========== FILE: ./src/ehr_testing_sim/emit_state.clj ==========
+(ns ehr-testing-sim.emit-state
+  "EmitState (docs/sim-theory.edn): state-history -> FHIR R4 Bundle
+  (JSON, via data.json -- no new dep). Format dispatch: FHIR now, CDA is
+  the dispatch's other arm, deferred with a contract note (below) rather
+  than stubbed.
+
+  Laws:
+  1. Snapshot-at-instant: `snapshot-at` is a pure function of REPLAY
+     RECORDS (ehr-testing-sim.engine/replay's own output -- the fold,
+     ADR-0008) at a queried instant `t`. No access to the log beyond
+     the fold: everything downstream of `snapshot-at` (the resource
+     builders, `patient-bundle`) reads ONLY the folded PatientState map
+     `replay` already computed -- never a raw ground-truth event's own
+     fields, never the RNG, never the clock. `bundle-run` is the one
+     convenience call site that also calls `replay` itself, so a caller
+     never has to; it does not weaken the law, since `replay` IS the
+     fold this law is about, the same one ehr-testing-sim.check already
+     reuses rather than reimplementing (ADR-0008's own precedent).
+  2. Format dispatch: FHIR resources now. A CDA arm is real future
+     scope (docs/sim-theory.edn's own equation names both), not stubbed
+     here -- no XML shell, no half-finished document type. A future
+     session adding CDA support does so by adding a sibling emitter
+     namespace and a dispatch key, not by extending this one.
+  3. Cross-emitter id sub-law (the GLOBAL emitter-coherence law, docs/
+     sim-theory.md): every resource id/reference here derives from the
+     SAME identifiers ehr-testing-sim.emit-hl7 renders -- Patient.id is
+     the patient-id ehr-testing-sim.engine/patient-id-for assigns
+     (never a fresh UUID), Patient.identifier carries the active-mrn
+     ehr-testing-sim.emit-hl7 renders as PID-3, and every other
+     resource's own id is a deterministic, patient-id-scoped ordinal
+     (Encounter/Condition/Observation/MedicationRequest), never
+     invented independently of state. Property-tested in
+     emit-state-test/fhir-patient-id-and-active-mrn-resolve-to-the-
+     same-hl7-identity.
+  4. Minimal-but-valid, no invented fields: the rendered resource set is
+     exactly Patient/Encounter/Condition/Observation/MedicationRequest/
+     Coverage, each populated ONLY from fields ehr-testing-sim.engine's
+     own fold already carries (this namespace's own header comment on
+     ehr-testing-sim.engine/PatientState records what had to LAND in
+     the fold for this reason). Procedure is deliberately absent --
+     ground truth carries :procedure events, but nothing in this
+     resource set needs them, and inventing a seventh resource type
+     nobody asked for would violate this law for its own sake."
+  (:require [ehr-testing-sim.engine :as engine]))
+
+;; --- Law 1: snapshot-at-instant -------------------------------------------
+
+(defn snapshot-at
+  "{patient-id -> PatientState} as it stood at simulated instant `t`,
+  given `replay-records` (ehr-testing-sim.engine/replay's own output).
+  Pure: the last record whose own event occurred at or before `t`
+  supplies its `:world-after`; no applicable record (t before this
+  run's first event, or an empty run) -> {}."
+  [replay-records t]
+  (let [applicable (take-while #(<= (:t (:event %)) t) replay-records)]
+    (if (seq applicable) (:world-after (last applicable)) {})))
+
+;; --- CodeableConcept / timestamp rendering ---------------------------------
+
+(defn- coding-system-uri
+  "Concept :system keyword -> FHIR's own canonical coding-system URI
+  (the standard mappings for this project's four code systems, ADR-0002's
+  native-code-rendering law extended to FHIR: never translated, only
+  its SYSTEM identifier is format-specific)."
+  [system]
+  (case system
+    :snomed "http://snomed.info/sct"
+    :loinc "http://loinc.org"
+    :rxnorm "http://www.nlm.nih.gov/research/umls/rxnorm"
+    :icd10cm "http://hl7.org/fhir/sid/icd-10-cm"
+    :cvx "http://hl7.org/fhir/sid/cvx"
+    (name system)))
+
+(defn- codeable-concept
+  [concepts]
+  {:coding (mapv (fn [{:keys [system code display]}]
+                   (cond-> {:system (coding-system-uri system) :code code}
+                     display (assoc :display display)))
+                 concepts)})
+
+(def ^:private iso-formatter java.time.format.DateTimeFormatter/ISO_LOCAL_DATE_TIME)
+
+(defn- iso-timestamp
+  "The same pinned-clock arithmetic ehr-testing-sim.emit-hl7/hl7-timestamp
+  uses (reference-date + seconds, suffixed with the pinned utc-offset) --
+  rendered in ISO-8601 (FHIR's own dateTime shape) instead of HL7's
+  colon-free zone convention. Kept independent of emit-hl7's own
+  formatter (no cross-emitter code dependency) -- two renderings of one
+  pinned clock, not one emitter calling the other."
+  [reference-date seconds utc-offset]
+  (str (.format (.plusSeconds (.atStartOfDay (java.time.LocalDate/parse reference-date)) (long seconds))
+                iso-formatter)
+       utc-offset))
+
+;; --- Resource builders: pure functions of one patient's own folded state -
+
+(defn- patient-resource
+  [{:keys [patient-id active-mrn persona]}]
+  (when persona
+    {:resourceType "Patient"
+     :id patient-id
+     :identifier [{:system "urn:ehr-testing-sim:mrn" :value active-mrn}]
+     :name [{:family (:family (:name persona)) :given [(:given (:name persona))]}]
+     :gender (case (:sex persona) :female "female" :male "male")
+     :birthDate (:dob persona)
+     :address [{:line [(:street (:address persona))]
+                :city (:city (:address persona))
+                :state (:state (:address persona))
+                :postalCode (:zip (:address persona))}]
+     :telecom [{:system "phone" :value (:phone persona)}]}))
+
+(def ^:private fhir-encounter-class
+  "PatientState's own :class enum -> FHIR R4's v3-ActCode Encounter.class
+  (only :inpatient/:outpatient are ever set by this project's own
+  evolve methods today -- :emergency/:preadmit/:recurring/:obstetrics
+  are reserved enum values no step type produces yet)."
+  {:inpatient "IMP" :emergency "EMER" :outpatient "AMB"})
+
+(defn- encounter-resource
+  [reference-date utc-offset {:keys [patient-id status class location admitted-at discharged-at]}]
+  (when admitted-at
+    (cond-> {:resourceType "Encounter"
+             :id (str patient-id "-encounter")
+             :status (if (= :discharged status) "finished" "in-progress")
+             :class {:code (fhir-encounter-class class)}
+             :subject {:reference (str "Patient/" patient-id)}
+             :period (cond-> {:start (iso-timestamp reference-date admitted-at utc-offset)}
+                       discharged-at (assoc :end (iso-timestamp reference-date discharged-at utc-offset)))}
+      location (assoc :location [{:location {:display (:ward location)}}]))))
+
+(defn- condition-resources
+  [reference-date utc-offset {:keys [patient-id conditions]}]
+  (map-indexed
+   (fn [i {:keys [codes onset-t end-t clinical-status]}]
+     (cond-> {:resourceType "Condition"
+              :id (str patient-id "-condition-" i)
+              :subject {:reference (str "Patient/" patient-id)}
+              :encounter {:reference (str "Encounter/" patient-id "-encounter")}
+              :clinicalStatus {:coding [{:code (name clinical-status)}]}
+              :onsetDateTime (iso-timestamp reference-date onset-t utc-offset)}
+       (seq codes) (assoc :code (codeable-concept codes))
+       end-t (assoc :abatementDateTime (iso-timestamp reference-date end-t utc-offset))))
+   conditions))
+
+(defn- observation-resources
+  [reference-date utc-offset {:keys [patient-id observations]}]
+  (map-indexed
+   (fn [i {:keys [codes t value unit reference-range interpretation]}]
+     (cond-> {:resourceType "Observation"
+              :id (str patient-id "-obs-" i)
+              :status "final"
+              :subject {:reference (str "Patient/" patient-id)}
+              :encounter {:reference (str "Encounter/" patient-id "-encounter")}
+              :code (codeable-concept codes)
+              :effectiveDateTime (iso-timestamp reference-date t utc-offset)}
+       (some? value) (assoc :valueQuantity (cond-> {:value value} unit (assoc :unit unit)))
+       reference-range (assoc :referenceRange [{:low {:value (:low reference-range)}
+                                                 :high {:value (:high reference-range)}}])
+       interpretation (assoc :interpretation
+                              [{:coding [{:code (case interpretation :normal "N" :low "L" :high "H")}]}])))
+   observations))
+
+(defn- medication-request-resources
+  [reference-date utc-offset {:keys [patient-id medication-orders]}]
+  (map-indexed
+   (fn [i {:keys [codes ordered-t status]}]
+     (cond-> {:resourceType "MedicationRequest"
+              :id (str patient-id "-med-" i)
+              :status (name status)
+              :intent "order"
+              :subject {:reference (str "Patient/" patient-id)}
+              :encounter {:reference (str "Encounter/" patient-id "-encounter")}
+              :authoredOn (iso-timestamp reference-date ordered-t utc-offset)}
+       (seq codes) (assoc :medicationCodeableConcept (codeable-concept codes))))
+   medication-orders))
+
+(defn- coverage-resource
+  [{:keys [patient-id persona]}]
+  (when-let [payer (:payer persona)]
+    {:resourceType "Coverage"
+     :id (str patient-id "-coverage")
+     :status "active"
+     :beneficiary {:reference (str "Patient/" patient-id)}
+     :payor [{:display (:name payer)}]
+     :type {:text (name (:type payer))}}))
+
+(defn patient-bundle
+  "One patient's own state -> a FHIR Bundle (type \"collection\") of
+  every resource that state actually holds -- Patient/Coverage whenever
+  a persona has folded (M4's :registered, always this patient's first
+  event); Encounter once admitted; Condition/Observation/
+  MedicationRequest exactly as many as the accumulator carries, zero
+  otherwise. No resource is emitted speculatively."
+  [reference-date utc-offset patient-state]
+  (let [resources (concat
+                    (some-> (patient-resource patient-state) vector)
+                    (some-> (encounter-resource reference-date utc-offset patient-state) vector)
+                    (condition-resources reference-date utc-offset patient-state)
+                    (observation-resources reference-date utc-offset patient-state)
+                    (medication-request-resources reference-date utc-offset patient-state)
+                    (some-> (coverage-resource patient-state) vector))]
+    {:resourceType "Bundle"
+     :type "collection"
+     :entry (mapv (fn [r] {:resource r}) resources)}))
+
+(defn bundle-run
+  "The stage function: ground-truth log -> {patient-id -> Bundle}, one
+  per patient who exists (has folded at least a :registered event) at
+  or before `t`. `t` may be an explicit instant (seconds from run
+  start) or `:end` (this run's own last event time) -- the CLI's own
+  `sim run --emit fhir [--at ...]` convenience. Calls
+  ehr-testing-sim.engine/replay exactly once (the fold); every bundle
+  is a pure projection of that single call's own output, per
+  `snapshot-at`'s law."
+  [ground-truth reference-date utc-offset t]
+  (let [t (if (= :end t) (reduce max 0 (map :t ground-truth)) t)
+        snapshot (snapshot-at (engine/replay ground-truth) t)]
+    (into {} (map (fn [[patient-id state]] [patient-id (patient-bundle reference-date utc-offset state)])) snapshot)))
+
+========== END FILE ==========
+
 ========== FILE: ./src/ehr_testing_sim/engine.clj ==========
 (ns ehr-testing-sim.engine
   "The discrete-event simulation core: a priority queue of pending
@@ -10986,6 +12516,59 @@ logic, not patient records.
             [malli.core :as m])
   (:import [java.util Random]))
 
+;; --- M6 Task 1: the clinical-content accumulator -------------------------
+;; EmitState's own snapshot-at-instant law (docs/sim-theory.edn) means the
+;; FHIR emitter touches NOTHING but folded state, never the log directly
+;; -- so Condition/Observation/MedicationRequest content has to actually
+;; LAND in the fold, the same way :location/:persona already do, rather
+;; than staying a log-only fact only ehr-testing-sim.check reads via
+;; `replay`. Each record below is intentionally the smallest shape that
+;; carries what the FHIR builders need, not a re-derivation of the whole
+;; originating event.
+
+(def ConditionRecord
+  "One condition, folded from a compiled encounter step's own
+  :conditions annotations (ehr-testing-sim.pathway/ConditionAnnotation,
+  ehr-testing-sim.compile-trajectory's own annotate-condition). Scope
+  note: only conditions attached to an OPERATIONAL encounter step
+  (:admission/:outpatient-visit) are folded here -- :registered's own
+  :pre-horizon-facts (registration-time, pre-run history) are a
+  documented v1 scope boundary, not yet accumulated (CDA-style: deferred
+  with a contract note, not silently dropped)."
+  [:map
+   [:codes {:optional true} [:maybe [:vector pathway/Concept]]]
+   [:citation pathway/Citation]
+   [:onset-t :int]
+   [:clinical-status [:enum :active :resolved]]
+   [:end-t {:optional true} :int]])
+
+(def ObservationRecord
+  "One observation -- either a GMF `:observation` event (:codes/:value/
+  :unit only) or a single analyte flattened out of a `:result-available`
+  event's own :results (order-profiles' richer shape: adds
+  :reference-range/:interpretation, the computed abnormal flag).
+  Optional fields absent rather than nil for the plain-GMF case -- 'no
+  invented fields' (M6 Task 1)."
+  [:map
+   [:codes [:vector pathway/Concept]]
+   [:t :int]
+   [:value {:optional true} number?]
+   [:unit {:optional true} :string]
+   [:reference-range {:optional true} [:map [:low number?] [:high number?]]]
+   [:interpretation {:optional true} [:enum :normal :low :high]]])
+
+(def MedicationOrderRecord
+  "One medication order, folded from :medication-order and closed by a
+  citation-matching :medication-end (the SAME position-independent,
+  citation-based resolution ehr-testing-sim.compile-trajectory already
+  uses throughout, extended to fold time instead of compile time)."
+  [:map
+   [:codes {:optional true} [:maybe [:vector pathway/Concept]]]
+   [:citation pathway/Citation]
+   [:ordered-t :int]
+   [:status [:enum :active :completed]]
+   [:ended-t {:optional true} :int]])
+
 (def PatientState
   "The engine's per-patient accumulator -- what folding `evolve` over a
   patient's own event subsequence produces (docs/patient-state-model.md
@@ -11009,7 +12592,14 @@ logic, not patient records.
   from this schema, not deleting behavior -- payer now lives at
   `(:payer (:persona patient))`, sampled by Persona alongside every
   other demographic fact, per that document's own 'Persona subsumes it'
-  note."
+  note.
+
+  Milestone M6: `:discharged-at` mirrors `:admitted-at` (Encounter.period's
+  own end instant); `:conditions`/`:observations`/`:medication-orders`
+  (ConditionRecord/ObservationRecord/MedicationOrderRecord, above) are
+  the clinical-content accumulator EmitState renders from -- see this
+  namespace's own header comment just above `PatientState` for why this
+  content had to actually enter the fold rather than stay log-only."
   [:map
    [:patient-id :string]
    [:mrns [:set :string]]
@@ -11025,6 +12615,10 @@ logic, not patient records.
    [:attending {:optional true} [:maybe :string]]
    [:persona {:optional true} [:maybe persona/Persona]]
    [:admitted-at {:optional true} [:maybe :int]]
+   [:discharged-at {:optional true} [:maybe :int]]
+   [:conditions {:optional true} [:vector ConditionRecord]]
+   [:observations {:optional true} [:vector ObservationRecord]]
+   [:medication-orders {:optional true} [:vector MedicationOrderRecord]]
    [:attributes {:optional true} [:map-of :keyword :any]]])
 
 (defn valid-patient?
@@ -11533,10 +13127,47 @@ logic, not patient records.
                                                                    (= order-citation (:citation ev)))
                                                           i))
                                              ground-truth)))]
-    {:events [(merge {:event :medication-end :t t :active-mrn (:active-mrn patient) :order-event-id order-event-id
+    ;; M6 Task 1: `:order-citation` now rides the event itself, alongside
+    ;; the already-resolved `:order-event-id` -- `evolve`'s own fold-time
+    ;; medication-orders match needs the CITATION (position-independent),
+    ;; never the log-position index `:order-event-id` carries (meaningless
+    ;; to a fold that never sees the whole log).
+    {:events [(merge {:event :medication-end :t t :active-mrn (:active-mrn patient)
+                      :order-event-id order-event-id :order-citation order-citation
                       :participants [{:patient-id patient-id :role :subject}]}
                      (citation-fields step))]
      :advance 0}))
+
+(defn- fold-condition-annotation
+  "One step in folding a compiled encounter step's own :conditions
+  vector (ehr-testing-sim.pathway/ConditionAnnotation) into `conditions`
+  (a patient's own ConditionRecord vector) -- an onset OPENS a new
+  record; an end CLOSES the most recent still-:active record with the
+  SAME :codes (compile-trajectory's own annotate-condition already
+  resolves a condition-end's :codes from its referenced onset, so codes
+  match even though onset/end carry DIFFERENT citations -- one per
+  module state). `t` is the enclosing encounter event's own :t: this
+  project only ever compiles ONE encounter per patient (the single-
+  encounter-horizon scope, ADR-0007), so every condition annotation for
+  a patient rides that SAME event -- onset and end share one instant
+  rather than each carrying its own, a documented simplification of
+  this scope, not a claim that a condition's real onset and resolution
+  were simultaneous."
+  [t conditions {:keys [event codes citation]}]
+  (case event
+    :condition-onset
+    (conj (or conditions []) {:codes codes :citation citation :onset-t t :clinical-status :active})
+
+    :condition-end
+    (if-let [idx (last (keep-indexed (fn [i c] (when (and (= :active (:clinical-status c)) (= codes (:codes c))) i))
+                                     conditions))]
+      (update conditions idx assoc :clinical-status :resolved :end-t t)
+      conditions)))
+
+(defn- fold-conditions
+  [patient t annotations]
+  (cond-> patient
+    (seq annotations) (update :conditions #(reduce (partial fold-condition-annotation t) % annotations))))
 
 (defmulti evolve
   "Folds one ground-truth event into ONE patient it names:
@@ -11554,22 +13185,23 @@ logic, not patient records.
   (assoc patient :persona persona))
 
 (defmethod evolve :admission
-  [patient {:keys [location home-ward attending t]}]
-  (assoc patient
-         :status :admitted
-         :class :inpatient
-         :home-ward home-ward
-         :location location
-         :attending attending
-         :admitted-at t))
+  [patient {:keys [location home-ward attending t conditions]}]
+  (-> patient
+      (assoc :status :admitted
+             :class :inpatient
+             :home-ward home-ward
+             :location location
+             :attending attending
+             :admitted-at t)
+      (fold-conditions t conditions)))
 
 (defmethod evolve :transfer
   [patient {:keys [location home-ward]}]
   (assoc patient :location location :home-ward home-ward))
 
 (defmethod evolve :discharge
-  [patient _event]
-  (assoc patient :status :discharged :location nil))
+  [patient {:keys [t]}]
+  (assoc patient :status :discharged :location nil :discharged-at t))
 
 ;; --- M2b: churn family evolves -------------------------------------------
 
@@ -11582,8 +13214,23 @@ logic, not patient records.
   (assoc patient :home-ward home-ward :location location))
 
 (defmethod evolve :cancel-discharge
+  ;; M6 Task 2 finding: :class must be part of the reinstatement, not
+  ;; merely :home-ward/:location/:attending -- a degenerate but
+  ;; structurally legal churn sequence (cancel-admit against an
+  ;; ALREADY-DISCHARGED patient's original admission, `last-uncancelled-
+  ;; index` doesn't gate on current status) strips :class via cancel-
+  ;; admit's own dissoc; a following cancel-discharge that omitted :class
+  ;; would leave an :admitted patient with no class at all, while the
+  ;; wire (ehr-testing-sim.emit-hl7's own single-subject-message) always
+  ;; renders PV1-2 :inpatient for this event family regardless -- a real
+  ;; wire/truth disagreement the emitter-coherence property surfaced.
+  ;; :inpatient is the only value ever legal here: :discharge (unlike
+  ;; :outpatient-visit-end) is reachable only from an :admission, which
+  ;; always sets :class :inpatient (docs/patient-state-model.md).
   [patient {:keys [home-ward location attending]}]
-  (assoc patient :status :admitted :home-ward home-ward :location location :attending attending))
+  (-> patient
+      (assoc :status :admitted :class :inpatient :home-ward home-ward :location location :attending attending)
+      (dissoc :discharged-at)))
 
 (defmethod evolve :bed-swap
   [patient {:keys [swap]}]
@@ -11612,8 +13259,18 @@ logic, not patient records.
   patient)
 
 (defmethod evolve :result-available
-  [patient _event]
-  patient)
+  ;; M6 Task 1: EVERY analyte in :results becomes its own ObservationRecord
+  ;; -- order-profiles' richer shape (reference-range/computed abnormal
+  ;; flag) is exactly what Observation.referenceRange/interpretation
+  ;; render from (EmitState, below); :concept (singular) wraps to a
+  ;; single-element :codes vector, the same CodeableConcept shape every
+  ;; other record here uses.
+  [patient {:keys [t results]}]
+  (update patient :observations (fnil into [])
+          (mapv (fn [{:keys [concept units value reference-range abnormal-flag]}]
+                  {:codes [concept] :t t :value value :unit units
+                   :reference-range reference-range :interpretation abnormal-flag})
+                results)))
 
 ;; --- M5b: :outpatient-visit / :outpatient-visit-end -----------------------
 ;; Item 5/7: :status re-uses the SAME values :admission/:discharge already
@@ -11624,21 +13281,54 @@ logic, not patient records.
 ;; model.md's event-validity table, the conditional row this milestone adds).
 
 (defmethod evolve :outpatient-visit
-  [patient {:keys [attending]}]
-  (assoc patient :status :admitted :class :outpatient :attending attending))
+  [patient {:keys [attending t conditions]}]
+  (-> patient
+      (assoc :status :admitted :class :outpatient :attending attending)
+      (fold-conditions t conditions)))
 
 (defmethod evolve :outpatient-visit-end
-  [patient _event]
-  (assoc patient :status :discharged))
+  [patient {:keys [t]}]
+  (assoc patient :status :discharged :discharged-at t))
 
-;; --- M5b: :procedure/:observation/:medication-order/:medication-end --
-;; log-only facts, no PatientState field changes (same as :order-placed/
-;; :result-available's own evolve treatment).
+;; --- M5b: :procedure -- a log-only fact, no PatientState field change
+;; (Procedure is deliberately outside EmitState's own rendered resource
+;; set, M6 Task 1 -- "keep the resource set to what state actually
+;; holds," applied by never accumulating what nothing renders).
 
 (defmethod evolve :procedure [patient _event] patient)
-(defmethod evolve :observation [patient _event] patient)
-(defmethod evolve :medication-order [patient _event] patient)
-(defmethod evolve :medication-end [patient _event] patient)
+
+;; --- M6 Task 1: :observation/:medication-order/:medication-end now land
+;; in the clinical-content accumulator (this namespace's own header
+;; comment above PatientState) -- EmitState's Observation/MedicationRequest
+;; resources render from exactly these records, nothing re-derived from
+;; the log.
+
+(defmethod evolve :observation
+  [patient {:keys [t codes value unit]}]
+  (update patient :observations (fnil conj [])
+          (cond-> {:codes codes :t t} (some? value) (assoc :value value) unit (assoc :unit unit))))
+
+(defmethod evolve :medication-order
+  [patient {:keys [t codes citation]}]
+  (update patient :medication-orders (fnil conj [])
+          {:codes codes :citation citation :ordered-t t :status :active}))
+
+(defmethod evolve :medication-end
+  ;; Citation-based, position-independent resolution (this project's
+  ;; standing preference over a fragile index, docs/patient-state-
+  ;; model.md's deterministic-event-id section) -- matches
+  ;; `:order-citation` (the medication-end IR step's own field, riding
+  ;; the ground-truth event unchanged since `decide`, below) against the
+  ;; accumulator's own still-:active entry, never the ground-truth log's
+  ;; :order-event-id (a log POSITION, meaningless at fold time without
+  ;; the whole log in hand -- exactly what this fold is not supposed to
+  ;; need, M6 Task 1's own snapshot-at-instant law).
+  [patient {:keys [t order-citation]}]
+  (if-let [idx (when order-citation
+                 (last (keep-indexed (fn [i m] (when (and (= :active (:status m)) (= order-citation (:citation m))) i))
+                                     (:medication-orders patient))))]
+    (update-in patient [:medication-orders idx] assoc :status :completed :ended-t t)
+    patient))
 
 (defn replay
   "Replays `ground-truth` through `evolve`, returning a parallel seq of
@@ -13920,8 +15610,10 @@ logic, not patient records.
             [ehr-testing-sim.check :as check]
             [ehr-testing-sim.churn :as churn]
             [ehr-testing-sim.emit-hl7 :as emit-hl7]
+            [ehr-testing-sim.emit-state :as emit-state]
             [ehr-testing-sim.gmf :as gmf]
             [ehr-testing-sim.manifest :as manifest]
+            [ehr-testing-sim.pathway :as pathway]
             [ehr-testing-sim.result :as result]))
 
 (defn- resolve-modules
@@ -13951,6 +15643,92 @@ logic, not patient records.
               (result/error :module-load-failed
                             {:module module-name :category (:category loaded) :payload (:payload loaded)}))))))))
 
+;; --- M6 Task 0: config-reachable :self-check-failed, recategorized -------
+;; The tools full-capability session (notes/ADRs.md ADR-0015 in the
+;; sibling repo) found that assigning one patient ordinal BOTH an
+;; authored encounter-opening pathway (:admission/:outpatient-visit
+;; somewhere in its steps) AND a GMF module reaches engine/run and blows
+;; up as :self-check-failed -- a config-reachable outcome wearing the
+;; "bug in us" category. The module's own compiled trajectory is
+;; PREPENDED ahead of whatever pathway already queued
+;; (ehr-testing-sim.engine/run's own :registered decide method), so the
+;; pathway's own encounter-opening step finds an already-non-:new
+;; patient -- illegal under this project's single-encounter-horizon
+;; scope (ADR-0007 point 3). The combination stays illegal; this makes
+;; the refusal honest and early: :rejected :incompatible-assignment,
+;; naming the patient ordinal and the two conflicting sources, BEFORE
+;; engine/run (and its RNG) ever starts. Purely structural -- no RNG, no
+;; module content resolved (every vendored module is encounter-bearing
+;; by ADR-0013's own curation criterion, so ANY module assignment
+;; conflicts with ANY encounter-opening pathway, regardless of which
+;; specific module).
+
+(defn- admission-bearing-pathway?
+  [pathway]
+  (boolean (some #(#{:admission :outpatient-visit} (:type %)) (:steps pathway))))
+
+(defn- ordinal-guaranteed-admission-bearing?
+  "Whether ordinal `i` is CERTAIN to receive an encounter-opening
+  pathway, given only the config's own structure -- never the RNG. No
+  `:pathways` override means every ordinal gets the plain `:pathway`
+  (engine/run's own default when absent, ehr-testing-sim.pathway/
+  sample-admission-discharge, mirrored here since this check runs
+  before engine/run supplies it). With `:pathways` present: an explicit
+  `:patient-ordinal` entry decides outright; otherwise a non-empty
+  weighted pool is 'guaranteed admission-bearing' only when EVERY pool
+  member is -- a pool mixing admission-bearing and empty pathways
+  can't be called either way without the RNG, so it is NOT reported
+  (this check only ever reports certain conflicts, never possible
+  ones)."
+  [pathway pathways i]
+  (if (nil? pathways)
+    (admission-bearing-pathway? pathway)
+    (let [explicit (first (filter #(= i (:patient-ordinal %)) pathways))
+          pool (filterv :weight pathways)]
+      (cond
+        explicit (admission-bearing-pathway? (:pathway explicit))
+        (seq pool) (every? #(admission-bearing-pathway? (:pathway %)) pool)
+        :else false))))
+
+(defn- ordinal-guaranteed-module?
+  "Whether ordinal `i` is CERTAIN to receive SOME module. An explicit
+  `:patient-ordinal` entry decides outright; otherwise
+  `ehr-testing-sim.engine/assign-module` always resolves a NON-EMPTY
+  pool to some pool member for any ordinal no explicit entry covers --
+  there is no 'opt out' of a present pool -- so a non-empty pool alone
+  is already certain, independent of which module the RNG eventually
+  picks."
+  [module-assignment i]
+  (boolean
+   (or (first (filter #(= i (:patient-ordinal %)) module-assignment))
+       (seq (filterv :weight module-assignment)))))
+
+(defn- incompatible-assignments
+  "The full check: every ordinal (0-indexed, `patients` of them,
+  default 1) certain to receive BOTH an encounter-opening pathway and a
+  module. Guarded by each config's OWN schema validity
+  (`ehr-testing-sim.pathway/valid-pathways-config?`/`valid?`,
+  `ehr-testing-sim.gmf/valid-modules-config?`) so a structurally
+  malformed config (this namespace's own plumbing-completeness test's
+  sentinel opts) is silently skipped here -- never misdiagnosed as a
+  conflict, never thrown on -- rather than validated twice; a
+  malformed config's OWN failure mode belongs to whatever consumes it
+  for real (`engine/run`'s own `:pre` assertions), not this check."
+  [{:keys [pathway pathways patients module-assignment]}]
+  (when (and module-assignment
+             (gmf/valid-modules-config? module-assignment)
+             (or (nil? pathways) (pathway/valid-pathways-config? pathways))
+             (pathway/valid? (or pathway pathway/sample-admission-discharge)))
+    (into []
+          (keep (fn [i]
+                  (when (and (ordinal-guaranteed-module? module-assignment i)
+                             (ordinal-guaranteed-admission-bearing?
+                              (or pathway pathway/sample-admission-discharge) pathways i))
+                    {:patient-ordinal i
+                     :pathway-source (if pathways :pathways :pathway)
+                     :module-source :module-assignment})))
+          (range (or patients 1)))))
+
 (defn- merge-config-file
   "M4 Task 0: `:config` (a path to an EDN file) supplies the data-heavy
   engine keys that have no CLI flag of their own (`:pathway`/
@@ -13976,6 +15754,22 @@ logic, not patient records.
   -- a bug in us, not a legitimate rejection), and returns
   {:ground-truth [...] :manifest {...} :summary {...}
    :messages [...]}} (:messages present only when :emit is \"hl7\").
+
+  M6 Task 1: `:emit \"fhir\"` renders `:fhir-bundles`
+  ({patient-id -> Bundle}, ehr-testing-sim.emit-state/bundle-run)
+  instead of `:messages` -- end-of-run snapshots by default, or the
+  instant `:at` (seconds from run start) names. `:site-profile` has no
+  bearing here (FHIR has no dialect-config surface yet, docs/sim-
+  theory.edn's own format-dispatch note).
+
+  M6 Task 0: one patient ordinal assigned BOTH an encounter-opening
+  authored pathway AND a GMF module is `:rejected :incompatible-
+  assignment` (payload {:conflicts [{:patient-ordinal :pathway-source
+  :module-source} ...]}), checked BEFORE engine/run is ever called --
+  `incompatible-assignments`' own docstring has the full reasoning
+  (single-encounter-horizon, ADR-0007; this used to reach engine/run
+  and surface only as :self-check-failed once the invariant catalog
+  caught the resulting double encounter).
 
   M2b: `:churn` (bare boolean, \"turn churn on with sensible defaults\"
   -- ehr-testing-sim.churn/sample-profile) or `:churn-profile` (an
@@ -14027,13 +15821,17 @@ logic, not patient records.
   ([opts] (run-command opts {}))
   ([raw-opts {:keys [engine-run-fn] :or {engine-run-fn engine/run}}]
    (let [opts (merge-config-file raw-opts)
-         {:keys [seed patients emit reference-date utc-offset warm-up-seconds churn churn-profile site-profile modules]} opts
+         {:keys [seed patients emit at reference-date utc-offset warm-up-seconds churn churn-profile site-profile modules]} opts
+         conflicts (incompatible-assignments opts)
          resolved-modules (when modules (resolve-modules modules))]
      (cond
        (nil? seed)
        (result/error :missing-required-opt
                      {:message "--seed is required (determinism is a feature, not a default)"
                       :opt :seed})
+
+       (seq conflicts)
+       (result/rejected :incompatible-assignment {:conflicts conflicts})
 
        (and resolved-modules (not (result/ok? resolved-modules)))
        resolved-modules
@@ -14066,7 +15864,9 @@ logic, not patient records.
                                                 :invocation {:verb "run" :opts opts}})
                      :summary {:patients (or patients 1)
                                :events (count ground-truth)}}
-              (= "hl7" emit) (assoc :messages (emit-hl7/emit ground-truth reference-date utc-offset facility providers site-profile))))))))))
+              (= "hl7" emit) (assoc :messages (emit-hl7/emit ground-truth reference-date utc-offset facility providers site-profile))
+              (= "fhir" emit) (assoc :fhir-bundles
+                                     (emit-state/bundle-run ground-truth reference-date utc-offset (or at :end)))))))))))
 
 ========== END FILE ==========
 
@@ -14240,6 +16040,421 @@ logic, not patient records.
 
 (defn valid-profile? [profile] (m/validate SiteProfile profile))
 (defn explain-profile [profile] (m/explain SiteProfile profile))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/v2_replay.clj ==========
+(ns ehr-testing-sim.v2-replay
+  "Task 2 (M6): the v2-replay accumulator -- parses a run's own emitted
+  ER7 stream (the SAME org.clojars.cmiles74/clojure-hl7-parser structures
+  ehr-testing-sim.emit-hl7 renders through, plus that namespace's own
+  unescape-er7) and folds it through `fold-message`, an INDEPENDENT
+  reconstruction of patient state built ONLY from what a real downstream
+  consumer could ever see on the wire -- never touching ground-truth,
+  the engine, or the RNG. This is the wire-side half of the global
+  emitter-coherence law (docs/sim-theory.md): at every message boundary,
+  this accumulator's own state must agree with ehr-testing-sim.engine's
+  log-folded state, once both are passed through
+  `project-to-wire-visible-fields` (below) -- the SAME projection
+  applied to both sides, so 'what does the wire carry' is answered once,
+  not maintained as two separately-hand-tuned shapes.
+
+  Keyed by :active-mrn, not :patient-id -- the wire's only identity.
+  Bootstrap-from-empty: a patient's first message self-initializes
+  (every message carries full PID enrichment, ehr-testing-sim.emit-hl7's
+  own uniform-PID law), so no separate 'this mrn is new' step is needed.
+
+  Scope boundary, documented not silent (the same 'deferred with a
+  contract note' treatment EmitState's own CDA arm gets): bed-swap (A17)
+  and merge (A40) are genuinely two-participant messages -- two PID/PV1
+  pairs in ONE message, and merge additionally REASSIGNS which mrn is
+  active mid-run. Reconstructing wire identity across either is real,
+  separate engineering scope. `fold-message` raises a clear
+  `:unsupported-trigger` on either, rather than silently mis-folding --
+  ehr-testing-sim.v2-replay-test's own property runs churn EXCLUDING
+  both for exactly this reason."
+  (:require [clojure.string :as str]
+            [com.nervestaple.hl7-parser.parser :as parser]
+            [com.nervestaple.hl7-parser.message :as message]
+            [ehr-testing-sim.emit-hl7 :as emit-hl7]))
+
+;; --- Reading the pinned clock backwards ------------------------------------
+
+(def ^:private hl7-datetime-formatter
+  (java.time.format.DateTimeFormatter/ofPattern "yyyyMMddHHmmss"))
+
+(defn- hl7-instant->seconds
+  "The inverse of ehr-testing-sim.emit-hl7/hl7-timestamp: an HL7
+  timestamp (\"yyyyMMddHHmmss+ZZZZ\") anchored to `reference-date` ->
+  seconds since that reference instant. Only the first 14 characters
+  (the naive local timestamp) are read -- the zone suffix is always the
+  SAME pinned :utc-offset every message in one run shares, never
+  per-event, so it carries no information the fold needs (ADR-0011)."
+  [reference-date ts]
+  (let [local (java.time.LocalDateTime/parse (subs ts 0 14) hl7-datetime-formatter)
+        reference (.atStartOfDay (java.time.LocalDate/parse reference-date))]
+    (.getSeconds (java.time.Duration/between reference local))))
+
+(defn- hl7-date->iso
+  "\"yyyyMMdd\" -> \"yyyy-MM-dd\" -- the inverse of
+  ehr-testing-sim.emit-hl7/pid-segment's own dash-stripping."
+  [raw]
+  (str (subs raw 0 4) "-" (subs raw 4 6) "-" (subs raw 6 8)))
+
+;; --- Safe field/component access -------------------------------------------
+
+(defn- component
+  "`get-field-component` is 0-based on its OWN component-index argument
+  (unlike every field-index argument in this library, which is 1-based
+  -- confirmed against the library directly, not assumed) and throws
+  IndexOutOfBoundsException past a field's actual component count (a
+  short/blank field, e.g. no bed on an outpatient PV1-3) rather than
+  returning nil. Normalized here to nil-safe, blank-safe access, and to
+  a plain string regardless of whether the library hands back a bare
+  value or a single-element seq (observed both, depending on the
+  underlying field's own shape)."
+  [parsed segment-id field-index component-index]
+  (let [v (try (message/get-field-component parsed segment-id field-index component-index)
+               (catch IndexOutOfBoundsException _ nil))
+        v (if (sequential? v) (first v) v)]
+    (when (seq v) (emit-hl7/unescape-er7 (str v)))))
+
+(defn- blank->nil [s] (when (seq s) s))
+
+;; --- PID/PV1/IN1 reconstruction ---------------------------------------------
+
+(defn- parse-persona
+  "Every message carries this uniformly (ehr-testing-sim.emit-hl7/
+  pid-segment's own docstring) -- PID-13/:ssn/:age are never rendered,
+  the same exclusion `project-to-wire-visible-fields` states from the
+  ground-truth side."
+  [parsed]
+  {:name {:family (component parsed "PID" 5 0) :given (component parsed "PID" 5 1)}
+   :sex (case (blank->nil (message/get-field-first-value parsed "PID" 8)) "F" :female "M" :male nil)
+   :dob (hl7-date->iso (message/get-field-first-value parsed "PID" 7))
+   :address {:street (component parsed "PID" 11 0) :city (component parsed "PID" 11 2)
+             :state (component parsed "PID" 11 3) :zip (component parsed "PID" 11 4)}
+   :phone (blank->nil (message/get-field-first-value parsed "PID" 13))})
+
+(defn- parse-payer
+  "IN1 rides admission alone (ehr-testing-sim.emit-hl7/in1-segment's own
+  docstring) -- nil on every other message, the wire-side mirror of
+  `project-to-wire-visible-fields`'s own admitted-at gate."
+  [parsed]
+  (when (seq (message/get-segments parsed "IN1"))
+    {:id (blank->nil (message/get-field-first-value parsed "IN1" 3))
+     :name (some-> (message/get-field-first-value parsed "IN1" 4) emit-hl7/unescape-er7)}))
+
+(defn- parse-location
+  [parsed]
+  (when-let [ward (component parsed "PV1" 3 0)]
+    {:ward ward :bed (component parsed "PV1" 3 2)}))
+
+(defn- parse-attending
+  [parsed]
+  (component parsed "PV1" 7 0))
+
+(def ^:private hl7-class->keyword {"I" :inpatient "O" :outpatient})
+
+(defn- parse-class
+  [parsed]
+  (get hl7-class->keyword (blank->nil (message/get-field-first-value parsed "PV1" 2))))
+
+;; --- OBX/observations reconstruction ----------------------------------------
+
+(defn- seg-field-components
+  "The full component vector at STANDARD (1-based) HL7 `field-index` of
+  one already-fetched segment (ehr-testing-sim.v2-replay's own callers
+  use this for OBX repetitions -- message/get-segments returns one
+  segment per analyte; the whole-message get-field-component API
+  addresses only 'the first' repetition). `get-segment-field`'s own
+  indexing is the SAME convention its own docstring states for the
+  whole-message API's MSH gotcha, confirmed directly (not assumed):
+  index 0 is the segment's own 3-letter id; field N is OBX-N in real
+  HL7 numbering, e.g. index 3 is OBX-3 (the concept), never a 0-based
+  position into the field vector."
+  [segment field-index]
+  (try (message/get-segment-field segment field-index)
+       (catch IndexOutOfBoundsException _ nil)))
+
+(defn- seg-field
+  [segment field-index]
+  (first (seg-field-components segment field-index)))
+
+(defn- parse-range
+  [raw]
+  (when (seq raw)
+    (let [[lo hi] (str/split raw #"-")]
+      {:low (Double/parseDouble lo) :high (Double/parseDouble hi)})))
+
+(def ^:private hl7-flag->keyword {"N" :normal "L" :low "H" :high})
+
+(defn- parse-obx
+  "OBX-3 concept (code^display^system, a CWE field -- the SECOND
+  component is the concept's own display text, dropped by a plain
+  `seg-field` first-component read), OBX-5 value, OBX-6 units, OBX-7
+  reference range, OBX-8 abnormal flag -- ehr-testing-sim.emit-hl7/
+  obx-segment's own field layout, standard HL7 numbering."
+  [t seg]
+  (let [[code display] (seg-field-components seg 3)]
+    (cond-> {:codes [(cond-> {:system :loinc :code code} (seq display) (assoc :display display))] :t t}
+      (blank->nil (seg-field seg 5)) (assoc :value (Double/parseDouble (seg-field seg 5)))
+      (blank->nil (seg-field seg 6)) (assoc :unit (seg-field seg 6))
+      (blank->nil (seg-field seg 7)) (assoc :reference-range (parse-range (seg-field seg 7)))
+      (blank->nil (seg-field seg 8)) (assoc :interpretation (get hl7-flag->keyword (seg-field seg 8))))))
+
+(defn- parse-observations
+  [parsed t]
+  (mapv (partial parse-obx t) (message/get-segments parsed "OBX")))
+
+;; --- fold-message: one ER7 message -> the accumulator's next state --------
+
+(def unsupported-triggers
+  "This accumulator's own documented scope boundary (this namespace's
+  own header comment) -- the genuinely two-participant message family."
+  #{"A17" "A40"})
+
+(defn- initial-entry
+  [parsed]
+  {:active-mrn (message/get-field-first-value parsed "PID" 3)
+   :persona (parse-persona parsed)})
+
+(defn- evolve-entry
+  "(entry, trigger, parsed, t) -> entry'. Pure and total, mirroring
+  ehr-testing-sim.engine/evolve's own shape one layer up the wire --
+  dispatch on the message's own trigger, never mutate anything but the
+  ONE mrn-keyed entry this message is about."
+  [entry trigger parsed t]
+  (case trigger
+    "A01" (cond-> (assoc entry :status :admitted :class :inpatient
+                         :location (parse-location parsed) :attending (parse-attending parsed)
+                         :admitted-at t)
+            (parse-payer parsed) (update :persona assoc :payer (parse-payer parsed)))
+    "A04" (assoc entry :status :admitted :class :outpatient :attending (parse-attending parsed))
+    "A02" (assoc entry :location (parse-location parsed) :attending (parse-attending parsed))
+    "A03" (assoc entry :status :discharged :location nil :discharged-at t)
+    "A11" (-> entry (assoc :status :new) (dissoc :class :location :attending :admitted-at))
+    "A12" (assoc entry :location (parse-location parsed))
+    "A13" (-> entry (assoc :status :admitted :class (or (parse-class parsed) (:class entry))
+                           :location (parse-location parsed) :attending (parse-attending parsed))
+              (dissoc :discharged-at))
+    "O01" entry
+    "R01" (update entry :observations (fnil into []) (parse-observations parsed t))
+    (throw (ex-info "v2-replay: unsupported message trigger (documented scope boundary)"
+                    {:trigger trigger}))))
+
+(defn fold-message
+  "acc x message x reference-date -> acc'. Parses `message`, extracts
+  its own trigger (MSH-9) and instant (MSH-7, via `hl7-instant->seconds`),
+  and folds it into `acc`'s entry for that message's own PID-3 -- a
+  never-yet-seen mrn self-initializes (bootstrap-from-empty)."
+  [acc message reference-date]
+  (let [parsed (parser/parse message)
+        [_type trigger] (str/split (message/get-field-first-value parsed "MSH" 9) #"\^")
+        t (hl7-instant->seconds reference-date (message/get-field-first-value parsed "MSH" 7))
+        mrn (message/get-field-first-value parsed "PID" 3)
+        entry (or (get acc mrn) (initial-entry parsed))]
+    (assoc acc mrn (evolve-entry entry trigger parsed t))))
+
+(defn replay-messages
+  "The stage function: a run's own emitted ER7 stream -> {mrn ->
+  reconstructed-state}, folded left to right via `fold-message`."
+  [messages reference-date]
+  (reduce #(fold-message %1 %2 reference-date) {} messages))
+
+;; --- The projection function: the formal definition of what the wire
+;; carries (M6 Task 2's own deliverable, sibling of ehr-testing-sim.
+;; site-profile's masking function) ------------------------------------------
+
+(defn project-to-wire-visible-fields
+  "Projects a folded PatientState (ehr-testing-sim.engine's own
+  accumulator, OR this namespace's own reconstructed entry -- the SAME
+  function applies to both sides of the emitter-coherence property, by
+  design, so the comparison is never two independently hand-tuned
+  shapes) down to exactly what ehr-testing-sim.emit-hl7's own rendering
+  choices make visible on the wire.
+
+  Excluded, and why -- each a real, load-bearing reason, not merely
+  'not implemented yet':
+  - :patient-id -- an internal identifier this project's own emitter
+    never renders anywhere; the wire's only identity is :active-mrn.
+  - :mrns (the full set), :home-ward -- SimHospital-lesson truth-only
+    facts (docs/patient-state-model.md): a real feed shows only the
+    CURRENT mrn/location, never the administrative intent behind a
+    boarding assignment.
+  - :location's own :placement -- no PV1 field distinguishes licensed
+    from surge (docs/operational-models.md); only the physical
+    ward/bed strings are wire-visible.
+  - :conditions, :medication-orders -- ehr-testing-sim.emit-hl7 renders
+    NO segment for either (DG1 is gated on the snomed-icd10-map
+    catalytic, docs/sim-theory.md's Catalytic resolution table, not
+    built; :medication-order/:medication-end carry no message-type-
+    registry entry at all, that namespace's own comment). Genuinely
+    truth-only, not a gap this property should paper over.
+  - :persona's own :ssn/:age -- PID never carries either
+    (ehr-testing-sim.emit-hl7/pid-segment's own fixed field list).
+  - :persona's own :payer -- wire-visible ONLY once an :admission
+    message has actually carried IN1 (IN1 rides admission alone) --
+    gated here on `:admitted-at` being non-nil, the real wire's own
+    gate, not a static field selector.
+  - Every :observations entry's :codes is narrowed to its FIRST concept
+    only, with :system normalized to :loinc -- a genuine, PRE-EXISTING
+    ehr-testing-sim.emit-hl7 finding, not introduced by this property:
+    `cwe-field` renders every CWE field's 3rd component as the literal
+    \"LN\" regardless of a concept's actual :system, and
+    `observation-obx-segment` reads only `(first codes)`, for ANY
+    observation. Triaged as the emitter under-rendering, not this
+    projection over-claiming -- recorded here as a documented scope
+    boundary (a real future ehr-testing-sim.emit-hl7 fix, out of this
+    session's own test-first seam), not silently patched over.
+  - Events with no message-type-registry entry at all (:step-rejected,
+    :registered's own pre-horizon facts, :outpatient-visit-end's own
+    missing closing message, :procedure) never generate a message
+    boundary for this property to check -- a structural consequence of
+    the property iterating ONLY over
+    ehr-testing-sim.emit-hl7/message-type-registry-covered events,
+    exactly the boundary set a real downstream consumer would ever see,
+    not a separate exclusion this function has to state."
+  [{:keys [active-mrn status class location attending admitted-at discharged-at persona observations]}]
+  (cond-> {:active-mrn active-mrn :status status}
+    class (assoc :class class)
+    location (assoc :location (select-keys location [:ward :bed]))
+    attending (assoc :attending attending)
+    admitted-at (assoc :admitted-at admitted-at)
+    discharged-at (assoc :discharged-at discharged-at)
+    persona (assoc :persona
+                   (cond-> (select-keys persona [:name :sex :dob :address :phone])
+                     (and admitted-at (:payer persona)) (assoc :payer (select-keys (:payer persona) [:id :name]))))
+    (seq observations)
+    (assoc :observations
+           (mapv (fn [{:keys [codes t value unit reference-range interpretation]}]
+                   (cond-> {:codes (when (seq codes) [(assoc (select-keys (first codes) [:code :display]) :system :loinc)])
+                            :t t}
+                     (some? value) (assoc :value (double value))
+                     unit (assoc :unit unit)
+                     reference-range (assoc :reference-range {:low (double (:low reference-range))
+                                                               :high (double (:high reference-range))})
+                     interpretation (assoc :interpretation interpretation)))
+                 observations))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/blaze_integration_test.clj ==========
+(ns ehr-testing-sim.blaze-integration-test
+  "Task 3 (M6): the ecological loop -- samply/blaze (a same-language
+  Clojure FHIR server, .agents/plans/roadmap.md's own M6 consumer-plan
+  citation) is EmitState's natural first real-world consumer, the same
+  role ehr-testing-tools plays for EmitHL7 (README.md's own 'never
+  graded on its own homework' claim). If a Blaze server is reachable at
+  a configured base URL, this test POSTs a run's own end-of-run
+  Bundle(s), reads the resources back, and asserts round-trip
+  equivalence on the fields we wrote. Unreachable -> a clean skip, the
+  SAME skip-when-absent pattern ehr-testing-tools' own sim-harness/
+  available? establishes for ITS cross-repo consumer loop (ADR-0001's
+  dependency-arrow discipline, applied here to an external service
+  rather than a sibling repo) -- this project never depends on Blaze
+  being present; it merely checks against it when it is.
+
+  Start a local Blaze to actually exercise this test:
+
+      docker run -p 8080:8080 samply/blaze:latest
+
+  (the same one-liner README.md's own demo section names). Base URL is
+  configurable via the BLAZE_BASE_URL environment variable, defaulting
+  to http://localhost:8080/fhir. Uses only java.net.HttpURLConnection
+  (JDK 1.1+) rather than the newer java.net.http.HttpClient (JDK 11+,
+  unavailable on this session's own JDK 8 runtime -- notes/facts-
+  register.md F13) -- no new runtime dependency for one integration
+  test's own HTTP calls."
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
+            [ehr-testing-sim.emit-state :as emit-state]
+            [ehr-testing-sim.engine :as engine])
+  (:import [java.net URL HttpURLConnection SocketTimeoutException]))
+
+(def base-url
+  (or (System/getenv "BLAZE_BASE_URL") "http://localhost:8080/fhir"))
+
+(defn- open-connection
+  ^HttpURLConnection [url method]
+  (doto ^HttpURLConnection (.openConnection (URL. url))
+    (.setRequestMethod method)
+    (.setConnectTimeout 2000)
+    (.setReadTimeout 2000)))
+
+(defn- read-body
+  [^HttpURLConnection conn]
+  (let [status (.getResponseCode conn)
+        stream (if (< status 400) (.getInputStream conn) (.getErrorStream conn))]
+    {:status status :body (when stream (slurp stream))}))
+
+(defn reachable?
+  "A short-timeout GET against Blaze's own /metadata capability
+  statement -- any exception (connection refused, DNS failure, timeout)
+  or non-200 means 'treat as absent,' never a test error."
+  []
+  (try
+    (= 200 (:status (read-body (open-connection (str base-url "/metadata") "GET"))))
+    (catch Exception _ false)))
+
+(def absence-message
+  (str "Blaze unreachable at " base-url " -- skipping the ecological-loop test. "
+       "Start one with: docker run -p 8080:8080 samply/blaze:latest"))
+
+(defn- as-transaction
+  "ehr-testing-sim.emit-state/patient-bundle's own Bundle is :type
+  \"collection\" (a snapshot, not a submission payload -- EmitState's
+  own rendering law says nothing about how a consumer submits one) --
+  this test's OWN concern converts it to a FHIR transaction Bundle (one
+  POST-to-its-own-resourceType entry per resource), the shape Blaze's
+  base URL actually accepts. Kept local here, not added to emit-state's
+  public surface."
+  [bundle]
+  (assoc bundle
+         :type "transaction"
+         :entry (mapv (fn [{:keys [resource] :as entry}]
+                        (assoc entry :request {:method "POST" :url (:resourceType resource)}))
+                      (:entry bundle))))
+
+(defn- post-bundle!
+  [bundle]
+  (let [conn (open-connection base-url "POST")]
+    (doto conn
+      (.setDoOutput true)
+      (.setRequestProperty "Content-Type" "application/fhir+json"))
+    (with-open [w (io/writer (.getOutputStream conn))]
+      (.write w (json/write-str (as-transaction bundle))))
+    (read-body conn)))
+
+(defn- get-resource!
+  [relative-location]
+  (read-body (open-connection (str base-url "/" relative-location) "GET")))
+
+(deftest ^:integration blaze-accepts-end-of-run-bundles-and-round-trips-patient-fields
+  (if-not (reachable?)
+    (do (println absence-message) (is true absence-message))
+    (let [{:keys [ground-truth]} (engine/run {:seed 42 :patients 2})
+          bundles (emit-state/bundle-run ground-truth "2024-01-01" "+00:00" :end)]
+      (is (= 2 (count bundles)) "sanity: both patients produced a Bundle")
+      (doseq [[patient-id bundle] bundles]
+        (let [{:keys [status body]} (post-bundle! bundle)]
+          (testing (str "Blaze's own verdict on patient " patient-id "'s Bundle -- any rejection here is a"
+                        " FINDING (facts-register row: 'verified against Blaze <version>, <date>'), not a"
+                        " test-authoring bug -- fix our shapes if we're wrong, record theirs if strict beyond R4")
+            (is (= 200 status) body))
+          (when (= 200 status)
+            (let [transaction-response (json/read-str body :key-fn keyword)
+                  patient-entry (first (filter #(= "Patient" (get-in % [:resource :resourceType]))
+                                               (:entry transaction-response)))
+                  posted (:resource patient-entry)
+                  location (get-in patient-entry [:response :location])
+                  fetched (json/read-str (:body (get-resource! location)) :key-fn keyword)]
+              (testing "round-trip equivalence on the fields we wrote"
+                (is (= (:birthDate posted) (:birthDate fetched)))
+                (is (= (:gender posted) (:gender fetched)))
+                (is (= (get-in posted [:name 0 :family]) (get-in fetched [:name 0 :family])))
+                (is (= (get-in posted [:identifier 0 :value]) (get-in fetched [:identifier 0 :value])))))))))))
 
 ========== END FILE ==========
 
@@ -16249,6 +18464,173 @@ logic, not patient records.
 
 ========== END FILE ==========
 
+========== FILE: ./test/ehr_testing_sim/emit_state_test.clj ==========
+(ns ehr-testing-sim.emit-state-test
+  "EmitState (docs/sim-theory.edn): state-history -> FHIR R4 Bundle.
+  Written test-first (ADR-0004). snapshot-at is the literal
+  snapshot-at-instant law (a pure function of REPLAY RECORDS --
+  ehr-testing-sim.engine/replay's own output, the fold, ADR-0008 -- at
+  an instant t; no log access beyond the fold). The resource builders
+  are pure functions of one patient's own folded state; `bundle-run` is
+  the convenience that ties both to a real ground-truth log.
+
+  Cross-emitter id property (M6 Task 1 point 3): FHIR ids/references
+  derive from the SAME identifiers EmitHL7 uses -- patient-id,
+  active-mrn in Patient.identifier -- checked here as a property over
+  random runs, comparing against ehr-testing-sim.emit-hl7's own PID-3."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [clojure.data.json :as json]
+            [ehr-testing-sim.emit-state :as emit-state]
+            [ehr-testing-sim.emit-hl7 :as emit-hl7]
+            [ehr-testing-sim.engine :as engine]
+            [com.nervestaple.hl7-parser.parser :as parser]
+            [com.nervestaple.hl7-parser.message :as message]))
+
+(def ref-date "2024-01-01")
+(def utc-offset "+00:00")
+
+;; --- snapshot-at: the pure fold-at-instant primitive ----------------------
+
+(deftest snapshot-at-before-any-event-is-empty
+  (let [{:keys [ground-truth]} (engine/run {:seed 1 :patients 1})
+        records (engine/replay ground-truth)]
+    (is (= {} (emit-state/snapshot-at records -1)))))
+
+(deftest snapshot-at-returns-the-fold-immediately-after-the-last-applicable-event
+  (let [{:keys [ground-truth]} (engine/run {:seed 1 :patients 1})
+        records (engine/replay ground-truth)
+        admission-t (:t (first (filter #(= :admission (:event %)) ground-truth)))
+        snapshot (emit-state/snapshot-at records admission-t)
+        pid (engine/patient-id-for 1 0)]
+    (is (= :admitted (:status (get snapshot pid))))))
+
+(deftest snapshot-at-end-matches-the-runs-own-final-fold
+  (let [{:keys [ground-truth]} (engine/run {:seed 1 :patients 3})
+        records (engine/replay ground-truth)
+        end-t (reduce max 0 (map :t ground-truth))
+        snapshot (emit-state/snapshot-at records end-t)]
+    (is (= 3 (count snapshot)))
+    (doseq [i (range 3)]
+      (is (= :discharged (:status (get snapshot (engine/patient-id-for 1 i))))))))
+
+;; --- resource builders: pure functions of one patient's own state --------
+
+(def ^:private a-persona
+  {:name {:family "O'Brien" :given "Siobhan"} :sex :female :dob "1969-03-28" :age 55
+   :address {:street "1 Main St" :city "Austin" :state "TX" :zip "78701"}
+   :phone "512-555-0100" :ssn "900-11-2222"
+   :payer {:id "commercial-hmo" :name "Commercial HMO" :type :commercial}})
+
+(deftest patient-resource-carries-patient-id-active-mrn-and-persona-fields
+  (let [state {:patient-id "PID-000000-abc" :active-mrn "MRN000001" :status :admitted :persona a-persona}
+        bundle (emit-state/patient-bundle ref-date utc-offset state)
+        patient (first (filter #(= "Patient" (:resourceType %)) (map :resource (:entry bundle))))]
+    (is (= "PID-000000-abc" (:id patient)))
+    (is (= "MRN000001" (:value (first (:identifier patient)))))
+    (is (= "O'Brien" (:family (first (:name patient)))))
+    (is (= "Siobhan" (first (:given (first (:name patient))))))
+    (is (= "female" (:gender patient)))
+    (is (= "1969-03-28" (:birthDate patient)))))
+
+(deftest encounter-resource-reflects-lifecycle-and-is-absent-before-admission
+  (let [never-admitted {:patient-id "P1" :active-mrn "M1" :status :new :persona a-persona}
+        admitted {:patient-id "P1" :active-mrn "M1" :status :admitted :class :inpatient
+                  :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}
+                  :admitted-at 100 :persona a-persona}
+        discharged (assoc admitted :status :discharged :discharged-at 500)
+        resources-of (fn [state] (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state))))
+        encounter-of (fn [state] (first (filter #(= "Encounter" (:resourceType %)) (resources-of state))))]
+    (is (nil? (encounter-of never-admitted)))
+    (is (= "in-progress" (:status (encounter-of admitted))))
+    (is (= "IMP" (:code (:class (encounter-of admitted)))))
+    (is (= "Renal" (:display (:location (first (:location (encounter-of admitted)))))))
+    (is (= "finished" (:status (encounter-of discharged))))
+    (is (some? (:end (:period (encounter-of discharged)))))))
+
+(deftest condition-resource-renders-the-stored-triplet-and-clinical-status
+  (let [a-concept {:system :snomed :code "36971009" :display "Sinusitis (disorder)"}
+        state {:patient-id "P1" :active-mrn "M1" :status :discharged :persona a-persona
+               :conditions [{:codes [a-concept] :citation {:module "sinusitis" :state :onset}
+                             :onset-t 10 :clinical-status :resolved :end-t 200}]}
+        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state)))
+        condition (first (filter #(= "Condition" (:resourceType %)) resources))]
+    (is (= "36971009" (:code (first (:coding (:code condition))))))
+    (is (= "http://snomed.info/sct" (:system (first (:coding (:code condition))))))
+    (is (= "resolved" (:code (first (:coding (:clinicalStatus condition))))))
+    (is (some? (:abatementDateTime condition)))))
+
+(deftest observation-resource-renders-loinc-value-unit-range-and-interpretation
+  (let [loinc {:system :loinc :code "6690-2" :display "Leukocytes [#/volume] in Blood"}
+        state {:patient-id "P1" :active-mrn "M1" :status :admitted :persona a-persona
+               :observations [{:codes [loinc] :t 50 :value 4.1 :unit "K/uL"
+                               :reference-range {:low 4.5 :high 11.0} :interpretation :low}]}
+        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state)))
+        obs (first (filter #(= "Observation" (:resourceType %)) resources))]
+    (is (= "6690-2" (:code (first (:coding (:code obs))))))
+    (is (= "http://loinc.org" (:system (first (:coding (:code obs))))))
+    (is (= 4.1 (:value (:valueQuantity obs))))
+    (is (= "K/uL" (:unit (:valueQuantity obs))))
+    (is (= 4.5 (:value (:low (first (:referenceRange obs))))))
+    (is (= "L" (:code (first (:coding (first (:interpretation obs)))))))))
+
+(deftest medication-request-resource-renders-rxnorm-and-status
+  (let [rxnorm {:system :rxnorm :code "308191" :display "Amoxicillin"}
+        state {:patient-id "P1" :active-mrn "M1" :status :admitted :persona a-persona
+               :medication-orders [{:codes [rxnorm] :citation {:module "m" :state :s}
+                                    :ordered-t 20 :status :completed :ended-t 300}]}
+        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state)))
+        med (first (filter #(= "MedicationRequest" (:resourceType %)) resources))]
+    (is (= "308191" (:code (first (:coding (:medicationCodeableConcept med))))))
+    (is (= "completed" (:status med)))
+    (is (= "order" (:intent med)))))
+
+(deftest coverage-resource-renders-the-sampled-payer
+  (let [state {:patient-id "P1" :active-mrn "M1" :status :admitted :persona a-persona}
+        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state)))
+        coverage (first (filter #(= "Coverage" (:resourceType %)) resources))]
+    (is (= "active" (:status coverage)))
+    (is (= "Commercial HMO" (:display (first (:payor coverage)))))))
+
+(deftest no-invented-fields-a-bare-registered-only-patient-yields-just-patient-and-coverage
+  (let [state {:patient-id "P1" :active-mrn "M1" :status :new :persona a-persona}
+        resources (map (comp :resourceType) (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state))))]
+    (is (= #{"Patient" "Coverage"} (set resources)))))
+
+;; --- the bundle is valid JSON --------------------------------------------
+
+(deftest patient-bundle-round-trips-through-clojure-data-json
+  (let [{:keys [ground-truth]} (engine/run {:seed 42 :patients 2})
+        bundles (emit-state/bundle-run ground-truth ref-date utc-offset :end)]
+    (is (= 2 (count bundles)))
+    (doseq [[_ bundle] bundles]
+      (is (= "Bundle" (:resourceType (json/read-str (json/write-str bundle) :key-fn keyword)))))))
+
+;; --- cross-emitter id property: patient-id/active-mrn resolve the same
+;; way in both emitters, over random runs -----------------------------------
+
+(defspec fhir-patient-id-and-active-mrn-resolve-to-the-same-hl7-identity 150
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 8)]
+    (let [{:keys [ground-truth]} (engine/run {:seed seed :patients patients})
+          bundles (emit-state/bundle-run ground-truth ref-date utc-offset :end)
+          messages (emit-hl7/emit ground-truth ref-date utc-offset)]
+      (every?
+       (fn [i]
+         (let [pid (engine/patient-id-for seed i)
+               bundle (get bundles pid)]
+           (or (nil? bundle) ;; never registered at end -- impossible today, but not this property's claim
+               (let [patient (first (filter #(= "Patient" (:resourceType %)) (map :resource (:entry bundle))))
+                     fhir-mrn (:value (first (:identifier patient)))
+                     own-messages (filter #(= fhir-mrn (message/get-field-first-value (parser/parse %) "PID" 3)) messages)]
+                 (and (= pid (:id patient))
+                      (seq own-messages))))))
+       (range patients)))))
+
+========== END FILE ==========
+
 ========== FILE: ./test/ehr_testing_sim/emitter_order_independence_test.clj ==========
 (ns ehr-testing-sim.emitter-order-independence-test
   "Guard test, mining group B (docs/research/SimHospital-Synthea-limitations-
@@ -16709,6 +19091,28 @@ logic, not patient records.
     (is (= (:location pre-discharge) (:location reinstated)))
     (is (= (:home-ward pre-discharge) (:home-ward reinstated)))))
 
+(deftest cancel-discharge-restores-class-even-after-a-preceding-cancel-admit-stripped-it
+  (testing "M6 Task 2's own finding: a cancel-admit fired against an
+            already-discharged patient's original admission (structurally
+            legal -- last-uncancelled-index doesn't gate on CURRENT
+            status) strips :class via cancel-admit's own dissoc; a
+            following cancel-discharge reinstating :admitted must
+            restore :class too, or the patient ends up admitted with no
+            class at all -- surfaced by the v2-replay emitter-coherence
+            property (a :discharge-family patient's own PV1-2 always
+            renders :inpatient, ehr-testing-sim.emit-hl7's own
+            single-subject-message; ground truth must actually agree)"
+    (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+          world1 (admit world0 0 "P1" "Renal")
+          {d-events :events} (engine/decide (Random. 1) 10 world1 "P1" {:type :discharge})
+          world2 (fold-events world1 d-events)
+          {ca-events :events} (engine/decide (Random. 1) 20 world2 "P1" {:type :cancel-admit})
+          world3 (fold-events world2 ca-events)
+          _ (is (not (contains? (get-in world3 [:patients "P1"]) :class)) "sanity: cancel-admit stripped :class")
+          {cd-events :events} (engine/decide (Random. 1) 30 world3 "P1" {:type :cancel-discharge})
+          world4 (fold-events world3 cd-events)]
+      (is (= :inpatient (:class (get-in world4 [:patients "P1"])))))))
+
 (deftest cancel-discharge-on-never-discharged-patient-is-rejected
   (testing "docs/patient-state-model.md's own illegal example"
     (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
@@ -17147,6 +19551,104 @@ logic, not patient records.
     (is (= [:registered :admission :observation :medication-order :medication-end :discharge]
            (mapv :event ground-truth)))
     (is (result/ok? (check/check-all ground-truth (:facility result))))))
+
+;; --- M6 Task 1: PatientState grows a clinical-content accumulator
+;; (:conditions/:observations/:medication-orders/:discharged-at) --
+;; EmitState's own "snapshot-at-instant" law (docs/sim-theory.edn) means
+;; the FHIR emitter may touch NOTHING but folded state, never the log
+;; directly; Condition/Observation/MedicationRequest content therefore
+;; has to actually LAND in the fold, the same way :location/:persona
+;; already do, rather than staying a log-only fact only check.clj reads
+;; via engine/replay. -----------------------------------------------------
+
+(deftest admission-folds-condition-annotations-into-patient-conditions
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        conditions [{:event :condition-onset :codes [a-concept] :citation a-citation}]
+        {:keys [events]} (engine/decide (Random. 1) 5 world0 "P1"
+                                        {:type :admission :location "Renal" :conditions conditions})
+        world1 (fold-events world0 events)
+        p (get-in world1 [:patients "P1"])]
+    (is (= [{:codes [a-concept] :citation a-citation :onset-t 5 :clinical-status :active}]
+           (:conditions p)))))
+
+(deftest admission-with-no-conditions-leaves-the-conditions-field-absent
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")]
+    (is (not (contains? (get-in world1 [:patients "P1"]) :conditions)))))
+
+(deftest a-condition-end-annotation-on-the-same-encounter-resolves-the-matching-onset
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        end-citation {:module "sinusitis" :state :resolved}
+        conditions [{:event :condition-onset :codes [a-concept] :citation a-citation}
+                    {:event :condition-end :codes [a-concept] :citation end-citation}]
+        {:keys [events]} (engine/decide (Random. 1) 5 world0 "P1"
+                                        {:type :admission :location "Renal" :conditions conditions})
+        world1 (fold-events world0 events)
+        [condition] (:conditions (get-in world1 [:patients "P1"]))]
+    (is (= :resolved (:clinical-status condition)))
+    (is (= 5 (:end-t condition)))
+    (is (= a-citation (:citation condition)) "the ONSET's own citation is retained, not overwritten")))
+
+(deftest observation-decide-folds-into-patient-observations
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1"
+                                        {:type :observation :codes [a-concept] :value 38.2 :unit "Cel"})
+        world2 (fold-events world1 events)]
+    (is (= [{:codes [a-concept] :t 10 :value 38.2 :unit "Cel"}]
+           (:observations (get-in world2 [:patients "P1"]))))))
+
+(deftest result-available-folds-every-analyte-into-patient-observations
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        {order-events :events schedule :schedule-followup}
+        (engine/decide (Random. 42) 10 world1 "P1" {:type :order :profile :cbc})
+        result-event (:result-event (first (:steps schedule)))
+        world2 (fold-events world1 (into order-events [result-event]))
+        observations (:observations (get-in world2 [:patients "P1"]))]
+    (is (= 5 (count observations)) "CBC's 5 analytes")
+    (doseq [{:keys [codes t value unit reference-range interpretation]} observations]
+      (is (= 1 (count codes)))
+      (is (= (:t result-event) t))
+      (is (some? value))
+      (is (some? unit))
+      (is (some? reference-range))
+      (is (some? interpretation)))))
+
+(deftest medication-order-then-end-folds-into-patient-medication-orders-and-closes-it
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        {order-events :events} (engine/decide (Random. 1) 10 world1 "P1"
+                                              {:type :medication-order :codes [a-concept] :citation a-citation})
+        world2 (fold-events world1 order-events)
+        opened (first (:medication-orders (get-in world2 [:patients "P1"])))
+        {end-events :events} (engine/decide (Random. 1) 20 world2 "P1"
+                                            {:type :medication-end :order-citation a-citation})
+        world3 (fold-events world2 end-events)
+        closed (first (:medication-orders (get-in world3 [:patients "P1"])))]
+    (is (= {:codes [a-concept] :citation a-citation :ordered-t 10 :status :active} opened))
+    (is (= :completed (:status closed)))
+    (is (= 20 (:ended-t closed)))))
+
+(deftest medication-end-with-no-matching-order-citation-leaves-medication-orders-untouched
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")})
+        world1 (admit world0 0 "P1" "Renal")
+        {:keys [events]} (engine/decide (Random. 1) 10 world1 "P1" {:type :medication-end :order-citation a-citation})
+        world2 (fold-events world1 events)]
+    (is (nil? (:medication-orders (get-in world2 [:patients "P1"]))))))
+
+(deftest discharge-and-outpatient-visit-end-both-stamp-discharged-at
+  (let [world0 (world-of {"P1" (engine/initial-patient "P1" "MRN000001")
+                          "P2" (engine/initial-patient "P2" "MRN000002")})
+        world1 (admit world0 0 "P1" "Renal")
+        {d-events :events} (engine/decide (Random. 1) 30 world1 "P1" {:type :discharge})
+        world2 (fold-events world1 d-events)
+        {v-events :events} (engine/decide (Random. 1) 0 world0 "P2" {:type :outpatient-visit})
+        world3 (fold-events world0 v-events)
+        {e-events :events} (engine/decide (Random. 1) 40 world3 "P2" {:type :outpatient-visit-end})
+        world4 (fold-events world3 e-events)]
+    (is (= 30 (:discharged-at (get-in world2 [:patients "P1"]))))
+    (is (= 40 (:discharged-at (get-in world4 [:patients "P2"]))))))
 
 ;; --- M5b Task 4: end-to-end module wiring (persona -> run-module ->
 ;; CompileTrajectory -> IR), composing with :pathways -----------------------
@@ -18724,6 +21226,7 @@ logic, not patient records.
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.pathway :as pathway]
             [ehr-testing-sim.run :as run]
             [ehr-testing-sim.result :as result]))
 
@@ -18841,6 +21344,92 @@ logic, not patient records.
       (is (result/ok? r))
       (is (str/includes? message "ALDRIC-EHR")))))
 
+;; --- M6 Task 0: the tools full-capability session's own reproduction --
+;; assigning one patient ordinal BOTH an authored encounter-opening
+;; pathway AND a GMF module used to reach engine/run and blow up as
+;; :self-check-failed only once the invariant catalog caught the
+;; resulting double-encounter -- a config authoring error wearing a
+;; "bug in us" category. Caught here, statically, before any simulation
+;; runs (ADR-0007's single-encounter-horizon makes the combination
+;; illegal by construction).
+
+(deftest run-command-rejects-a-patient-assigned-both-the-default-pathway-and-a-module
+  (testing "the plainest reproduction shape: no :pathways override at
+            all means EVERY ordinal gets the default (admission-
+            bearing) :pathway -- an explicit module assignment on any
+            ordinal therefore always conflicts"
+    (let [r (run/run-command {:seed 1 :patients 1
+                              :module-assignment [{:patient-ordinal 0 :module-id "sinusitis"}]})]
+      (is (result/rejected? r))
+      (is (= :incompatible-assignment (:category r)))
+      (let [[conflict] (:conflicts (:payload r))]
+        (is (= 0 (:patient-ordinal conflict)))
+        (is (= :pathway (:pathway-source conflict)))
+        (is (= :module-assignment (:module-source conflict)))))))
+
+(deftest run-command-rejects-explicit-per-ordinal-pathway-plus-module-conflict-but-not-the-disjoint-cohort-pattern
+  (testing "the tools full-capability fixture's own shape: ordinal 0 gets
+            BOTH an admission-bearing pathway and a module (illegal);
+            ordinal 1 gets an EMPTY pathway plus a module (legal, the
+            documented module-only-patient pattern) -- only ordinal 0
+            is reported"
+    (let [r (run/run-command {:seed 1 :patients 2
+                              :pathways [{:patient-ordinal 0 :pathway pathway/sample-admission-discharge}
+                                         {:patient-ordinal 1 :pathway {:name "module-only" :steps []}}]
+                              :module-assignment [{:patient-ordinal 0 :module-id "sinusitis"}
+                                                  {:patient-ordinal 1 :module-id "sinusitis"}]})]
+      (is (result/rejected? r))
+      (is (= :incompatible-assignment (:category r)))
+      (is (= [0] (mapv :patient-ordinal (:conflicts (:payload r)))))
+      (is (= :pathways (:pathway-source (first (:conflicts (:payload r)))))))))
+
+(deftest run-command-does-not-reject-the-legal-disjoint-cohort-pattern
+  (testing "an empty pathway plus a module, alone, is not a conflict --
+            proves the check doesn't over-reject the documented
+            module-only-patient pattern engine-test's own fixtures use"
+    (let [captured (atom nil)
+          stub-engine-run (fn [engine-opts] (reset! captured engine-opts) {:ground-truth [] :facility nil :providers nil})
+          r (run/run-command {:seed 1 :patients 1
+                              :pathways [{:pathway {:name "module-only" :steps []} :weight 1}]
+                              :module-assignment [{:module-id "sinusitis" :weight 1}]}
+                             {:engine-run-fn stub-engine-run})]
+      (is (result/ok? r))
+      (is (some? @captured)))))
+
+(deftest incompatible-assignment-check-does-not-misfire-on-the-plumbing-completeness-sentinels
+  (testing "sentinel-opts (above) carries a bare-keyword :module-assignment
+            and :pathways -- structurally invalid, so the check must
+            skip rather than throw or false-positive"
+    (let [captured (atom nil)
+          stub-engine-run (fn [engine-opts] (reset! captured engine-opts) {:ground-truth [] :facility nil :providers nil})
+          r (run/run-command sentinel-opts {:engine-run-fn stub-engine-run})]
+      (is (result/ok? r))
+      (is (some? @captured)))))
+
+;; --- M6 Task 1: --emit fhir --------------------------------------------
+
+(deftest run-command-emit-fhir-produces-end-of-run-bundles-per-patient
+  (let [r (run/run-command {:seed 42 :patients 2 :emit "fhir"})]
+    (is (result/ok? r))
+    (let [bundles (:fhir-bundles (:payload r))]
+      (is (= 2 (count bundles)))
+      (doseq [[patient-id bundle] bundles]
+        (is (string? patient-id))
+        (is (= "Bundle" (:resourceType bundle)))))))
+
+(deftest run-command-emit-fhir-honors-an-explicit-at-instant
+  (testing "--at queries an arbitrary instant, not only end-of-run"
+    (let [end (run/run-command {:seed 42 :patients 1 :emit "fhir"})
+          mid (run/run-command {:seed 42 :patients 1 :emit "fhir" :at 0})
+          pid (engine/patient-id-for 42 0)]
+      (is (not= (get (:fhir-bundles (:payload end)) pid)
+                (get (:fhir-bundles (:payload mid)) pid))
+          "an early instant sees less state than end-of-run"))))
+
+(deftest run-command-without-emit-carries-no-fhir-bundles-key
+  (let [r (run/run-command {:seed 42 :patients 1})]
+    (is (not (contains? (:payload r) :fhir-bundles)))))
+
 (deftest run-command-config-file-passthrough-carries-site-profile
   (testing ":site-profile is a data-heavy key with no CLI flag of its own --
             the same :config passthrough vehicle :pathway/:order-profiles use"
@@ -18930,6 +21519,182 @@ logic, not patient records.
     (is (every? #(= "%s-OVERFLOW-%d" (:surge-format %)) (:wards result)))
     (testing "profile wins over the ward's own facility-level surge-format"
       (is (not= config/default-facility result)))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/v2_replay_test.clj ==========
+(ns ehr-testing-sim.v2-replay-test
+  "Task 2 (M6): the v2-replay accumulator and the emitter-coherence
+  property it exists to check -- 'the law graduates' (docs/sim-theory.md's
+  global emitter-coherence law becomes a real property test once a
+  second emitter exists to fold the wire back into state). Written
+  test-first (ADR-0004).
+
+  Scope boundary, documented not silent: bed-swap (A17) and merge (A40)
+  are genuinely two-participant messages (two PID/PV1 pairs in ONE
+  message, a shared-MRN reassignment mid-run) whose own wire-identity
+  reconstruction is real, separate engineering scope -- this property
+  runs over churn EXCLUDING bed-swap/merge (cancel-admit/cancel-transfer/
+  cancel-discharge/transfer-in-error only), the same 'deferred with a
+  contract note, not silently stubbed' treatment EmitState's own CDA arm
+  gets. `ehr-testing-sim.v2-replay/unsupported-trigger` documents the
+  same boundary from the accumulator's own side."
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.emit-hl7 :as emit-hl7]
+            [ehr-testing-sim.gmf :as gmf]
+            [ehr-testing-sim.v2-replay :as v2-replay]))
+
+(def ref-date "2024-01-01")
+(def utc-offset "+00:00")
+
+;; --- message-evolve: hand-built single-message unit tests -----------------
+
+(deftest a-bare-admission-message-self-initializes-the-accumulator
+  (testing "bootstrap-from-empty (M6 Task 2): replay from an empty
+            accumulator succeeds because a patient's first message
+            self-initializes -- no separate 'register' step needed on
+            the wire side, since EVERY message carries full PID
+            enrichment already"
+    (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+          messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+          reconstructed (v2-replay/replay-messages (take 1 messages) ref-date)
+          [mrn entry] (first reconstructed)]
+      (is (= 1 (count reconstructed)))
+      (is (string? mrn))
+      (is (= :admitted (:status entry)))
+      (is (some? (:persona entry))))))
+
+(deftest replay-messages-reconstructs-admission-transfer-discharge
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 7 :patients 1})
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+        reconstructed (v2-replay/replay-messages messages ref-date)
+        [_ entry] (first reconstructed)]
+    (is (= :discharged (:status entry)))
+    (is (nil? (:location entry)))
+    (is (some? (:discharged-at entry)))))
+
+(deftest replay-messages-reconstructs-cancel-admit-back-to-new
+  (let [pathway {:name "cancel-admit" :steps [{:type :admission :location "Renal"}
+                                              {:type :cancel-admit}]}
+        {:keys [ground-truth facility providers]} (engine/run {:seed 1 :patients 1 :pathways [{:pathway pathway :weight 1}]})
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+        reconstructed (v2-replay/replay-messages messages ref-date)
+        [_ entry] (first reconstructed)]
+    (is (= :new (:status entry)))
+    (is (nil? (:location entry)))
+    (is (nil? (:admitted-at entry)))))
+
+(deftest replay-messages-reconstructs-order-result-observations
+  (let [pathway {:name "cbc-order" :steps [{:type :admission :location "Renal"}
+                                           {:type :order :profile :cbc}
+                                           {:type :discharge}]}
+        {:keys [ground-truth facility providers]} (engine/run {:seed 7 :patients 1 :pathways [{:pathway pathway :weight 1}]})
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+        reconstructed (v2-replay/replay-messages messages ref-date)
+        [_ entry] (first reconstructed)]
+    (is (= 5 (count (:observations entry))) "CBC's 5 analytes")
+    (doseq [{:keys [codes value unit reference-range interpretation]} (:observations entry)]
+      (is (= 1 (count codes)))
+      (is (double? value))
+      (is (some? unit))
+      (is (some? reference-range))
+      (is (some? interpretation)))))
+
+;; --- the projection function -----------------------------------------------
+
+(deftest projection-excludes-patient-id-mrns-home-ward-and-placement
+  (let [state {:patient-id "P1" :mrns #{"M1"} :active-mrn "M1" :status :admitted
+               :home-ward "Renal" :location {:ward "ED" :bed "ED-H01" :placement :surge}}
+        projected (v2-replay/project-to-wire-visible-fields state)]
+    (is (not (contains? projected :patient-id)))
+    (is (not (contains? projected :mrns)))
+    (is (not (contains? projected :home-ward)))
+    (is (= {:ward "ED" :bed "ED-H01"} (:location projected)))))
+
+(deftest projection-excludes-conditions-and-medication-orders-entirely
+  (let [state {:active-mrn "M1" :status :admitted
+               :conditions [{:codes [] :citation {:module "m" :state :s} :onset-t 0 :clinical-status :active}]
+               :medication-orders [{:codes [] :citation {:module "m" :state :s} :ordered-t 0 :status :active}]}
+        projected (v2-replay/project-to-wire-visible-fields state)]
+    (is (not (contains? projected :conditions)))
+    (is (not (contains? projected :medication-orders)))))
+
+(deftest projection-gates-payer-on-admission-having-happened
+  (let [persona {:name {:family "A" :given "B"} :sex :female :dob "2000-01-01" :age 24
+                 :address {:street "s" :city "c" :state "s" :zip "z"} :phone "p" :ssn "900-11-2222"
+                 :payer {:id "medicaid" :name "Medicaid" :type :medicaid}}
+        before-admission {:active-mrn "M1" :status :new :persona persona}
+        after-admission {:active-mrn "M1" :status :admitted :admitted-at 0 :persona persona}]
+    (is (not (contains? (:persona (v2-replay/project-to-wire-visible-fields before-admission)) :payer)))
+    (is (= {:id "medicaid" :name "Medicaid"}
+           (:payer (:persona (v2-replay/project-to-wire-visible-fields after-admission)))))
+    (is (not (contains? (:persona (v2-replay/project-to-wire-visible-fields after-admission)) :ssn))
+        "wait -- :ssn lives on persona itself, not under :payer; this asserts persona's own :ssn is dropped")))
+
+;; --- the emitter-coherence property: reconstructed state == log-folded
+;; state, projected, at EVERY message boundary --------------------------
+
+(def ^:private no-bed-swap-no-merge-churn
+  "This property's own documented scope boundary (this namespace's own
+  header comment): every churn type EXCEPT the genuinely two-participant
+  ones."
+  {:cancel-admit 0.08 :cancel-transfer 0.08 :cancel-discharge 0.08 :transfer-in-error 0.08})
+
+(defn- coherent-at-every-boundary?
+  [ground-truth messages]
+  (let [records (engine/replay ground-truth)
+        rendered (filterv #(emit-hl7/message-type-registry (:event (:event %))) records)]
+    (and (= (count rendered) (count messages))
+         (loop [acc {} rs rendered ms messages]
+           (if (empty? rs)
+             true
+             (let [record (first rs)
+                   message (first ms)
+                   mrn (:active-mrn (:event record))
+                   patient-id (:patient-id record)
+                   true-state (get (:world-after record) patient-id)
+                   acc' (v2-replay/fold-message acc message ref-date)
+                   reconstructed-state (get acc' mrn)]
+               (if (= (v2-replay/project-to-wire-visible-fields true-state)
+                      (v2-replay/project-to-wire-visible-fields reconstructed-state))
+                 (recur acc' (rest rs) (rest ms))
+                 false)))))))
+
+(defspec emitter-coherence-reconstructed-state-matches-the-log-fold-at-every-boundary 150
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 10)
+                 use-churn gen/boolean
+                 use-order gen/boolean]
+    (let [pathway (if use-order
+                    {:name "cbc-order" :steps [{:type :admission :location "Renal"}
+                                               {:type :order :profile :cbc}
+                                               {:type :delay :from 30 :to 30}
+                                               {:type :discharge}]}
+                    {:name "plain" :steps [{:type :admission :location "Renal"}
+                                           {:type :delay :from 30 :to 30}
+                                           {:type :discharge}]})
+          config (cond-> {:seed seed :patients patients :pathways [{:pathway pathway :weight 1}]}
+                   use-churn (assoc :churn-profile no-bed-swap-no-merge-churn))
+          {:keys [ground-truth facility providers]} (engine/run config)
+          messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)]
+      (coherent-at-every-boundary? ground-truth messages))))
+
+(defspec emitter-coherence-holds-for-module-driven-outpatient-trajectories 150
+  (prop/for-all [seed gen/large-integer]
+    (let [{:keys [ground-truth facility providers]}
+          (engine/run {:seed seed :patients 5
+                       :pathway {:name "module-only" :steps []}
+                       :modules [(:payload (gmf/load-module
+                                            "sinusitis" (slurp (io/resource "modules/sinusitis.json"))))]
+                       :module-assignment [{:module-id "sinusitis" :weight 1}]
+                       :module-horizon-days 3650})
+          messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)]
+      (coherent-at-every-boundary? ground-truth messages))))
 
 ========== END FILE ==========
 
