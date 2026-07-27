@@ -1,7 +1,7 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-27T15:33:20Z
-HEAD: 03e9178b90a8d7e2cd4cd04c74b540a48afe97ec
+generated (UTC): 2026-07-27T17:15:31Z
+HEAD: e34ca5f7f1aa714089a9ddf381a59c646cb519e1
 git status --porcelain:
 working tree clean
 elides: .agents/skills, .agents/prompts/archive
@@ -897,10 +897,15 @@ the milestone before it:
 - **Calibrate** (`:planned`, feedback stage) — waits on a real
   `sim-corpus` and a site's `feed-statistics` to calibrate against;
   premature before Package and a first external consumer exist.
-- **CI + integration validation** (independent-parser round-tripping
-  via NIST/HAPI, per `docs/third-party-sources.md` Tier 2) — triggers
-  once this repo has a public GitHub remote (ADR-0003's existing
-  trigger) or another CI-capable remote.
+- **CI — FIRED (unit/property tier), 2026-07-27; integration tier
+  stays later.** The trigger ADR-0003 named (a public GitHub remote)
+  is met; `.github/workflows/test.yml` runs `clojure -X:test` on every
+  push/PR — deliberately minimal (no coverage gate, no lint gate, per
+  the workflow file's own header comment). Independent-parser round-
+  tripping via NIST/HAPI (`docs/third-party-sources.md` Tier 2) is
+  still NOT wired into CI — that's the integration tier, which stays
+  local/scheduled-later, per this section's own standing design; a
+  bare unit-test CI workflow existing is not the same trigger.
 - **SETUP.md** — deferred trigger: owed before this repo has any user
   besides its own author, not written speculatively now. Installation
   friction is a first-class adoption risk for both mined upstreams —
@@ -911,12 +916,17 @@ the milestone before it:
   §4.5). This repo's cold-start already fits in one documented command
   (`AGENTS.md`'s Quick start); SETUP.md exists to keep that true for
   someone who isn't this repo's author, not to add ceremony ahead of
-  need.
-- **Packs demotion** — `pack-push` stays the active session-end
-  ceremony (ADR-0006) until this repo's GitHub remote goes *public*;
-  demoting it to dormant, the way `ehr-testing-tools` did at its own
-  ADR-0008, is recorded as its own ADR when that happens, not folded
-  into this roadmap.
+  need. **Checked, not fired, at go-public (2026-07-27):** a fresh
+  `git clone` + `clojure -X:test` (this session's own Task 4 cold-clone
+  smoke test, `notes/facts-register.md` F19) passed end to end using
+  nothing beyond the documented Quick start — the trigger this entry
+  names (a gap the quick start doesn't cover) did not fire, so SETUP.md
+  stays unwritten.
+- **Packs demotion — FIRED, 2026-07-27.** This repo's GitHub remote
+  went public; `pack-push` demoted to dormant the way `ehr-testing-tools`
+  did at its own ADR-0008, recorded as its own ADR (`notes/ADRs.md`
+  ADR-0015) rather than folded into this roadmap, exactly as this entry
+  said it would be.
 - **Site profiles** — **landed**, see its own section above (between
   M4 and M5). GT1/ZG1 (SimHospital issue #21's own second half — the
   same issue cited there for the Z-segment-template scope item) and
@@ -1074,6 +1084,59 @@ fail() {
 make test || fail "make test"
 
 exit 0
+
+========== END FILE ==========
+
+========== FILE: ./.github/workflows/test.yml ==========
+# Minimal CI (go-public Task 4, notes/ADRs.md ADR-0015's own trigger --
+# ADR-0003: "adopt [CI] once this repo has a public GitHub remote to
+# run it against"). Deliberately minimal: checkout + Clojure CLI setup
+# + `clojure -X:test`, the same command AGENTS.md's own Quick start and
+# this session's own cold-clone smoke test (notes/facts-register.md F19)
+# already prove works from a bare clone. No coverage gate, no lint
+# gate, no integration tier -- all deliberately future work, not an
+# oversight:
+#
+# - Coverage measurement (`make coverage` / `clojure -M:coverage`)
+#   exists and is reported per session (ADR-0004), but a --fail-
+#   threshold gate is explicitly staged for later, once a baseline
+#   worth ratcheting exists (ADR-0004's own "Rejected" section).
+# - Lint (clj-kondo or similar) has no configured gate anywhere in
+#   this repo yet; adding one is a future session's own decision, not
+#   silently assumed here.
+# - Integration validation (independent-parser round-tripping via
+#   NIST/HAPI, docs/third-party-sources.md Tier 2) stays local/
+#   scheduled-later, per .agents/plans/roadmap.md's own "Later /
+#   triggers" section -- this workflow runs the unit/property suite
+#   only, on every push and pull request, nothing that dials out to
+#   an external server (ADR-0014's own no-external-acceptance-
+#   instruments rule extends naturally to CI: nothing here should
+#   need network access beyond dependency resolution).
+
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+
+      - name: Run test suite
+        run: clojure -X:test
 
 ========== END FILE ==========
 
@@ -1247,7 +1310,7 @@ through this wrapper (backticks get shell-interpreted before reaching WSL
 and use `git commit -F`. If WSL is unreachable, stop and hand the
 ceremony to the author — never commit from the Windows side.
 
-## 2. The pack ritual — pack-push is ACTIVE here
+## 2. The pack ritual — pack-push is DORMANT here (since 2026-07-27)
 
 `make pack` concatenates most git-tracked files in the repo into
 `ehr-testing-sim-pack.txt` (gitignored — it is session scaffolding, not a
@@ -1258,20 +1321,16 @@ so it doesn't belong in every session's context — and the header records
 the elision. `make pack-skills` packs exactly the elided directories, to
 a separate file.
 
-**One deliberate inversion from tools' guide: `make pack-push` is
-ACTIVE here, not dormant, and stays part of the session-end
-ceremony.** This repo's GitHub remote (`git@github.com:pragsmike/
-ehr-testing-sim.git`, added ADR-0006) is **private** — a private
-repo's raw file contents aren't fetchable by URL, so the
-`pragsmike/packs` transport is still the *only* way a chat session
-without repo-scoped credentials can read it, the same arrangement
-tools used before it went *public* (its ADR-0008). A session here now
-ends with commit → `git push origin` → `make pack-push`, in that order
-(ADR-0006) — pushing to origin no longer replaces `pack-push`, it
-precedes it. When ehr-testing-sim's remote goes *public*, demote
-`pack-push` to dormant the same way tools did, and record that
-demotion as a new ADR (see `Makefile`'s header comment, which carries
-the same note) — a private remote existing is not that trigger.
+**`make pack-push` is DORMANT, as of `notes/ADRs.md` ADR-0015.** This
+repo's GitHub remote (`git@github.com:pragsmike/ehr-testing-sim.git`,
+added private at ADR-0006) is now **public** — the trigger ADR-0003
+named and ADR-0006 reaffirmed. Public raw file contents are fetchable
+by URL (`raw.githubusercontent.com/pragsmike/ehr-testing-sim/...`), the
+same demotion tools recorded at its own ADR-0008. **The session-end
+ceremony is now: commit → `git push origin`.** `make pack`/`pack-skills`/
+`pack-push` still work and remain available for the occasional
+offline/local-snapshot use case, but none of them are a required step
+anymore.
 
 `pack-push` copies both packs into a local clone of the public
 `pragsmike/packs` repo (`~/.packs`, cloned once by hand — see
@@ -1290,10 +1349,16 @@ Pack markers (`========== FILE: ... ==========`, `========== END FILE
 would misidentify those lines as marker lines. Anchor any parser to the
 start of the line.
 
-**Pre-release amend allowance.** Pre-release, sole-author message amends
-are permitted via `--force-with-lease` followed by an immediate
-`pack-push` rerun; this allowance ends at first release or second
-contributor.
+**Pre-release amend allowance — CLOSED 2026-07-27 (ADR-0015).** Pre-release,
+sole-author message amends were permitted via `--force-with-lease`
+followed by an immediate `pack-push` rerun; that allowance was
+originally scoped to end at first release or second contributor —
+neither has happened — but going public added a condition that scoping
+didn't anticipate: once history is fetchable by anyone, a rewritten
+commit can silently invalidate a clone or fork nobody here knows
+exists. Public history is append-only in practice from this date
+forward, regardless of release status. Fix mistakes with a new commit,
+not an amend.
 
 Mid-flight multi-session work ends with a handoff document in
 `.agents/handoffs/`, not a pack — the pack is a filesystem-access
@@ -1371,12 +1436,13 @@ SOFTWARE.
 # anchored to line-start markers works across them. See tools'
 # AUTHORS-GUIDE.md section 2 for the pack ritual's full reasoning.
 #
-# One deliberate difference from tools: pack-push here is ACTIVE, not
-# dormant. This repo has no GitHub remote yet, so the pragsmike/packs
-# transport is the ONLY way a chat session can read it -- the same
-# arrangement tools used before it went public (its ADR-0008). When
-# ehr-testing-sim gets a public GitHub repo, demote pack-push to
-# dormant the same way tools did, and update this comment.
+# DORMANT since 2026-07-27 (notes/ADRs.md ADR-0015): this repo's GitHub
+# remote is now public, so raw.githubusercontent.com/pragsmike/
+# ehr-testing-sim/... is the chat-read path -- the same demotion tools
+# recorded at its own ADR-0008. `pack`/`pack-skills`/`pack-push` all
+# still work (a local, offline pack is still occasionally useful) but
+# none of them are a required session-end step anymore; the ceremony is
+# commit -> `git push origin`.
 
 REPO_NAME := ehr-testing-sim
 PACK_OUTPUT := $(shell echo $$HOME)/ehr-testing-sim-pack.txt
@@ -1402,7 +1468,7 @@ help:
 	@echo "  run          - demo run: clojure -M:cli run --seed 42 --patients 5"
 	@echo "  pack         - concatenate tracked files (except .agents/skills, .agents/prompts/archive) into $(PACK_OUTPUT)"
 	@echo "  pack-skills  - concatenate only .agents/skills + .agents/prompts/archive into $(PACK_SKILLS_OUTPUT)"
-	@echo "  pack-push    - pack + pack-skills, then publish both to the pragsmike/packs repo ($(PACKS_REPO_DIR)) -- ACTIVE while this repo has no GitHub remote"
+	@echo "  pack-push    - pack + pack-skills, then publish both to the pragsmike/packs repo ($(PACKS_REPO_DIR)) -- DORMANT since 2026-07-27 (ADR-0015); optional, not a required ceremony step"
 
 test:
 	clojure -X:test
@@ -1474,9 +1540,11 @@ pack-skills:
 	done >> $(PACK_SKILLS_OUTPUT)
 	@echo "Done! Created $(PACK_SKILLS_OUTPUT)"
 
-# ACTIVE (unlike tools', which went dormant when it went public): this
-# is currently the only transport by which a chat session can read this
-# repo. Publishes the freshly generated pack AND skills pack to the
+# DORMANT since 2026-07-27 (ADR-0015), same as tools' own pack-push at
+# its ADR-0008 -- this repo's public GitHub remote is now the primary
+# read path; this recipe still works and remains occasionally useful
+# (a local, offline snapshot) but is no longer a required ceremony
+# step. Publishes the freshly generated pack AND skills pack to the
 # pragsmike/packs repo (local clone at $(PACKS_REPO_DIR), pushed to
 # GitHub), fetchable at
 #   raw.githubusercontent.com/pragsmike/packs/main/ehr-testing-sim-pack.txt
@@ -1505,8 +1573,87 @@ pack-push: pack pack-skills
 
 ========== END FILE ==========
 
+========== FILE: ./NOTICE ==========
+ehr-testing-sim -- third-party notices
+=======================================
+
+This project's own code and documentation are MIT-licensed (see
+LICENSE). This file records attribution obligations for third-party
+terminology content this project's data files embed -- LOINC and
+SNOMED CT, both cited from wherever this repo's own code provenance
+law (docs/sim-theory.md) requires a code to carry its source, never
+invented (AGENTS.md's standing "do not invent facts about upstream
+sources" rule).
+
+Two narrower, directory-scoped NOTICE files sit alongside this one and
+are not superseded by it -- each covers content vendored (or
+deliberately NOT vendored) into its own directory, with its own dated
+provenance record:
+
+- resources/demographics/NOTICE -- given-names.edn, surnames.edn,
+  places.edn are this project's own hand-curated originals (schema
+  mirrors Synthea's design; content is not copied, adapted, or
+  extracted from any Synthea file).
+- resources/modules/NOTICE -- resources/modules/sinusitis.json,
+  Synthea's own Generic Module Framework JSON, vendored verbatim
+  under Apache-2.0, with its upstream URL/commit SHA/SHA-256 recorded
+  per file.
+
+## LOINC
+
+Files carrying real LOINC codes: resources/order-profiles.edn (the
+CBC and BMP lab-panel codes and their component analytes,
+notes/facts-register.md F7), test/ehr_testing_sim/fixtures/fixture-clinic.json
+(one Body-temperature observation code, F11), and generated demo
+output under docs/demos/ that renders these same codes (no new LOINC
+content of its own). Every LOINC code this project embeds carries its
+own display name alongside it (the `:display` field on each concept
+triplet, docs/sim-theory.md's code-provenance law) -- the pairing
+LOINC's own license requires when a LOINC identifier is extracted from
+the Licensed Materials. No LOINC Table, Panels and Forms File, Answer
+File, or other bulk LOINC artifact is redistributed anywhere in this
+project; only these small, individually-verified codes, each with its
+own facts-register row and last-verified date.
+
+Per LOINC's Copyright Notice and License
+(https://loinc.org/license/, fetched verbatim 2026-07-27,
+notes/facts-register.md F16), the notice required (Section 10) of any
+product or service incorporating portions of the Licensed Materials:
+
+> This material contains content from LOINC (http://loinc.org). LOINC
+> is copyright (c) Regenstrief Institute, Inc. and the Logical
+> Observation Identifiers Names and Codes (LOINC) Committee and is
+> available at no cost under the license at http://loinc.org/license.
+> LOINC(R) is a registered United States trademark of Regenstrief
+> Institute, Inc.
+
+## SNOMED CT
+
+This project never redistributes bulk SNOMED CT content (no SNOMED CT
+table, release file, or browser export ships anywhere in this repo).
+Every SNOMED CT code this project's data carries reaches it by one of
+two narrower paths, each already tracked on its own terms: codes
+embedded in the vendored Synthea module (resources/modules/sinusitis.json)
+ride that file's own Apache-2.0 distribution from Synthea
+(notes/facts-register.md F2, resources/modules/NOTICE) -- Synthea's own
+license, not a separate SNOMED grant, is what covers their presence
+here; codes in this project's own hand-authored test fixture
+(test/ehr_testing_sim/fixtures/fixture-clinic.json) were individually
+looked up and verified against a primary or search-engine-mediated
+source at authoring time (notes/facts-register.md F10, three codes) and
+are used, as small individually-verified identifiers rather than bulk
+content, under the terms available to US NLM/UMLS users
+(notes/facts-register.md F4). Neither path constitutes redistribution
+of the SNOMED CT release itself, and this project's own code-provenance
+law (docs/sim-theory.md) forbids inventing a code that wasn't verified
+this way.
+
+========== END FILE ==========
+
 ========== FILE: ./README.md ==========
 # ehr-testing-sim
+
+[![test](https://github.com/pragsmike/ehr-testing-sim/actions/workflows/test.yml/badge.svg)](https://github.com/pragsmike/ehr-testing-sim/actions/workflows/test.yml)
 
 Deterministic synthetic hospital traffic for testing EHR systems and
 integrations: clinically coded, operationally messy, provably
@@ -1710,9 +1857,11 @@ one seed away.
 
 Pre-release; MIT licensed; no PHI anywhere, by construction. The FHIR
 emitter landed at Milestone M6, end to end through the emitter-coherence
-property; a documentation alignment pass is next, then Calibrate — the
-one theory stage left unbuilt. Design lineage and decision history:
-[docs/](docs/), `notes/ADRs.md`, and `.agents/memory/architecture.md`.
+property; the documentation alignment pass promised here as "next" is
+this session (go-public, 2026-07-27; see `notes/ADRs.md` ADR-0015) —
+Calibrate remains the one theory stage left unbuilt. Design lineage and
+decision history: [docs/](docs/), `notes/ADRs.md`, and
+`.agents/memory/architecture.md`.
 
 ========== END FILE ==========
 
@@ -1873,9 +2022,11 @@ pipeline stage *uses without consuming* — a code table, a dependency,
 a configuration file. Each catalytic must resolve to a pinned,
 versioned source. See [sim-theory.md](sim-theory.md).
 
-**Ceremony.** The session-end ritual: commit → `git push origin` →
-`make pack-push`, in that order (ADR-0006). The ordering keeps the
-published pack's "clean tree" header meaningful.
+**Ceremony.** The session-end ritual: commit → `git push origin`.
+`make pack-push` (ADR-0006) was part of this ritual while the repo's
+GitHub remote was private; it went dormant when the remote went public
+(ADR-0015) — the pack transport is no longer the chat-read path,
+`raw.githubusercontent.com` against the public remote is.
 
 **Churn.** Operational noise: transfers, bed swaps, cancellations,
 error-entries, merges — the administrative messiness real ADT feeds
@@ -2238,7 +2389,7 @@ ehr-testing-tools) to judge generated messages, so the simulator is
 never graded by its own homework.
 
 See the conformance & gating vocabulary above for how judging is organized
-(judges, verdicts, findings, baselines)."
+(judges, verdicts, findings, baselines).
 
 ---
 
@@ -2471,9 +2622,11 @@ assuming the doc is aspirational.
 Pre-release. The pipeline is built end-to-end through the FHIR/state
 emitter (M6) — every theory stage but Calibrate is now both built and
 property-tested, including the emitter-coherence law itself. A full
-documentation alignment pass is next — expect minor staleness in
-cross-references and counts until then, and treat the ADRs and the
-theory EDN as tiebreakers. This project
+documentation alignment pass was promised here as "next" — **this is
+that pass** (the go-public session, 2026-07-27): cross-references,
+counts, and tenses swept against the tree; where a residual gap
+remains, treat the ADRs and the theory EDN as tiebreakers, per house
+convention. This project
 is one of three siblings: the
 [guide](https://github.com/pragsmike/ehr-testing-guide) teaches the
 testing method, the
@@ -7767,34 +7920,50 @@ editor). An annotated sketch — section by section, matching the
 interview:
 
 ```clojure
-{;; 1–2: your units
- :facility {:id "stmarys"
-            :wards [{:id "ED"    :name "Emergency"  :beds 20
+{;; 1–2: your units (ward :id is a keyword; :surge-format is required
+ ;; even at zero surge slots -- it's just never used to render one)
+ :facility {:id :stmarys
+            :wards [{:id :ed    :name "Emergency"  :beds 20
                      :surge-slots 8 :surge-format "%s-H%02d" :class :ed}
-                    {:id "MED4W" :name "4 West Med" :beds 24
+                    {:id :med4w :name "4 West Med" :beds 24
                      :surge-slots 4 :surge-format "%s-HALL-%d" :class :inpatient}
-                    {:id "TELE"  :name "Telemetry"  :beds 16
-                     :surge-slots 0 :class :inpatient}]}
+                    {:id :tele  :name "Telemetry"  :beds 16
+                     :surge-slots 0 :surge-format "%s-HALL-%d" :class :inpatient}]}
 
- ;; 3: your people (synthetic names; NPIs are generated, valid-format)
+ ;; 3: your people (synthetic names; NPIs are generated, valid-format;
+ ;; :wards references ward :id keywords, not names)
  :providers [{:name {:family "Okafor" :given "A."} :role :attending
-              :specialty "Hospital Medicine" :wards ["MED4W" "TELE"]}
+              :specialty "Hospital Medicine" :wards [:med4w :tele]}
              {:name {:family "Reyes" :given "M."} :role :attending
-              :specialty "Emergency Medicine" :wards ["ED"]}]
+              :specialty "Emergency Medicine" :wards [:ed]}]
 
- ;; 4: your payer mix
- :payers [{:id :medicare   :name "Medicare"        :type :medicare   :weight 45}
-          {:id :bcbs       :name "BCBS Commercial" :type :commercial :weight 35}
-          {:id :medicaid   :name "State Medicaid"  :type :medicaid   :weight 15}
-          {:id :self       :name "Self-pay"        :type :self-pay   :weight 5}]
+ ;; 4: your payer mix (:id is a string, not a keyword)
+ :payers [{:id "medicare" :name "Medicare"        :type :medicare   :weight 45}
+          {:id "bcbs"     :name "BCBS Commercial" :type :commercial :weight 35}
+          {:id "medicaid" :name "State Medicaid"  :type :medicaid   :weight 15}
+          {:id "self"     :name "Self-pay"        :type :self-pay   :weight 5}]
 
- ;; clinical content: weighted scenarios and/or disease modules.
- ;; A patient may have a pathway OR a module, never both -- a pathway
- ;; that admits/visits AND a module (which also opens its own
- ;; encounter) would double-book one patient's single visit and is
- ;; rejected at config time, before a run ever starts.
- :pathways [{:pathway "admit-cbc-discharge" :weight 3}
-            {:pathway "simple-admission"    :weight 7}]
+ ;; clinical content: weighted scenarios and/or disease modules. A
+ ;; :pathways entry's own :pathway is a full pathway definition
+ ;; (:name + :steps), not a name reference -- there is no named-
+ ;; pathway registry to resolve a bare string against. :location
+ ;; matches a ward's :name (above), not its :id. A patient may have a
+ ;; pathway OR a module, never both -- a pathway that admits/visits AND
+ ;; a module (which also opens its own encounter) would double-book
+ ;; one patient's single visit and is rejected at config time, before
+ ;; a run ever starts.
+ :pathways [{:pathway {:name "admit-cbc-discharge"
+                        :steps [{:type :admission :location "4 West Med"}
+                                {:type :order :profile :cbc}
+                                {:type :discharge}]}
+             :weight 3}
+            {:pathway {:name "simple-admission"
+                        :steps [{:type :admission :location "4 West Med"}
+                                {:type :delay :from 60 :to 240}
+                                {:type :discharge}]}
+             :weight 7}]
+ ;; :modules IS a vector of name strings -- resolved against
+ ;; resources/modules/<name>.json, unlike :pathways above.
  :modules ["sinusitis"]
 
  ;; 8: your mess, at your rates
@@ -7807,18 +7976,24 @@ interview:
   :msh {:version "2.5.1"
         :sending-app "STM-EHR" :sending-facility "STMARYS"
         :receiving-app "RHAPSODY" :receiving-facility "STM-HUB"}
-  :code-tables {:patient-class {:inpatient "IN" :outpatient "CLI"}
-                :discharge-disposition {:home "01H"}}
+  ;; each code-table entry is a map ({:code ... :coding-system
+  ;; optional}), not a bare string
+  :code-tables {:patient-class {:inpatient {:code "IN"} :outpatient {:code "CLI"}}
+                :discharge-disposition {:home {:code "01H"}}}
   :z-segments [{:segment "ZPI"
-                :on [:admission]
-                :fields [[:persona :payer :type]
-                         [:location :ward]
-                         "STM-PAYER-V2"]}]}}
+                :trigger #{:admission}
+                :fields [{:path [:persona :payer :type]}
+                         {:path [:location :ward]}
+                         {:literal "STM-PAYER-V2"}]}]}}
 ```
 
-Field names above are illustrative of the real schema — the shipped
-examples in [demos/](demos/) are always exact and runnable; start
-from one of those and edit.
+This example is schema-checked against `ehr-testing-sim.config`,
+`ehr-testing-sim.pathway`, `ehr-testing-sim.persona`, and
+`ehr-testing-sim.site-profile`'s malli schemas (2026-07-27,
+`notes/facts-register.md` F18) — every field name and value shape
+above is real, not just illustrative. The shipped examples in
+[demos/](demos/) are always exact and runnable; start from one of
+those and edit.
 
 ## How do I run it, and get messages?
 
@@ -7894,7 +8069,7 @@ scheme, a code value, a workflow — there's a good chance it's in
 [clinical-realities.md](clinical-realities.md) already (post-mortem
 transfers, hallway parking, newborn merges, results after
 discharge...). If it isn't, that catalog is exactly where it should
-be added: open an issue describing the reality, and how you'd know
+be added: [open an issue](https://github.com/pragsmike/ehr-testing-sim/issues) describing the reality, and how you'd know
 the simulation got it right.
 
 ========== END FILE ==========
@@ -8199,7 +8374,7 @@ These four are what the simulator is actually built from — code, data, or a ru
 
 ### Google Simulated Hospital
 
-Apache-2.0, archived (no longer receiving source changes) — [`notes/facts-register.md` F3](facts-register.md). Mined for **design only: no code or data taken**.
+Apache-2.0, archived (no longer receiving source changes) — [`notes/facts-register.md` F3](../notes/facts-register.md). Mined for **design only: no code or data taken**.
 
 - **Pathway step vocabulary**, including the churn family (Transfer, BedSwap, TransferInError, Cancel\*, Pending\*, Merge, DeleteVisit) — the documented lineage of this repo's IR step vocabulary (`ehr-testing-sim.pathway`) and, once churn lands, `InjectChurn` (`docs/sim-theory.edn`'s `:churn` stage — the session after this one's `;; NEXT` marker).
 - **Discrete-event core shape** — a priority queue of pending events plus a `RunNextEventIfDue`-style loop (`pkg/state` + `pkg/hospital`) — reduced to its functional essence in `ehr-testing-sim.engine`: where the Go original mutates patient structs in place, this repo's engine is a pure fold, `(state, due-event) -> (state', emitted-events)`, retaining full per-patient state history (ADR-0002; [`sim-theory.md`](sim-theory.md)'s "the log is the waist" reading of `Execute`).
@@ -8209,28 +8384,30 @@ Apache-2.0, archived (no longer receiving source changes) — [`notes/facts-regi
 
 ### Synthea
 
-Apache-2.0, MITRE — [`notes/facts-register.md` F2](facts-register.md). Mined for the *generative clinical* layer and US data; the source `docs/sim-theory.edn`'s `RunModules` stage is designed to consume, not yet built (`;; planned`, catalytic targets `gmf-module-set` + `gmf-interpreter`).
+Apache-2.0, MITRE — [`notes/facts-register.md` F2](../notes/facts-register.md). Mined for the *generative clinical* layer and US data; the source `docs/sim-theory.edn`'s `RunModules` stage is designed to consume, not yet built (`;; planned`, catalytic targets `gmf-module-set` + `gmf-interpreter`).
 
 - **The 85 GMF module JSONs**, consumed as data (`RunModules`'s planned input) — plain-JSON probabilistic state machines (Initial/Delay/Simple/ConditionOnset/MedicationOrder/Encounter states with direct/distributed/conditional/complex transitions), not code.
 - **The GMF interpreter spec**, ported (not linked) — `gmf-interpreter`, `docs/sim-theory.edn`'s in-repo code registry catalytic target (target 4, `docs/sim-theory.md`'s Catalytic resolution table).
 - **Embedded SNOMED/LOINC/RxNorm codes**, carried verbatim through trajectory, IR, and log (`docs/sim-theory.md`'s Code provenance global law: "the interpreter never invents or translates codes") — this is code *provenance*, traced back to Synthea's own modules, not this repo's invention.
 - **US demographics tables**, feeding `Persona`'s catalytic `demographics-tables` (target 3, vendored and hashed) — nationality lives entirely in data, never in stage logic (`Persona`'s own law, `docs/sim-theory.edn`).
 
+**SNOMED CT provenance, split by path.** No bulk SNOMED CT content (table, release file, browser export) is redistributed anywhere in this repo. Codes in the vendored Synthea module (`resources/modules/sinusitis.json`) ride that file's own Apache-2.0 distribution from Synthea — Synthea's license, not a separate SNOMED grant, is what covers their presence here (`notes/facts-register.md` F2, `resources/modules/NOTICE`). Codes in this project's own hand-authored test fixture (`test/ehr_testing_sim/fixtures/fixture-clinic.json`) were individually looked up and verified at authoring time (`notes/facts-register.md` F10) and are used, as small individually-verified identifiers rather than bulk content, under the terms available to US NLM/UMLS users (`notes/facts-register.md` F4). See `NOTICE` (repo root) for the full attribution text this splits from.
+
 Synthea's peer-reviewed pedigree (Walonoski et al., JAMIA 2018) is what validation claim #4 ("would a clinician find these trajectories credible?") inherits rather than re-argues — `docs/problem-statement.md`'s Validation & Evidence table, row 4.
 
 ### `org.clojars.cmiles74/clojure-hl7-parser` 3.5.1
 
-[`notes/facts-register.md` F1](facts-register.md). **The only runtime code dependency of the three** — everything above is design or data; this is a library this repo actually calls. `ehr-testing-sim.emit-hl7` builds ADT^A01/A03 messages directly on its `create-message`/`create-segment`/`create-field` structures and parses them back with its `parser`/`message` namespaces (round-trip law, `docs/sim-theory.edn`'s `:emit-hl7` laws) — the ER7 structures this stage's ADT^A01/A03 v0 slice is built on ([`sim-theory-diagram.md`](sim-theory-diagram.md)'s `EmitHL7` box, now `:built`). **A verified limitation** ([`notes/facts-register.md` F9](facts-register.md)): this library implements no ER7 escape-sequence handling in either direction — `ehr-testing-sim.emit-hl7/escape-er7`/`unescape-er7` (Milestone M4) are this repo's own documented workaround, needed once free-text persona content (names, addresses) could contain a literal delimiter character.
+[`notes/facts-register.md` F1](../notes/facts-register.md). **The only runtime code dependency of the three** — everything above is design or data; this is a library this repo actually calls. `ehr-testing-sim.emit-hl7` builds ADT^A01/A03 messages directly on its `create-message`/`create-segment`/`create-field` structures and parses them back with its `parser`/`message` namespaces (round-trip law, `docs/sim-theory.edn`'s `:emit-hl7` laws) — the ER7 structures this stage's ADT^A01/A03 v0 slice is built on ([`sim-theory-diagram.md`](sim-theory-diagram.md)'s `EmitHL7` box, now `:built`). **A verified limitation** ([`notes/facts-register.md` F9](../notes/facts-register.md)): this library implements no ER7 escape-sequence handling in either direction — `ehr-testing-sim.emit-hl7/escape-er7`/`unescape-er7` (Milestone M4) are this repo's own documented workaround, needed once free-text persona content (names, addresses) could contain a literal delimiter character.
 
 ### NLM SNOMED→ICD-10-CM map
 
-[`notes/facts-register.md` F5](facts-register.md). A **pinned data artifact**, not vendored code — the official U.S. mapping published by NLM as part of UMLS, access gated by a free UTS license. This is the *one sanctioned code translation* `docs/sim-theory.md`'s Code provenance law names: concept triplets flow unchanged everywhere else; SNOMED→ICD-10-CM for billing segments (DG1) is the sole exception, and it's pinned (catalytic target 1, `artifacts.lock`) rather than computed — a future session's job when DG1 lands, not this one's.
+[`notes/facts-register.md` F5](../notes/facts-register.md). A **pinned data artifact**, not vendored code — the official U.S. mapping published by NLM as part of UMLS, access gated by a free UTS license. This is the *one sanctioned code translation* `docs/sim-theory.md`'s Code provenance law names: concept triplets flow unchanged everywhere else; SNOMED→ICD-10-CM for billing segments (DG1) is the sole exception, and it's pinned (catalytic target 1, `artifacts.lock`) rather than computed — a future session's job when DG1 lands, not this one's.
 
 ## Tier 2 — validation & calibration anchors
 
 These never appear inside a box in [`sim-theory-diagram.md`](sim-theory-diagram.md) — they check this repo's output, they don't feed its construction. Named here because `docs/problem-statement.md`'s Validation & Evidence table cites them by name and a skeptic should be able to find out what they are.
 
-- **HAPI / NIST v2 validators** — [`notes/facts-register.md` F6](facts-register.md). NIST's HL7 v2 Conformance Testing portfolio (General Validation Tool, IGAMT, TCAMT; public-domain) and HAPI HL7v2 (open-source Java parser), the two independent-of-this-repo parsers/validators claim #1 ("do these messages actually parse?") calls for — round-tripping through *at least one parser other than our own emitter's counterpart* (`docs/problem-statement.md` row 1). Not wired into CI yet; the EmitHL7 vertical slice's own round-trip law (test-first, `docs/sim-theory.edn`) uses the cmiles74 parser itself, which catches gross malformation now but is not the independent-parser proof claim #1 ultimately requires — that's future integration work.
+- **HAPI / NIST v2 validators** — [`notes/facts-register.md` F6](../notes/facts-register.md). NIST's HL7 v2 Conformance Testing portfolio (General Validation Tool, IGAMT, TCAMT; public-domain) and HAPI HL7v2 (open-source Java parser), the two independent-of-this-repo parsers/validators claim #1 ("do these messages actually parse?") calls for — round-tripping through *at least one parser other than our own emitter's counterpart* (`docs/problem-statement.md` row 1). Not wired into CI yet; the EmitHL7 vertical slice's own round-trip law (test-first, `docs/sim-theory.edn`) uses the cmiles74 parser itself, which catches gross malformation now but is not the independent-parser proof claim #1 ultimately requires — that's future integration work.
 - **AHRQ/HCUP + CDC statistics** — claim #4's supplement (demographic and condition-incidence distribution comparisons) and claim #5's anchoring/calibration arms (length-of-stay, admission-mix, and throughput parameters; and `Calibrate`'s own feedback loop, `docs/sim-theory.edn`'s `:calibrate` stage — "match your hospital," not "trust our defaults," `docs/problem-statement.md` row 5c). `Calibrate` is `:planned`; when built, its `feed-statistics` catalytic input is site-supplied *summary statistics* only, never raw feed content (`docs/sim-theory.md`'s Global laws — the no-PHI law's one subtlety).
 
 ## The load-bearing distinction
@@ -9516,6 +9693,122 @@ by construction, per this project's own determinism guarantee, rather
 than a promise resting on the external-write path this ADR just
 removed.
 
+---
+
+## ADR-0015 — Going public: the visibility decision and its pre-recorded triggers, executed in one place
+
+**Status:** Accepted (author-ratified 2026-07-27)
+
+**Context.** ADR-0003 named the trigger for demoting `pack-push` to
+dormant ("when this repo gets a public GitHub remote") and for
+adopting CI ("once this repo has a public GitHub remote to run it
+against"); ADR-0006 reaffirmed that a *private* remote (added that
+session) does not meet either trigger and that "a future session that
+flips this repo's visibility to public records that as its own ADR,
+exactly as ADR-0003 already anticipated." This is that session. A
+go-public session necessarily touches several small, previously-decided
+facts at once — the pack transport's own reason to exist, the pre-
+release amend allowance, and the standing risk of conflating "public"
+with "released" — and this project's own convention (never silently
+revert an Accepted ADR; supersede with a new numbered record) means
+each deserves a decision recorded here rather than a quiet edit to the
+file that states it. Task 0 of this session's own audit (git history,
+full reachable history of the public `pragsmike/packs` transport, and a
+supplementary grep sweep for hostnames/paths/tokens/emails —
+`notes/facts-register.md` F15) found nothing that blocks this decision.
+
+**Decision.**
+
+1. **`pack-push` demotes to dormant.** The trigger ADR-0003 named and
+   ADR-0006 reaffirmed is now met: this repo's GitHub remote is public.
+   Public raw URLs (`raw.githubusercontent.com/pragsmike/ehr-testing-sim/...`)
+   are now the chat-read path for any session that needs this repo's
+   current state — the same demotion `ehr-testing-tools` recorded at its
+   own ADR-0008, for the same reason. `make pack`/`make pack-skills`
+   remain available (a local, offline snapshot is still occasionally
+   useful) but `make pack-push` is no longer a required ceremony step;
+   the session-end ceremony simplifies to **commit → `git push origin`**.
+   `Makefile`'s header comment and `AUTHORS-GUIDE.md` section 2 are
+   updated accordingly (below); `docs/GLOSSARY.md`'s **Ceremony** entry
+   and `.agents/plans/roadmap.md`'s own "Packs demotion" trigger note are
+   marked fired, pointing here.
+2. **The pre-release amend allowance ends, dated.** `AUTHORS-GUIDE.md`'s
+   `--force-with-lease` clause was scoped to end "at first release or
+   second contributor" — neither has happened — but a public remote
+   introduces a THIRD condition that reasoning didn't anticipate: once
+   history is fetchable by anyone, a rewritten commit can silently
+   invalidate a clone or fork nobody here knows exists. Public history
+   is append-only in practice from this date forward, regardless of
+   release status; the allowance closes 2026-07-27, and `AUTHORS-GUIDE.md`
+   is updated to say so (below), not silently — the original two
+   conditions stay recorded as what the allowance was ORIGINALLY scoped
+   to end at, since this ADR adds a condition rather than replacing them.
+3. **ADR-0009's clause is restated, not changed, to prevent a
+   misreading.** Going public is not a release. ADR-0009's own seed-
+   stability policy — same config + seed is byte-identical *within a
+   generator version*, and that guarantee is stated to hold only up to
+   this library's *first published release* (a Clojars/Maven
+   coordinate, per that ADR's own "before this library's first
+   published release" framing) — is unweakened and unchanged by this
+   ADR. Nothing about today's visibility flip is a release: no tag
+   exists, no Clojars/Maven artifact exists, no version number beyond
+   `deps.edn`'s own unversioned git-coordinate dependency shape has been
+   minted. A future session or external reader who sees a public repo
+   and assumes "public" means "released, so seed-stability now extends
+   across generator versions" would be wrong; this decision states that
+   plainly so the confusion has a canonical answer to point to rather
+   than being re-litigated per session.
+4. **The release gate stays a deferred, named ledger — not opened
+   today.** Going public and cutting a release are different triggers
+   (decision 3), and this session deliberately does not fire the
+   second one. What a future release-gate session will need to decide,
+   named here so it has a checklist rather than a blank page: a version
+   tag and its scheme (this project has never minted one), a GitHub
+   Release, Clojars/Maven coordinates (`deps.edn` currently has none to
+   publish under), a CHANGELOG, and the point at which ADR-0009's
+   within-version guarantee starts being read literally by external
+   consumers pinning a released coordinate rather than a git SHA. None
+   of this is designed or decided today; it is named so "public" and
+   "released" stay two separate, non-conflatable facts about this
+   repo's history, per decision 3.
+
+**Rejected.**
+
+- **Deleting `pack-push` entirely, rather than demoting it.** Rejected
+  for the same reason `ehr-testing-tools` kept its own dormant
+  `pack-push` rather than removing it at its ADR-0008: a local, offline
+  pack is still occasionally useful (no network dependency, a single
+  file to paste into a context window that can't fetch a URL), and the
+  mechanism costs nothing to leave in place once it's no longer a
+  required step.
+- **Editing ADR-0003's, ADR-0006's, or ADR-0009's own bodies to reflect
+  today's decision.** Rejected by this project's own standing rule
+  (never silently revert an Accepted ADR — supersede with a new
+  numbered record). Each of those ADRs' bodies stays exactly as
+  originally accepted; this ADR is the supersession, and any place those
+  ADRs are read for their own now-fired triggers should be read
+  alongside this one, not instead of it.
+- **Treating "public" and "released" as the same trigger**, and
+  therefore letting ADR-0009's guarantee scope silently extend today.
+  Rejected because it would misstate a fact this session has no
+  standing to change — no release-gate work (decision 4) happened this
+  session — and because the misreading is exactly the kind of thing
+  this project's own culture (per `AGENTS.md`'s "do not invent facts")
+  exists to prevent from happening by omission.
+
+**Consequences.** `Makefile`'s header comment and recipe help text,
+`AUTHORS-GUIDE.md` sections 1–2, `docs/GLOSSARY.md`'s **Ceremony**
+entry, and `.agents/plans/roadmap.md`'s "Packs demotion" trigger note
+are all updated in this same session, landing alongside this ADR
+(this project's own co-landing convention, extended from code+invariant
+pairs to decision+mechanism pairs). `notes/facts-register.md` gains no
+new F-row from this ADR itself (the audit and schema-validation
+findings that informed it are already F15–F18); a future session
+reading this repo's own git history for "when did this go public" has
+this ADR as the answer, dated and reasoned, rather than inferring it
+from a bare commit that flips a GitHub setting this repository's own
+tree cannot record.
+
 ========== END FILE ==========
 
 ========== FILE: ./notes/facts-register.md ==========
@@ -9546,6 +9839,11 @@ removed.
 | F11 | LOINC `8310-5` is "Body temperature" (component "Body temperature", `LP65487-8`). Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` for its `Observation` state's concept triplet. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | `loinc.org/8310-5` (title confirmed via web search this session; direct fetch returned HTTP 403) | 2026-07-27 | verified this session (search-engine-mediated) |
 | F12 | RxNorm RXCUI `308191` is "Amoxicillin 500 MG Oral Capsule". Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` for its `MedicationOrder` state's concept triplet. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | RxNorm/NDC crosswalk data, confirmed via web search this session (direct fetch to `rxnav.nlm.nih.gov` timed out — DNS/network unreachable to this session's fetch tools) | 2026-07-27 | verified this session (search-engine-mediated, not a direct RxNav API fetch — see this row's own evidence note) |
 | F14 | The standard FHIR/HL7 test-data security label is HL7 v3-ActReason code `HTEST`, display "test health data", CodeSystem `http://terminology.hl7.org/CodeSystem/v3-ActReason` -- the label `ehr-testing-sim.emit-state` stamps into `meta.security` on every resource it renders (post-M6, ADR-0014), so a real system that ever received this data could find and purge it by a standard security-label query. | `src/ehr_testing_sim/emit_state.clj` (`htest-security`) | `hl7.org/fhir/testing.html`'s own worked XML example (`<security><system value=".../v3-ActReason"/><code value="HTEST"/><display value="test health data"/></security>`), fetched directly this session | 2026-07-27 | verified this session |
+| F18 | **`docs/simulate-your-facility.md`'s FAQ example config had real schema drift, corrected this session** (its own maintenance comment requires this check whenever schemas change; go-public's Task 2 is the first session to actually run it). Six mismatches against the live malli schemas: (1) `:facility`/ward `:id` were strings, schema wants `:keyword`; (2) a ward (`TELE`) omitted the required `:surge-format` field; (3) `:providers[].wards` referenced ward names as strings, schema wants a `[:vector :keyword]` of ward ids; (4) `:payers[].id` were keywords, schema wants `:string`; (5) `:pathways[].pathway` were bare name strings — **there is no named-pathway registry**; `ehr-testing-sim.run` validates `:pathways` directly against `ehr-testing-sim.pathway/PathwaysConfig`, so `:pathway` must be a full `{:name :steps}` pathway definition, the same shape `docs/demos/order-result/config.edn` already uses (`:modules`, by contrast, genuinely IS a vector of name strings — `ehr-testing-sim.run/resolve-modules` resolves those against `resources/modules/`, a real asymmetry now called out in the FAQ's own inline comment); (6) `:site-profile`'s `:code-tables` entries were bare strings, schema wants `{:code ... :coding-system?}` maps, and `:z-segments[].on`/raw-vector `:fields` should have been `:trigger` (a `:set`, not a vector) and `:fields` as `{:path ...}`/`{:literal ...}` maps — both confirmed against `docs/demos/site-profiles/config-aldric.edn`'s own real usage. The corrected example was then round-tripped through the actual live schemas (`ehr-testing-sim.config/valid-facility?`/`valid-provider-template?`, `ehr-testing-sim.persona/Payer`, `ehr-testing-sim.pathway/valid-pathways-config?`, `ehr-testing-sim.churn/valid-churn-profile?`, `ehr-testing-sim.site-profile/valid-profile?`) and confirmed valid, not just manually reasoned about. | `docs/simulate-your-facility.md` (the FAQ's own example config) | `src/ehr_testing_sim/config.clj`, `pathway.clj`, `persona.clj`, `churn.clj`, `site_profile.clj` (the schemas themselves); `src/ehr_testing_sim/run.clj` (`resolve-modules` docstring, confirming the pathway/module asymmetry); `docs/demos/order-result/config.edn` and `docs/demos/site-profiles/config-aldric.edn` (real usage examples the correction was checked against); a standalone script requiring the real namespaces and calling each schema's own `valid-*?`/`m/validate` function against the corrected config, run this session and removed after (not committed) | 2026-07-27 | verified this session |
+| F19 | **Cold-clone smoke test, go-public Task 4.** A fresh `git clone` of this repo's own committed HEAD (`03e9178`, working tree clean, no sibling checkout needed) into a scratch directory, followed by `clojure -X:test`, passes end to end: **403 tests / 1058 assertions, 0 failures/0 errors, ~35s wall time** — a stranger's first `git clone` + `clojure -X:test` works with no setup beyond the Clojure CLI itself. Cache-isolation attempts, honestly reported: `HOME`-override isolation did not take effect for `.m2`/`.gitlibs` in this environment (this install's `clojure` script resolves `:config-dir` from `$HOME` but resolves the Maven/gitlibs cache elsewhere regardless — confirmed by `~/.m2`'s unchanged mtime after the run); `GITLIBS=<scratch>` DID isolate correctly (384K freshly populated, proving the one git-coordinate dependency — `io.github.cognitect-labs/test-runner` — resolves cleanly from public GitHub with zero pre-existing cache); `-J-Dmaven.repo.local=<scratch>` did NOT isolate the Maven-coordinate deps (the scratch dir stayed empty; resolution still hit the real `~/.m2`) — this session did not find a working full-isolation flag for the Maven side in the time available, so the Maven-coordinate portion of this claim rests on `deps.edn` inspection, not a forced from-scratch download: every dependency (`org.clojure/clojure`, `metosin/malli`, `org.babashka/cli`, `org.clojure/data.json`, `org.clojars.cmiles74/clojure-hl7-parser`, plus test-only `org.clojure/test.check`/`org.slf4j/slf4j-nop`/`cloverage`) resolves from Clojars or Maven Central, the Clojure CLI's own default `:mvn/repos`, both public and unauthenticated — no private registry, no credential, no sibling-repo dependency anywhere in `deps.edn`. | `deps.edn`; go-public session's own Task 4 | `git clone` of local HEAD into a WSL scratch dir; `clojure -X:test` run there (both a `HOME`-override attempt and a `GITLIBS`/`-Dmaven.repo.local`-override attempt); `du`/`find`/mtime checks against the real `~/.m2`/`~/.gitlibs` to confirm which isolation attempt actually took effect; `deps.edn` read directly for every dependency's coordinate/repo | 2026-07-27 | verified this session (partial isolation — see this row's own caveat) |
+| F17 | **The 400/1052-Windows-vs-403/1058-WSL test-count discrepancy (recorded in the post-M6 session's own state) does not reproduce.** Re-run fresh, on the same HEAD commit (`03e9178`), `clojure -X:test` reports **403 tests / 1058 assertions, 0 failures/0 errors, identically on both Windows-side and WSL-side Clojure.** An independent enumeration (walking `test/` via `clojure.tools.namespace.find/find-namespaces-in-dir`, listing every var carrying `:test` metadata rather than trusting the runner's own summary line) produced the exact same 403-entry, alphabetically sorted list of fully-qualified test-var names in both environments — `diff --strip-trailing-cr` between the two runs' output is empty; the two environments' listings differ only in CRLF-vs-LF line endings, not content. A grep of `src/` and `test/` for environment-conditional test gating (`System/getenv`, `System/getProperty`, file-existence guards, `skip-when-absent` patterns) found none — the one place this repo ever had such a pattern (`blaze_integration_test.clj`'s skip-when-Blaze-absent guard) was already deleted by ADR-0014, before the discrepancy was even recorded. **Conclusion: the discrepancy was a session-timing snapshot artifact, not an environment-dependent test surface** — the Windows figure was almost certainly captured earlier in that session than the WSL pre-push-hook figure, before that session's final file writes landed, not evidence of three tests that exist in one environment and not the other. **Canonical count for docs/README, per the standing WSL-git-authority convention (AUTHORS-GUIDE.md section 1): 403 tests / 1058 assertions** — both environments now agree on this number, so the WSL-vs-Windows tiebreak this row was written to resolve turned out not to be needed. | `notes/facts-register.md` (this row); go-public session's own addendum item, folded into Task 2's counts pass | `clojure -X:test`, run independently on Windows-side and WSL-side Clojure against HEAD `03e9178`; a standalone `clojure.tools.namespace.find`-based test-var enumeration script, run in both environments and diffed (`diff --strip-trailing-cr`, exit 0 — no content difference); `grep` sweep of `src/`,`test/` for environment-conditional gating (none found) | 2026-07-27 | verified this session |
+| F16 | LOINC's Copyright Notice and License (fetched live 2026-07-27) requires, for any product incorporating portions of the Licensed Materials (Group 1 Artifacts: LOINC codes/table), Section 10's exact notice text — reproduced verbatim in `NOTICE` (repo root) — plus pairing every extracted LOINC identifier with its own display name (this repo's `:display` field on every concept triplet already satisfies this). Bulk redistribution of the LOINC Table or other Group 1/2/3 Artifacts is not covered by that same permission and this repo does not attempt it; only individually-verified codes (F7, F11) are embedded. LOINC® and RELMA® are registered US trademarks of Regenstrief Institute, Inc.; Group 1 (codes/table) is copyright Regenstrief Institute, Inc. and the LOINC Committee. | `NOTICE` (repo root, LOINC section) | `https://loinc.org/license/`, fetched directly via browser this session (WebFetch returned HTTP 403 to this session's fetch tool; the in-app browser tool succeeded) — full "Copyright Notice and License" and "Notice of Third-Party Content and Copyright Terms" page text read in full | 2026-07-27 | verified this session |
+| F15 | **Go-public Task 0 secrets/PII audit, pre-visibility-flip.** `gitleaks` v8.30.1 (binary from its GitHub release, SHA-256-verified against the published checksums file before use) found zero leaks scanning this repo's full `git log --all` history (24 commits) and zero leaks scanning its on-disk working tree (`--no-git` mode, ~14.7 MB incl. caches). The same binary found zero leaks across the full reachable history of the public `pragsmike/packs` repo (24 commits — all four sibling pack files: `ehr-testing-sim-pack.txt`/`-skills-pack.txt`, `ehr-testing-tools-pack.txt`/`-skills-pack.txt`), fetched via a fresh anonymous `git clone`. A supplementary `git log -p --all` / `git grep` regex sweep (personal emails, the local Windows username, `C:\Users\...` and non-`/mnt/c` absolute paths, private hostnames, secret-shaped keywords, credential-shaped filenames) over both repos' full history surfaced nothing actionable: one legitimate NIST public point-of-contact email (`robert.snelick@nist.gov`) appears in `ehr-testing-tools`' own pack content — already reviewed and deliberately retained (not redacted) by that repo's own 2026-07-24 history-reset/redaction session, which this scan's own commit-log read confirmed is the true root of `packs`' currently-reachable history; out of scope for this repo's own audit. This repo's own commit/pack content contains no personal email, no local username, no private hostname, and no credential anywhere in its reachable history. | `notes/facts-register.md` (this row); the go-public session's own Task 0 STOP-AND-REPORT gate | `gitleaks version` → `8.30.1`; `gitleaks detect` (git-history and `--no-git` modes) against this repo and against a fresh clone of `github.com/pragsmike/packs`; supplementary `git log -p --all`/`git grep` regex sweep over both — commands and raw JSON/log output retained in this session's own scratch directory, not committed to either repo | 2026-07-27 | verified this session |
 | F13 | **SUPERSEDED** — test removed per ADR-0014; row retained for history, per this register's own append-only discipline. This repo's own development/test JVM (as invoked by `clojure -X:test` in the M6 session's own environment) is JDK 8 (`1.8.0_311`) — `java.net.http.HttpClient` (JDK 11+) is therefore unavailable; `test/ehr_testing_sim/blaze_integration_test.clj`'s own HTTP calls used `java.net.HttpURLConnection` (JDK 1.1+) instead, for exactly this reason. This was an observation about ONE session's own runtime, not a repo-wide pinned minimum-JDK claim (`deps.edn` states no `:min-jdk` and this repo has no CI yet to enforce one) — recorded so a future session doesn't reintroduce `java.net.http` without re-checking, should this repo ever grow another JDK-version-sensitive HTTP call site. | `test/ehr_testing_sim/blaze_integration_test.clj` (deleted; its own header docstring, while it existed) | `(System/getProperty "java.version")`, run directly the M6 session | 2026-07-27 | superseded 2026-07-27 (test removed, ADR-0014) |
 
 ========== END FILE ==========
