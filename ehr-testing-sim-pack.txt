@@ -1,7 +1,7 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-27T05:28:01Z
-HEAD: c023b61fd46bdc0870d1542769ef6f3c25de3c7c
+generated (UTC): 2026-07-27T10:48:21Z
+HEAD: 92b8c1e2188ed540fcdd5acba50ff0bf5757cfc1
 git status --porcelain:
 working tree clean
 elides: .agents/skills, .agents/prompts/archive
@@ -522,14 +522,14 @@ project controls end to end; M5b lands the part that actually touches
 real upstream content and the emitter-facing consequences of a new
 encounter class.
 
-**Design captured ahead of either sub-milestone's build, this
-session (docs-only — no code or resources land here).**
+**Design captured ahead of either sub-milestone's build** (docs/ADR
+session, 2026-07-26 — no code or resources landed with it).
 [`docs/gmf-interpreter.md`](../../docs/gmf-interpreter.md) is the v1
 design doc: the state-type/transition subset the interpreter executes
 (deferring `CallSubmodule`/`Counter`/`MultiObservation`/`Death`, and,
 per its own candidate-module survey, `Device`/`DeviceEnd` and
-`CarePlanStart`/`CarePlanEnd`; recommending `Symptom` join v1 as a
-write-only state), the history/horizon two-phase run per patient, the
+`CarePlanStart`/`CarePlanEnd`; `Symptom` joins v1 as a write-only
+state), the history/horizon two-phase run per patient, the
 GMF-encounter-class → ADT mapping (including the new
 `:outpatient-visit` step pair), and the module-namespaced `:attributes`
 discipline. [ADR-0013](../../notes/ADRs.md#adr-0013) resolves
@@ -538,37 +538,91 @@ discipline. [ADR-0013](../../notes/ADRs.md#adr-0013) resolves
 pins a lockfile (target 1) — the decision ADR-0003 deferred since
 scaffold day, decided now that `docs/gmf-interpreter.md`'s survey of
 three real Synthea modules gives it something concrete to be decided
-against. Both documents name several recommendations flagged for
-author ratification (the `Symptom` addition, the history-phase
+against. **All eight of both documents' author-review recommendations
+are ratified, 2026-07-26** (the `Symptom` addition, the history-phase
 fast-forward granularity, the pre-horizon mark-don't-trim choice, the
-outpatient-visit validity/invariant sketch, and — `docs/gmf-
-interpreter.md`'s own appendix — `sinusitis.json` as the first module
-recommended to vendor) rather than silently decided; a future session
-opening M5a should confirm these before writing code against them, not
-assume them ratified by this session's own docs-only pass.
+outpatient-visit validity/invariant sketch — split into its own four
+items, `docs/gmf-interpreter.md`'s own closing ratification record —
+and `sinusitis.json` as the first module to vendor): M5a (below) is
+built directly against this ratified design, not against a still-open
+recommendation.
 
-### M5a — the interpreter itself: state machine, history/horizon, hand-written fixture
+### M5a — the interpreter itself: state machine, history/horizon, hand-written fixture — **landed**
 
-Lands **RunModules** (`:planned → :built`), pure and engine-adjacent:
-the GMF state-machine walk (`docs/gmf-interpreter.md` §1–3), the
-`PriorState`-as-log-query compilation (§2 — no `engine.clj` signature
-change required; `world`'s existing `:ground-truth` mirror and
-`events-for-patient`, both already landed M2b/ADR-0010-era, are the
-mechanism), and the history/horizon two-phase run per patient (§3).
-Tested end to end against the one hand-written GMF-JSON fixture module
-ADR-0013 point 6 names — this project's own authored content, not
-vendored, so the interpreter's own red tests depend on nothing outside
-this repo's control. No real Synthea module content lands in M5a; no
+Lands **RunModules the LIBRARY** — `ehr-testing-sim.gmf` (the module
+loader) and `ehr-testing-sim.gmf-interpreter` (`step`/`walk-module`/
+`run-module`) — pure and engine-adjacent: the GMF state-machine walk
+(`docs/gmf-interpreter.md` §1–3), the `PriorState`-as-log-query
+compilation (§2 — no `engine.clj` signature change needed; the
+interpreter's own accumulating trajectory stands in for `world`'s
+`:ground-truth` mirror, per that section's own "same event shape, so
+M5b swaps the source, not the logic" note), and the history/horizon
+two-phase run per patient (§3, `run-module` — genuinely ONE continuous
+walk marking events `:pre-horizon` by the pure predicate `t <
+registration-t`, not two separately-driven passes). Tested end to end
+against `test/ehr_testing_sim/fixtures/fixture-clinic.json`, the one
+hand-written GMF-JSON fixture ADR-0013 point 6 names — this project's
+own authored content, not vendored, so the interpreter's own red tests
+depend on nothing outside this repo's control.
+
+**`docs/sim-theory.edn`'s own `:trajectory` stage stays `:planned`,
+corrected from this entry's own original scope note above (which had
+read "Lands RunModules (:planned → :built)").** A library existing is
+not the same as this repo's own run actually wiring persona → modules →
+trajectory together — that wiring, and the flip to `:built`, is M5b's
+job (`docs/gmf-interpreter.md` §7, "Implementation status," and
+`sim-theory.edn`'s own updated `:contract` note, both added this
+session). No real Synthea module content lands in M5a; no
 `ground-truth-log`/`hl7v2-stream` consequence yet, since
 `CompileTrajectory` (M5b) is what turns a trajectory into pathway IR
 the engine can execute.
 
-Co-landing invariants: code-passthrough (every coded concept a
-trajectory event carries is verbatim from its source module, never
-invented or translated); glass-box traceability (every trajectory
-event cites the module id and state name that produced it) — both
-checkable against the hand-written fixture alone, ahead of any vendored
-content existing.
+**Four implementation decisions, recorded honestly as this session's
+own filling-in of what §1–§3 left unspecified, not silent divergence**
+(`docs/gmf-interpreter.md` §7 has the full reasoning for each): (1) a
+blocked Guard's own re-check mechanism — an analytic virtual-clock jump
+for a failing `:age`/`>=` condition (zero rng draws), block otherwise;
+(2) `Observation`'s own sampled value — one uniform draw within a
+state's own `:range`, when present; (3) `EncounterEnd` references "the
+most recently opened Encounter for this module," not a tracked open/
+closed set (correct for every module this session's own fixture and
+properties exercise; a future module with genuinely overlapping
+encounters would need more); (4) virtual time is an interpreter-internal
+`epoch-day` (`java.time.LocalDate`), not the engine's own seconds clock
+— M5b's own mapping job.
+
+Co-landing invariants/properties: code-passthrough (every coded concept
+a trajectory event carries is verbatim from its source module, 150
+trials green); glass-box traceability (every trajectory event cites a
+real module id and state name, 150 trials green); attribute writes only
+through the declared, module-namespaced registry (150 trials green);
+determinism, both for a bare `walk-module` run and across the full
+history/horizon `run-module` (150 trials each); the phase boundary is
+exactly `t < registration-t`, the same pure-predicate shape ADR-0011's
+own warm-up mark already established (150 trials green) — all checkable
+against the hand-written fixture alone, ahead of any vendored content
+existing.
+
+**Task 0's ratification flips landed alongside, per this session's own
+scope.** All eight author-review recommendations flagged across
+`docs/gmf-interpreter.md` and its appendix (the `Symptom` addition, the
+history-phase fast-forward granularity, the pre-horizon mark-don't-trim
+choice, `sinusitis.json` as the first module to vendor, and the four
+sub-items of the `:outpatient-visit` sketch — including item 6, the
+`:location` nil exception, now scheduled to land M5b as a genuine
+conditional row in `docs/patient-state-model.md`'s event-validity table
+rather than staying prose-only) are ACCEPTED, 2026-07-26 — see that
+document's own closing "Ratification record."
+
+273 tests / 716 assertions green (up from the site-profiles baseline
+230/625), coverage 96.00%/98.18% overall (up from 95.90%/98.06% —
+`ehr-testing-sim.gmf` 98.69%/99.29%, `ehr-testing-sim.gmf-interpreter`
+93.79%/98.26%). The pinned regression fixture
+(`test/ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn`) is
+untouched — M5a never reaches `engine.clj`'s own config surface, so
+there was no perturbation to regenerate against, the same by-
+construction guarantee the site-profiles milestone first established
+for its own catalytic.
 
 ### M5b — CompileTrajectory + the first vendored module + outpatient steps
 
@@ -1332,12 +1386,16 @@ M4's **Persona** — demographics sampling from vendored, hashed tables
 plus a real `payer-pool` catalytic wire, folded into Execute's own step
 queue via the `:registered` event, plus PID/IN1 enrichment — and
 EmitHL7's fourth catalytic, **site-profile** — MSH dialect, code-table
-overrides, Z-segment templates — property-tested and green (230 tests
-/ 625 assertions).
+overrides, Z-segment templates — property-tested and green (273 tests
+/ 716 assertions).
 **Next** (amber): **RunModules**, Milestone M5 — the GMF interpreter
 port, the `gmf-module-set` vendoring-vs-lockfile decision, and
-`CompileTrajectory`. **Later** (dashed grey): everything else in the
-*want*.
+`CompileTrajectory`. Milestone M5a (landed) built the interpreter
+LIBRARY itself (`ehr-testing-sim.gmf`/`ehr-testing-sim.gmf-interpreter`
+— the module loader, the state-machine walk, and the history/horizon
+two-phase run) against a hand-written fixture module; the stage stays
+amber until M5b wires a real vendored module's trajectory into an
+actual run. **Later** (dashed grey): everything else in the *want*.
 
 [`docs/sim-theory-diagram.md`](docs/sim-theory-diagram.md) is the full
 detail view (every resource wire, catalytic input, and the
@@ -1443,6 +1501,471 @@ MIT — see [LICENSE](LICENSE). No PHI anywhere, by construction.
                           org.clojure/test.check {:mvn/version "1.1.3"}
                           org.slf4j/slf4j-nop {:mvn/version "2.0.17"}}
              :main-opts ["-m" "cloverage.coverage" "-p" "src" "-s" "test"]}}}
+
+========== END FILE ==========
+
+========== FILE: ./docs/GLOSSARY.md ==========
+# Glossary
+
+This glossary exists so that everyone who reads this repository's
+documentation can actually understand it: software developers getting
+acclimated to the EHR domain, and domain experts — clinicians, medical
+informaticists, senior EHR system developers — encountering this
+project's software architecture and shorthand. Entries link to the
+repository document that treats the term in depth. Some terms also
+appear in the companion [ehr-testing-guide](https://github.com/pragsmike/ehr-testing-guide);
+where the guide gives the fuller treatment, entries say so. This
+glossary deliberately includes implementation-level terms that do not
+appear in the guide.
+
+**Start here if a word seems to mean the wrong thing:** the first
+section covers terms whose meaning here differs from the meaning you
+may bring with you.
+
+---
+
+## Terms with colliding meanings (read these first)
+
+**Pathway.** *Here:* a data structure — an ordered sequence of
+simulation steps (admit, delay, order, transfer, discharge…) that the
+engine executes for one patient; the intermediate representation both
+hand-authored scripts and generated trajectories compile to. See
+[sim-theory.md](sim-theory.md). *In clinical usage:* a "clinical
+pathway" or "care pathway" is a standardized care plan for a
+condition. Related but not the same: our pathways describe what the
+simulation will do, not what a clinician should do.
+
+**Resource.** *Here (in sim-theory documents):* a typed value flowing
+between pipeline stages in the resource-theory notation — "the wires"
+in the diagrams. *In FHIR:* a Resource is a standardized data object
+(Patient, Encounter, Observation). When M6's FHIR emitter documentation
+says "renders resources," it means FHIR Resources; when
+[sim-theory.md](sim-theory.md) says "resource," it means a wire.
+
+**Profile.** *Here:* a **site profile** — configuration describing one
+hospital's local dialect (custom code values, Z-segments, MSH
+identity). See [site-profiles.md](site-profiles.md). *In FHIR:* a
+profile is a formal constraint on a Resource type. Unrelated
+mechanisms; same word.
+
+**Event.** *Here:* an entry in the ground-truth log — an immutable
+fact about the simulated world ("patient P admitted to bed B at t").
+*In HL7v2:* a "trigger event" is the real-world happening a message
+reports (the A01 in ADT^A01). The two align on purpose — our events
+are designed to be renderable as HL7 trigger events — but the
+ground-truth log also contains events that never become messages
+(e.g. `:step-rejected`).
+
+**Boarding.** *In real hospitals:* holding an admitted patient in the
+ED (often a hallway) because no inpatient bed is free. *Here:* the
+modeled version — a patient whose administrative status is "admitted
+to ward W" while their physical location is an ED surge slot; it
+emerges from capacity pressure rather than being scripted. See
+[operational-models.md](operational-models.md).
+
+**Encounter.** *In clinical/EHR usage:* a discrete interaction between
+patient and health system (a visit, a hospitalization). *Here:* the
+same concept, but note the simulator's current model is
+encounter-scoped (a run simulates a window of hospital operations,
+not a lifetime) and first-class encounter objects (visit numbers,
+concurrent pending encounters) are a captured, partially-landed
+design. See [patient-state-model.md](patient-state-model.md).
+
+**Fixture.** *In testing generally:* any pre-arranged test data.
+*Here, usually:* **the pinned fixture** — a committed ground-truth
+log for one exact seed and configuration, which must remain
+byte-identical across sessions unless a documented policy decision
+(ADR-0009) regenerates it. It is simultaneously a regression test and
+a recorded corpus.
+
+---
+
+## Project shorthand and architecture
+
+**ADR (Architecture Decision Record).** A numbered, append-only entry
+in [notes/ADRs.md](../notes/ADRs.md) recording a design decision, its
+context, and its consequences. House rule: an Accepted ADR is never
+silently reverted — it is superseded by a new numbered record.
+
+**Allocation ladder.** The engine's bed-assignment policy, tried in
+order: home-ward licensed bed → home-ward surge slot → other-ward
+licensed bed ("outlier placement") → boarding in an ED surge slot.
+Seeded-random within each rung. See
+[operational-models.md](operational-models.md).
+
+**Catalytic (resource).** In the resource-theory notation: something a
+pipeline stage *uses without consuming* — a code table, a dependency,
+a configuration file. Each catalytic must resolve to a pinned,
+versioned source. See [sim-theory.md](sim-theory.md).
+
+**Ceremony.** The session-end ritual: commit → `git push origin` →
+`make pack-push`, in that order (ADR-0006). The ordering keeps the
+published pack's "clean tree" header meaningful.
+
+**Churn.** Operational noise: transfers, bed swaps, cancellations,
+error-entries, merges — the administrative messiness real ADT feeds
+are full of and hand-crafted test data never contains. Generated by
+**InjectChurn**, a transform that weaves churn steps into a pathway
+without touching its clinical content. See
+[clinical-realities.md](clinical-realities.md) for why testers care.
+
+**Co-landing.** The house rule that every new engine step type lands
+*in the same change* as its invariants (and, since M3, its emitter
+message type). Prevents capabilities from outrunning their checks.
+
+**Consumer loop.** The cross-repo integration in ehr-testing-tools
+that consumes sim's output as a real downstream system would —
+validating the manifest contract, gating the messages, intaking the
+corpus. Sim's first ecological consumer; it has caught defects sim's
+own tests could not see.
+
+**decide / evolve.** The engine's event-sourcing split (ADR-0008):
+`decide (state, step) → events` chooses what happens (may consult
+the world and the RNG); `evolve (state, event) → state'` is the only
+function that changes patient state, by folding events. State can
+therefore never disagree with the log. See
+[event-sourcing.md](event-sourcing.md).
+
+**Dialect vs. site config.** The two classes of site-profile knob:
+*dialect* changes only how truth is rendered (emit-time,
+truth-invariant — MSH identity, code-table overrides, Z-segments);
+*site config* changes the truth itself (pre-run — e.g. surge-slot
+naming baked into bed IDs). See [site-profiles.md](site-profiles.md).
+
+**Emitter.** A pure function from the ground-truth log (or state
+history) to a wire format. HL7v2 messages are the first emitter;
+FHIR and CDA are planned emitters over the same truth. "Formats are
+just emitters of the patient state machine" is this project's founding
+sentence.
+
+**Facts register.** [notes/facts-register.md](../notes/facts-register.md):
+externally verifiable claims (versions, licenses, code
+verifications, upstream findings) as numbered F-rows with evidence
+links and last-verified dates. If a doc asserts a checkable fact, the
+register is where the receipt lives.
+
+**Fold / accumulator.** Functional-programming terms domain experts
+will meet constantly here. A *fold* runs through a sequence, feeding
+each element into a function along with a running result (the
+*accumulator*). Patient state is the accumulator produced by folding
+that patient's events through `evolve`. If you know spreadsheet
+running totals, you know folds.
+
+**Ground-truth log.** The simulator's primary output and single
+source of truth: a time-ordered, immutable sequence of events
+describing everything that happened in a run. Messages, state
+snapshots, and test assertions all derive from it. See
+[event-sourcing.md](event-sourcing.md).
+
+**GMF (Generic Module Framework).** Synthea's format for encoding
+disease progression as JSON state machines — states (ConditionOnset,
+Encounter, Delay, Guard…) connected by probabilistic transitions,
+with clinical codes embedded inline. This project ports a defined
+subset of its semantics. See [gmf-interpreter.md](gmf-interpreter.md).
+
+**History / horizon.** The two phases of running a GMF module for one
+patient: the *history* phase fast-forwards from birth to run start
+(establishing conditions and attributes; facts marked
+`:pre-horizon`), and the *horizon* phase emits real trajectory events
+inside the simulated window. See
+[gmf-interpreter.md](gmf-interpreter.md).
+
+**InjectChurn.** See **Churn**.
+
+**Invariant catalog.** The machine-checkable consistency rules in
+`check.clj` (no bed holds two patients; results follow orders;
+timestamps monotone; …), run over ground-truth logs — standalone via
+`sim check`, in every run's self-check, and across hundreds of
+randomized runs in property tests.
+
+**IR (intermediate representation).** The pathway format —
+the single shape both hand-authored scenario scripts and
+module-generated trajectories compile to, and the only thing the
+engine executes. Steps in, events out. See [sim-theory.md](sim-theory.md).
+
+**Manifest.** The provenance record emitted with every run: seed,
+generator version, config hash, environment. Shaped to
+ehr-testing-tools' corpus-manifest schema so a sim run can be
+ingested as a pinned corpus. Because the simulator is deterministic,
+*(config + seed + version) is the corpus* — the manifest is enough to
+regenerate the data exactly.
+
+**now / next / want.** The convention for reading
+[sim-theory.edn](sim-theory.edn): *want* is the whole envisioned
+design; *now* is the subset marked built; *next* is the single stage
+marked `;; NEXT`. One file, three system descriptions, no drift.
+
+**Occupancy projection.** The bed board — which patient is in which
+bed/slot — computed as a *projection* (see below) from patient
+states, never written directly, with a property-tested law that it
+always equals the fold over patient locations.
+
+**Pack.** A single text file concatenating the repository's tracked
+files with a provenance header (commit, timestamp, tree status),
+published to a transport repository so chat-based design sessions can
+read the codebase. `make pack-push` publishes it; see
+AUTHORS-GUIDE.md.
+
+**Participants.** Every ground-truth event names the patients it
+involves, with roles. Most events have one participant; bed-swaps
+have two; merges have a survivor and a merged identity (ADR-0010).
+
+**Persona.** A patient's generated demographics: name, DOB, sex,
+address, phone, synthetic SSN-shaped identifier, and payer — sampled
+deterministically from vendored US tables at registration.
+
+**Projection / materialized view.** A derived data structure computed
+from an authoritative source, never edited independently — here,
+patient state is a projection of the log, and the occupancy board is
+a projection of patient states, each with a proven consistency law.
+Software-architecture cousins: database materialized views, CQRS read
+models.
+
+**Property-based testing.** Testing a *law* over hundreds of
+randomized inputs rather than one example: "for any seed and patient
+count, every run satisfies the invariant catalog." This repo's
+headline guarantees (determinism, log↔state consistency,
+message↔truth derivability) are all held this way (via
+`test.check`). Property tests here have repeatedly caught real bugs
+example tests missed.
+
+**Seam.** A designated clean stopping point in a work session: if
+budget runs out, everything before the seam commits green and the
+rest becomes its own session. Nothing lands half-done.
+
+**Site profile.** One hospital's local dialect as configuration:
+custom code-table values, MSH sending/receiving identity, HL7
+version literal, Z-segment templates. Two profiles over one seed
+produce the same ground truth in two hospitals' accents. See
+[site-profiles.md](site-profiles.md) — this is the "simulate *my*
+hospital" answer.
+
+**Step-rejected.** A ground-truth event recording that the engine
+*refused* an attempted step (illegal in the current state; bed since
+reclaimed) — truth about the run that never becomes a message
+(ADR-0012). Exists so authored scenarios are debuggable.
+
+**Trajectory.** The clinically-meaningful event sequence a GMF module
+run produces for one patient — what happened medically and when —
+before CompileTrajectory turns it into operational IR steps.
+
+**Warm-up.** The initial window of a run during which the simulated
+hospital is filling from empty; its events are *marked* (never
+trimmed) so steady-state corpora can filter the cold-start artifact
+without violating log completeness.
+
+---
+
+## Software concepts (for domain experts)
+
+**CLI (command-line interface).** The `sim` program's verbs (`run`,
+`check`, …) — the product boundary consumers touch, and by house
+rule the surface all demos run through.
+
+**Clojure / EDN / malli.** The implementation language (a Lisp on the
+JVM); its data notation (EDN — like JSON with richer types; our
+configs, logs, and theory files are EDN); and the schema library used
+to define and validate every data shape (configs, events, manifests).
+
+**Determinism / seeded RNG.** Same configuration + same seed ⇒
+byte-identical output, always. All randomness flows from one seeded
+random-number generator consumed in a fixed order. This is the
+property that makes any interesting run reproducible from a one-line
+manifest — and it is enforced by property tests, not by hope.
+Guarantee scope: within a generator version (ADR-0009).
+
+**Discrete-event simulation (DES).** The engine's execution model: a
+queue of future events ordered by simulated time; the engine
+repeatedly pops the earliest, applies it, and schedules consequences.
+Nothing "ticks" — quiet hours cost nothing.
+
+**Event sourcing.** The architecture where an immutable event log is
+the authoritative record and all state is derived by replaying it.
+[event-sourcing.md](event-sourcing.md) explains ours — including the
+observation that HL7v2 feeds *are* event streams and FHIR resources
+*are* materialized views, so hospital integration has been doing this
+for decades without the name.
+
+**Red → green (test-first).** House discipline (ADR-0006 in tools,
+ADR-0004 here): a failing test is written and *observed to fail*
+before the code that makes it pass. Session reports carry the
+evidence.
+
+**Subprocess coupling.** How ehr-testing-tools consumes sim: by
+running its CLI as a separate program and reading the output, rather
+than linking its code — the same relationship a real consumer has.
+
+---
+
+## Health-IT standards, protocols, and message anatomy (for developers)
+
+**ADT.** Admit / Discharge / Transfer — the HL7v2 message family
+tracking where a patient is and their administrative status; the
+workhorse feed of hospital integration. Message types are named by
+trigger-event codes: **A01** admit, **A02** transfer, **A03**
+discharge, **A04** outpatient registration, **A06/A07** patient-class
+change, **A08** demographics update, **A11/A12/A13** cancel
+admit/transfer/discharge, **A17** bed swap, **A21/A22** leave of
+absence/return, **A34/A40** merges. The guide treats ADT flows in
+depth; [clinical-realities.md](clinical-realities.md) covers the ones
+nobody expects.
+
+**CDA / C-CDA.** Clinical Document Architecture — HL7's XML document
+standard for clinical summaries (Consolidated CDA is the US
+implementation). A *state-based* format: a snapshot document, not an
+event stream. A planned emitter here.
+
+**ER7.** The classic pipe-and-caret text encoding of HL7v2 messages
+(`MSH|^~\&|...`) — segments on lines, fields split by `|`, components
+by `^`. Special characters in data must be *escaped*; see the facts
+register for what our parser dependency does and doesn't handle.
+
+**FHIR.** Fast Healthcare Interoperability Resources — HL7's modern
+REST/JSON standard. State-based: Resources describe current state.
+Planned emitter (M6), with the Blaze server as the ecological test
+target.
+
+**HL7 (organization) / HL7v2.** Health Level Seven International, the
+standards body; and its version-2 messaging standard (1980s-vintage,
+still carrying most hospital traffic). "HL7" colloquially means v2
+messages. See the guide for the standards landscape.
+
+**Interface engine.** Middleware that routes, transforms, and
+monitors HL7 traffic between hospital systems (e.g. Mirth Connect).
+A primary intended consumer of this simulator's output.
+
+**MLLP.** Minimal Lower Layer Protocol — the thin TCP framing HL7v2
+messages travel over. Transport only; below this project's level of
+description.
+
+**MRN.** Medical Record Number — a facility's patient identifier. In
+this simulator MRNs are *state* (a patient carries a set with one
+active) because merges rebind them; the stable identity underneath is
+an internal patient-id (ADR-0010).
+
+**NPI / NPPES.** National Provider Identifier — the US 10-digit
+provider ID (Luhn check-digit over an `80840` prefix) — and the
+public registry that issues them. Our synthetic providers carry
+Luhn-valid NPIs; coincidence with real assignments is possible and
+harmless (the registry is public data).
+
+**Segments and fields.** An HL7v2 message is a stack of *segments*
+(3-letter names), each a sequence of *fields*. The ones this repo's
+docs mention: **MSH** (message header: sender, receiver, timestamp,
+type, version in MSH-12), **EVN** (event type), **PID** (patient
+identity/demographics; PID-29/30 death datetime/indicator), **PV1**
+(visit: class in PV1-2, location in PV1-3, prior location PV1-6,
+attending PV1-7, visit number PV1-19, discharge disposition PV1-36),
+**MRG** (merge: the prior MRN), **IN1** (insurance), **DG1**
+(diagnosis, ICD-coded), **ORC/OBR** (order control/detail), **OBX**
+(observation: LOINC code in OBX-3, value OBX-5, units OBX-6,
+reference range OBX-7, abnormal flag OBX-8), **GT1** (guarantor —
+future here), **Z-segments** (site-invented segments, ZPI etc. — see
+site profiles). Data types worth knowing: **CWE** (coded value with
+system), **XPN/XAD/XCN** (name/address/provider-name composites).
+
+**Trigger event.** The real-world happening an HL7v2 message
+announces — the `A01` in `ADT^A01`. See the collision entry for
+**Event**.
+
+**User-defined tables.** HL7v2 tables where the standard explicitly
+lets each site invent values — patient class (table 0004), discharge
+disposition (0112), location types. The standards-sanctioned escape
+hatch that makes every hospital's feed a dialect; the reason site
+profiles exist. The guide's opening chapters treat this at length.
+
+**Validators (HAPI, NIST).** Independent HL7 conformance tooling —
+HAPI's v2 parser and NIST's validation suite — used (via
+ehr-testing-tools) to judge generated messages, so the simulator is
+never graded by its own homework.
+
+---
+
+## Clinical and operational terms (for developers)
+
+**Attending.** The physician responsible for an admitted patient
+(PV1-7). Assigned here from a ward-eligible provider pool.
+
+**Census.** How many patients occupy a unit right now. Census
+pressure against capacity is what makes boarding and diversion
+emerge in this simulator rather than being scripted.
+
+**Discharge disposition.** Where the patient went at discharge
+(home, another facility, left against advice, expired) — PV1-36,
+table 0112. Post-mortem values and workflows:
+[clinical-realities.md](clinical-realities.md).
+
+**ED / ED diversion.** Emergency Department; and the state of
+redirecting ambulances elsewhere when full. Diversion is a captured
+future model; today full exhaustion is a structured error.
+
+**Observation status.** A billing-critical middle state between
+outpatient and inpatient; converting between them mid-stay (A06/A07)
+is real, rarely-tested traffic. See
+[clinical-realities.md](clinical-realities.md).
+
+**OPO / donor management.** Organ Procurement Organization; and the
+ICU care of a deceased donor before organ recovery — the reason
+"expired" patients legally continue to generate orders, results, and
+even a payer change. The canonical example of post-mortem traffic:
+[clinical-realities.md](clinical-realities.md).
+
+**Payer.** The insurance entity (Medicare, Medicaid, commercial,
+self-pay). Modeled as an *attribute pool* — sampled per patient,
+age-linked, never a tracked resource. Rendered in IN1.
+
+**Surge slot.** A pseudo-bed — hallway stretcher position, chair
+code — that sites invent in bed management so un-bedded patients
+still have a location the ADT feed can carry. Naming schemes are
+site-idiosyncratic, hence configurable here.
+
+---
+
+## Terminology (code) systems and their stewards
+
+**SNOMED CT** — clinical concepts (conditions, procedures, findings);
+SNOMED International; free for US use via the **NLM** (National
+Library of Medicine, the US member/distributor, also home of UMLS and
+the SNOMED→ICD-10-CM map this project pins for DG1 rendering).
+**LOINC** — lab tests and observations; Regenstrief Institute; free.
+**RxNorm** — medications; NLM; free.
+**ICD-10-CM / ICD-10-PCS** — US billing diagnoses / inpatient
+procedures; CDC/CMS maintained.
+**CVX** — vaccines; CDC.
+**CPT** — procedures for billing; **AMA-licensed, deliberately
+excluded from this project** (see the constraints in
+[problem-statement.md](problem-statement.md)).
+House law: codes travel as `{:system :code :display}` triplets from
+source data to every emitter, verified against official releases and
+receipted in the facts register — never invented.
+
+---
+
+## Organizations and upstream projects
+
+**Synthea** (MITRE). The open-source synthetic-patient generator whose
+GMF modules, US demographics, and embedded codes this project mines
+as *data* (Apache-2.0), and whose peer-reviewed pedigree backs the
+clinical-plausibility claims. Not a runtime dependency.
+**Simulated Hospital / SimHospital** (Google Health; archived). The
+HL7v2 hospital-workflow simulator whose operational design — pathway
+step vocabulary, churn family, event queue — this project mined, and
+whose mutable-state workarounds motivated the event-sourced
+alternative. See [docs/research/](research/) for the evidence
+review, and [third-party-sources.md](third-party-sources.md) for
+exactly what came from where.
+**clojure-hl7-parser** (cmiles74). The one runtime HL7 dependency:
+ER7 parse/emit structures. Known limitation (no escape handling)
+receipted in the facts register with this repo's workaround.
+**Blaze** (samply). An open-source FHIR server, written in Clojure —
+M6's planned ecological target for the FHIR emitter.
+**Mirth Connect.** A widely-deployed open-source interface engine; a
+representative real-world consumer.
+**ehr-testing-guide / ehr-testing-tools.** The sibling repositories:
+the guide teaches the testing method; tools makes it runnable
+(corpus construction, conformance gating) and is this simulator's
+first real consumer. Terms shared with the guide defer to the
+guide's fuller treatment; a crosswalk reconciliation is planned.
 
 ========== END FILE ==========
 
@@ -3053,6 +3576,8 @@ real interpreter complexity to support — the opposite of this
 project's own curation discipline (ADR-0013), which exists to keep
 real complexity out, not to reject cheap wins.
 
+*Ratified 2026-07-26 (item 1 of 8, this document's closing list, below).*
+
 ## 2. Transitions, v1
 
 All four of Synthea's transition kinds are v1 scope — every module
@@ -3179,8 +3704,8 @@ again, exactly as ADR-0009 already anticipates for every milestone
 that grows the engine's stochastic surface — expected, not a
 regression to chase.
 
-**Two open sub-questions, each with a recommendation, both flagged for
-author ratification:**
+**Two open sub-questions, each with a recommendation — both ratified
+2026-07-26 (items 2 and 3 of 8, this document's closing list, below):**
 
 1. **Granularity of the history-phase fast-forward.** Real Synthea
    advances in fixed weekly ticks because its own horizon is a
@@ -3247,22 +3772,34 @@ directly (like `:admission`/`:discharge`, not auto-paired like
 `EncounterEnd` pair already brackets start and end explicitly, so there
 is no turnaround-time to sample and no ergonomic reason to auto-pair).
 
-**Sketch, for author ratification alongside the rest of this
-document:**
+**Sketch, ratified 2026-07-26 (items 5–8 of 8, this document's closing
+list, below; item 4 is `sinusitis.json`'s own vendoring recommendation,
+appendix):**
 
-- `:outpatient-visit`'s `decide` does **not** call
+- **(Item 5.)** `:outpatient-visit`'s `decide` does **not** call
   `ehr-testing-sim.facility/allocate` — an outpatient encounter
   occupies no bed, so there is no ladder to consult. `:status`
   transitions `:new -> :admitted` (reusing the existing value — an
   outpatient patient genuinely is "mid-encounter," which is what
   `:status` actually tracks) and `:class` is set to `:outpatient`
-  (already a legal value); `:location` stays **deliberately nil** for
+  (already a legal value).
+- **(Item 6.)** `:location` stays **deliberately nil** for
   the visit's duration — a **named exception**, gated on `:class
   :outpatient`, to `docs/patient-state-model.md`'s existing "never
   nil-bed, even while boarding" rule for `:location`, which was written
   before this project had a class of patient with no bed to be nil
-  *about*.
-- `:outpatient-visit-end` transitions `:status` `:admitted ->
+  *about*. **Ratification note:** this exception is not merely prose —
+  it lands, M5b, as a genuine row in `docs/patient-state-model.md`'s
+  event-validity table (the same status × event-class ×
+  attribute-conditions shape that table's post-mortem/donor rows
+  already use, not a special-cased sentence bolted alongside it):
+  `:location = nil` is legal exactly when `:class = :outpatient`, for
+  events of the encounter/therapeutic-intent classes an outpatient
+  visit spans, illegal otherwise — a *conditional* validity row, keyed
+  on status × event-class × the `:class :outpatient` attribute
+  condition, the mechanism the table's own donor row already
+  establishes for a gated exception.
+- **(Item 7.)** `:outpatient-visit-end` transitions `:status` `:admitted ->
   :discharged`, the same terminal value inpatient discharge already
   uses (no new `:status` value invented — `:class :outpatient` is
   already the distinguishing fact, the same way `:class` already
@@ -3277,22 +3814,23 @@ document:**
   still exists because `state-history` (the fold, ADR-0008) needs a
   real event to transition on, independent of whether anything renders
   it.
-- **New invariants this implies (co-landing scope, `check.clj`, M5b):**
+- **(Item 8.) New invariants this implies (co-landing scope, `check.clj`, M5b):**
   `outpatient-visit-only-when-new` (the `:admission`-row's own
   treatment, applied to the new step); a structural
   `outpatient-patients-occupy-no-bed` check (`:class :outpatient =>
-  :location nil`, for the visit's duration); and the occupancy board's
-  own consistency law (`docs/operational-models.md`'s "board ≡ fold
-  over patient locations") gains an explicit scope qualifier —
-  *inpatient/ED* patient locations, not every patient's — since an
-  outpatient patient was never a candidate for the board to include in
-  the first place, not an exception being carved out of an otherwise
-  universal law.
+  :location nil`, for the visit's duration — the same fact item 6's
+  validity-table row states, checked mechanically here); and the
+  occupancy board's own consistency law (`docs/operational-models.md`'s
+  "board ≡ fold over patient locations") gains an explicit scope
+  qualifier — *inpatient/ED* patient locations, not every patient's —
+  since an outpatient patient was never a candidate for the board to
+  include in the first place, not an exception being carved out of an
+  otherwise universal law.
 
-This sketch is exactly the kind of design call this document's own
-introduction flags for author review: it touches an existing "never
-nil" invariant (`:location`), even though only under a new, named,
-narrowly-gated condition.
+This sketch touches an existing "never nil" invariant (`:location`),
+even though only under a new, named, narrowly-gated condition — see
+this document's closing list, below, for the full ratification
+record.
 
 ## 5. Attributes registry
 
@@ -3377,6 +3915,76 @@ them in one place, phrased as obligations rather than as prose laws:
    reordered against the clinical causality the module's own transition
    graph already encodes.
 
+## 7. Implementation status (M5a, as built)
+
+`RunModules` the *library* is `:built` as of Milestone M5a
+(`ehr-testing-sim.gmf` — the loader, §1/§5; `ehr-testing-sim.gmf-
+interpreter` — `step`/`walk-module`/`run-module`, §1–§3): every v1 state
+type and all four transition kinds land exactly as specified above,
+tested against `test/ehr_testing_sim/fixtures/fixture-clinic.json`
+(ADR-0013 point 6's own hand-written fixture — placed there, not
+`resources/modules/`, per that point's own reasoning: this project's
+authored test content carries no NOTICE obligation and is not vendored
+upstream data). `docs/sim-theory.edn`'s own `:trajectory` stage stays
+`:planned` regardless — see that file's own updated `:contract` note —
+because a library existing is not the same as the pipeline actually
+wiring persona → modules → trajectory inside a run; that wiring is
+M5b's job.
+
+Four implementation decisions this session made, each a concrete filling-
+in of a design choice §1–§3 above left unspecified rather than a silent
+divergence from anything ratified:
+
+1. **A blocked Guard's own re-check mechanism.** Neither §2 nor §3 states
+   *how* a Guard whose condition currently fails ever makes progress
+   under the "no fixed tick" design — real Synthea's own answer (a global
+   simulation tick re-checking every blocked module) is exactly the
+   mechanism §3 rejects reproducing. This session's own resolution,
+   `ehr-testing-sim.gmf-interpreter/guard-step`: a failing `:age`
+   condition with operator `>=` resolves ANALYTICALLY — the interpreter
+   computes the exact virtual-clock advance (a `java.time.LocalDate`
+   computation, zero rng draws) until the persona's age reaches the
+   guard's own threshold, then proceeds — while a Guard failing on any
+   other condition (a different operator, `:gender`, `:attribute`, or
+   `:prior-state`) simply BLOCKS, the same way real Synthea's own
+   Delay-then-Guard authoring idiom already requires a module author to
+   route around a Guard that needs elapsed time to pass. This keeps
+   "wait until old enough" Guards working without reintroducing a tick
+   loop for every OTHER kind of block, at the cost of scoping the
+   analytic resolution to the one condition kind (age) whose "how much
+   longer" is a closed-form computation rather than an open-ended wait
+   on some other actor.
+2. **`Observation`'s own sampled value.** §1's table does not specify how
+   (or whether) an `Observation` state's own value is sampled at the
+   interpreter layer — a defensible reading is "M5b/`CompileTrajectory`'s
+   concern." This session's own choice: when a state carries a `:range`,
+   the interpreter samples one value uniformly within it (one rng draw,
+   the same fixed-consumption law every other stochastic choice in this
+   project follows) and carries it on the trajectory event; a state with
+   no `:range` emits no `:value`. A future module needing something
+   richer (a categorical/abnormal-tail distribution, `order-profiles`'
+   own shape) is out of this session's scope, not precluded by it.
+3. **`EncounterEnd`'s own reference is "the most recently opened
+   Encounter for this module," not tracked open/closed.** Real GMF
+   modules occasionally have more than one Encounter conceptually
+   "pending" at once (the same gap `docs/patient-state-model.md`'s own
+   mining section already names for `VisitID`/pending encounters,
+   pre-existing and unrelated to this session). v1's interpreter does
+   not track which encounters are still open versus already closed — it
+   simply finds the LAST `:encounter` event this module emitted, which
+   is exactly correct for every module this session's own fixture and
+   property tests exercise (encounters do not nest or overlap in v1's
+   own state/transition scope) but would need real open/closed tracking
+   before a future module with genuinely overlapping encounters could
+   trust it.
+4. **Virtual time is an interpreter-internal `epoch-day`
+   (`java.time.LocalDate/toEpochDay`), not the engine's own seconds-
+   from-run-start clock (ADR-0011).** M5a is engine-free by design (the
+   roadmap's own M5a/M5b split) — mapping a module's own epoch-day
+   virtual clock onto a real run's seconds-from-registration clock is
+   exactly the kind of persona → modules → trajectory wiring M5b's own
+   session does, not a gap in this one.
+
 ---
 
 ## Appendix: candidate-module survey
@@ -3433,8 +4041,8 @@ below strictly requires it (§ recommendation, next).
 
 ### Recommendation: vendor `sinusitis.json` first
 
-**Flagged for author ratification, per ADR-0013 point 4's own
-criterion.** `sinusitis.json` over `sore_throat.json` — despite
+**Ratified 2026-07-26 (item 4 of 8, this document's closing list,
+below), per ADR-0013 point 4's own criterion.** `sinusitis.json` over `sore_throat.json` — despite
 `sore_throat.json`'s clean 44/44 state-type score — because
 `sinusitis.json`'s one gap (`Device`/`DeviceEnd`, 2 states) is
 **structurally isolated**: confined to the module's rare chronic-
@@ -3470,9 +4078,48 @@ a module whose two therapeutic branches both silently do nothing.
 
 ---
 
-*Author-review items from this document are consolidated in the
-session's own closing list — see the session report / commit message
-this document lands with.*
+## Ratification record
+
+**All eight author-review items from this document are ACCEPTED,
+2026-07-26** (author-ratified ahead of M5a's build session, per this
+roadmap's own M5a-opens-by-confirming-these convention,
+`.agents/plans/roadmap.md`'s M5 entry):
+
+1. `Symptom` joins v1 as a write-only, consumed-internally state (§1).
+2. History-phase fast-forward: no fixed tick — reuses the exact
+   per-state transition-sampling logic the horizon phase uses (§3,
+   sub-question 1).
+3. Pre-horizon facts enter `ground-truth-log` marked `:pre-horizon
+   true`, never trimmed (§3, sub-question 2).
+4. `sinusitis.json` is the first module recommended to vendor, M5b
+   (Appendix).
+5. `:outpatient-visit`'s `decide` calls no allocation ladder; `:status`
+   `:new -> :admitted`, `:class -> :outpatient` (§4 sketch).
+6. `:outpatient-visit`'s `:location` stays deliberately `nil` for the
+   visit's duration — a named, narrowly-gated exception to
+   `docs/patient-state-model.md`'s "never nil-bed" rule for
+   `:location`. **This item does not stay prose-only:** it is scheduled
+   to land, M5b, as a genuine conditional row in that document's
+   event-validity table (mechanism: status × event-class ×
+   attribute-conditions — the same shape the table's post-mortem/donor
+   rows already use for a gated exception, not a special-cased sentence
+   bolted on beside the table), per this session's own annotation at
+   item 6's own place in §4, above (§4 sketch).
+7. `:outpatient-visit-end`'s `:status` `:admitted -> :discharged`; no
+   `message-type-registry` entry, by design, the same precedent
+   ADR-0012 already established for `:step-rejected` (§4 sketch).
+8. New invariants implied by items 5–7:
+   `outpatient-visit-only-when-new`, `outpatient-patients-occupy-no-bed`,
+   and the occupancy board's inpatient/ED-scoped consistency-law
+   qualifier (§4 sketch).
+
+None of the eight requires code or resource changes to *this* session
+(M5a) — items 1–3 are interpreter-core design this session's own build
+implements directly (Tasks 1–3, below the roadmap's M5a scope); items
+4–8 are M5b scope (the vendored module, the outpatient step-type pair,
+and item 6's validity-table row specifically), recorded here as
+ratified so M5b's own session opens against decided design, not a
+still-open recommendation.
 
 ========== END FILE ==========
 
@@ -3912,7 +4559,7 @@ than each growing their own shadow state.
 | `:attending` | `:string`, provider id, nil until admission | References `docs/operational-models.md`'s provider pool by id; rendered PV1-7 as `id^family^given` at emit time, not stored denormalized. |
 | `:persona` | `ehr-testing-sim.persona/Persona`, nil until the `:registered` event folds | **Landed, M4.** Name, DOB, sex, address, phone, an SSN-shaped id, and payer — ALL of it, sampled together by `ehr-testing-sim.persona/persona` and folded in by the engine-internal `:registered` event every patient's step queue is now prepended with (never authorable IR, the same treatment `:result-followup` already gets). This RETIRES the standalone `:payer` field this table used to carry: there was no code actually populating it (always nil, an aspiration this document itself named as an engine-patient-init stand-in), so retiring it is a schema simplification, not a behavior removal — payer now lives at `(:payer (:persona patient))`. Never re-sampled after — the attribute-pool contract (ADR-0007) extended to every persona field, not just payer. |
 | `:admitted-at` | `:int`, simulated **seconds** (was minutes pre-M2a — ADR-0011), nil until admission | The moment this patient was admitted. Landed with Milestone M1 for exactly one purpose: breaking ties among multiple patients boarding for the same ward — the bed-ready transfer relieves the longest-waiting one first (earliest `:admitted-at`, `:patient-id` as a further tiebreak — `:patient-id`'s zero-padded ordinal prefix keeps this tiebreak's lexical-order property `:mrn` used to give it for free). Not a SimHospital-style shadow field — set once, never rewritten. |
-| `:attributes` | `[:map-of :keyword :any]`, default `{}` | **Reserved, unused until M5.** The open blackboard Synthea's modules coordinate through (mined above) — named now so nothing else claims the key before the GMF interpreter lands. |
+| `:attributes` | `[:map-of :keyword :any]`, default `{}` | **The namespacing rule is live, M5a; the engine's own accumulator still doesn't populate this field until M5b.** The open blackboard Synthea's modules coordinate through (mined above): `ehr-testing-sim.gmf`'s loader now REALLY enforces module-namespaced keys (`docs/gmf-interpreter.md` section 5 — a module's raw `SetAttribute`/`Symptom` name compiles to `:module-id/kebab-name`, never a bare keyword; a module writing a bare engine-reserved name, e.g. `donor`, is rejected at load time), and `ehr-testing-sim.gmf-interpreter`'s own `step` only ever writes through that exact transform — this is no longer a documented convention awaiting code, it is the shape the interpreter's own attribute-registry property test (`gmf-interpreter-test/attribute-writes-are-always-in-the-declared-registry`) checks directly. What's still M5b scope: folding a module instance's own attribute map INTO this accumulator field for a real, running patient (`RunModules` meeting `Execute`, `docs/sim-theory.edn`'s own `:trajectory` stage) — M5a's interpreter carries its own attributes map per module-instance, engine-adjacent but not yet engine-integrated. |
 
 Deliberately absent, per the mining above: no visit-history field (the
 log is the history — M5's interpreter queries it directly), no
@@ -5097,7 +5744,7 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
    :catalytic ["gmf-module-set" "gmf-interpreter"]
    :laws ["code passthrough: every coded concept ({:system :code :display}) in a trajectory event is carried verbatim from its source module -- the interpreter never invents or translates codes"
           "glass-box traceability: every trajectory event cites the module id and state name that produced it, so any output event is auditable back to inspectable module JSON (validation cross-cutting argument, docs/problem-statement.md)"]
-   :contract "v1 semantics: docs/gmf-interpreter.md is this stage's design doc -- the state-type/transition subset it executes (deferring CallSubmodule/Counter/MultiObservation/Death), the history/horizon two-phase run per patient, the encounter-class mapping, and the module-namespaced :attributes discipline. gmf-module-set's catalytic target is RESOLVED (ADR-0013, author-ratified 2026-07-27): target 3, a small curated hashed subset vendored into resources/modules/, not target 1 (artifacts.lock) -- superseding this entry's prior OPEN-decision note (ADR-0003's own trigger). docs/gmf-interpreter.md's own candidate-module survey names the first module to vendor under ADR-0013's curation criterion, for author ratification alongside the ADR itself. No code lands with this decision; M5a/M5b (.agents/plans/roadmap.md) is where RunModules flips :built"}
+   :contract "v1 semantics: docs/gmf-interpreter.md is this stage's design doc -- the state-type/transition subset it executes (deferring CallSubmodule/Counter/MultiObservation/Death), the history/horizon two-phase run per patient, the encounter-class mapping, and the module-namespaced :attributes discipline. gmf-module-set's catalytic target is RESOLVED (ADR-0013, author-ratified 2026-07-27): target 3, a small curated hashed subset vendored into resources/modules/, not target 1 (artifacts.lock) -- superseding this entry's prior OPEN-decision note (ADR-0003's own trigger). docs/gmf-interpreter.md's own candidate-module survey names the first module to vendor under ADR-0013's curation criterion, for author ratification alongside the ADR itself. M5a (landed): the interpreter LIBRARY itself -- ehr-testing-sim.gmf (the loader) and ehr-testing-sim.gmf-interpreter (step/walk-module/run-module, the history/horizon two-phase run) -- is :built and tested end to end against docs/gmf-interpreter.md's own hand-written fixture (ADR-0013 point 6). This stage's own :status stays :planned regardless: a library existing is not the same as this run's own persona -> modules -> trajectory wiring, which is M5b's job -- the flip to :built happens when M5b actually wires a real vendored module's trajectory into a run, not when the library that will do the walking lands on its own"}
 
   {:id :compile
    :label "CompileTrajectory"
@@ -5238,11 +5885,16 @@ One file describes three systems:
   fourth catalytic (`site-profile`) — MSH dialect, code-table
   overrides, and Z-segment templates, all property-tested against the
   dialect-invariance law stated on that stage's own equation entry.
-  Everything the *now* claims is property-tested and green (230 tests /
-  625 assertions, 2026-07-26).
+  Everything the *now* claims is property-tested and green (273 tests /
+  716 assertions, 2026-07-27).
 - **next** — the single stage marked `;; NEXT` in the EDN: **RunModules**,
   Milestone M5 — the GMF interpreter port, the `gmf-module-set`
-  vendoring-vs-lockfile decision, and `CompileTrajectory`.
+  vendoring-vs-lockfile decision, and `CompileTrajectory`. M5a (this
+  session) landed the interpreter LIBRARY itself
+  (`ehr-testing-sim.gmf`/`ehr-testing-sim.gmf-interpreter`) against a
+  hand-written fixture; the stage's own `:status` stays `:planned` and
+  the `;; NEXT` marker stays here until M5b wires a real vendored
+  module's trajectory into an actual run.
 
 No schema keys were invented for this convention — it lives in
 comments and here, keeping the EDN loadable by tools' Pipeline Malli
@@ -7071,6 +7723,9 @@ row, replacing "OPEN."
 | F7 | `resources/order-profiles.edn`'s CBC and BMP panel LOINC codes are real, active LOINC codes with the exact component structure encoded: CBC panel `58410-2` (component analytes used here: `6690-2` Leukocytes, `789-8` Erythrocytes, `718-7` Hemoglobin, `4544-3` Hematocrit, `777-3` Platelets — all `R`/required in the panel); BMP panel `51990-0` (component analytes used here: `2339-0` Glucose, `6299-2` Urea nitrogen, `38483-4` Creatinine, `49765-1` Calcium, `2947-0` Sodium, `6298-4` Potassium, `2069-3` Chloride, `20565-8` Carbon dioxide total — all `R`/required). LOINC is free to use (per F4); no CPT codes appear anywhere in the profile. | `resources/order-profiles.edn`, `docs/sim-theory.edn` (`order-profiles` catalytic) | `loinc.org/58410-2` and `loinc.org/51990-0` — each panel's own "Details for each LOINC in Panel" table, fetched directly this session via browser | 2026-07-26 | verified this session |
 | F8 | The US Social Security Administration never assigns SSNs with area number (first three digits) `000`, `666`, or in the range `900`–`999` — these are permanently excluded from issuance (the `900`–`999` block being reserved for ITIN, not SSN, use). `ehr-testing-sim.persona/persona`'s synthetic SSN-shaped identifier uses a fixed area number of `900` for exactly this reason — obviously-synthetic by construction, the same design move ADR-0007 already made for provider NPIs (a real, documented never-issued range, not an arbitrary sentinel format), and stated as `persona.clj`'s own design-choice docstring. | `src/ehr_testing_sim/persona.clj` (`ssn-area-prefix` docstring) | `en.wikipedia.org/wiki/Social_Security_number` ("Numbers with 666 or 900–999 ... are never allocated"; "excluding area numbers 000, 666, and 900–999" from the 2011 randomization change) — fetched via browser this session; SSA's own `ssa.gov` pages returned HTTP 403 to this session's fetch tool and could not be checked directly, so this claim rests on a secondary source, not SSA's own site | 2026-07-26 | verified this session (secondary source only — SSA.gov itself unreachable this session) |
 | F9 | `org.clojars.cmiles74/clojure-hl7-parser` 3.5.1 implements NO ER7 escape-sequence handling in either direction. WRITE side: `parser/pr-field`/`pr-content` concatenate field content into the wire string with no encoding step at all — a literal `\|^~&` character embedded in content is emitted raw. READ side: `parser/read-text`'s and `read-subcomponents`' escape-handling branches (which would call the library's own `read-escaped-text` function) are commented-out dead code in the library's own source, and `parser/delimiter?` doesn't even exempt the escape character (`\`) from ending a token early — so a literal delimiter character embedded in unescaped content corrupts field/component boundaries on parse, and even a value this repo escapes on write comes back from `message/get-field-first-value` STILL escaped (undecoded), never as the original. `ehr-testing-sim.emit-hl7/escape-er7`/`unescape-er7` are this repo's own documented workaround (encode on write, decode on read) — a Milestone M4 property test caught a related self-inflicted bug in the workaround's OWN first `unescape-er7` implementation (naive five-pass sequential replace let two adjacent encoded tokens spuriously spell a THIRD token at their boundary; fixed to a single regex pass). | `src/ehr_testing_sim/emit_hl7.clj` (the Task 4 escaping section, `escape-er7`/`unescape-er7` docstrings) | Read directly from the unpacked jar, `org/clojars/cmiles74/clojure-hl7-parser/3.5.1/clojure-hl7-parser-3.5.1.jar`'s own `com/nervestaple/hl7_parser/parser.clj` — `read-text` (comment block above its `delimiter?` cond-branch), `read-subcomponents` (same pattern), and `delimiter?` itself (the commented-out `:escape` check) — this session, not a secondary source | 2026-07-26 | verified this session (primary source: the dependency's own shipped .clj source) |
+| F10 | SNOMED CT `36971009` is "Sinusitis (disorder)"; `185345009` is "Encounter for symptom"; `315618009` is "FESS - Functional endoscopic sinus surgery - sphenoethmoidectomy" (a procedure concept). Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` (M5a's hand-written GMF interpreter fixture, ADR-0013 point 6 — this project's own authored data, not vendored Synthea content, so no NOTICE obligation) for `ConditionOnset`/`Encounter`/`Procedure` state concept triplets. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | NCBO BioPortal SNOMED CT US Edition concept pages (`bioportal.bioontology.org/ontologies/SNOMEDCT?p=classes&conceptid=<id>`), confirmed by web search this session (no direct browser fetch — `browser.ihtsdotools.org` and `clinicaltables.nlm.nih.gov` both returned 403/unreachable to this session's fetch tools) | 2026-07-27 | verified this session (search-engine-mediated, not a direct primary-source fetch — see this row's own evidence note) |
+| F11 | LOINC `8310-5` is "Body temperature" (component "Body temperature", `LP65487-8`). Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` for its `Observation` state's concept triplet. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | `loinc.org/8310-5` (title confirmed via web search this session; direct fetch returned HTTP 403) | 2026-07-27 | verified this session (search-engine-mediated) |
+| F12 | RxNorm RXCUI `308191` is "Amoxicillin 500 MG Oral Capsule". Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` for its `MedicationOrder` state's concept triplet. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | RxNorm/NDC crosswalk data, confirmed via web search this session (direct fetch to `rxnav.nlm.nih.gov` timed out — DNS/network unreachable to this session's fetch tools) | 2026-07-27 | verified this session (search-engine-mediated, not a direct RxNav API fetch — see this row's own evidence note) |
 
 ========== END FILE ==========
 
@@ -10102,6 +10757,742 @@ logic, not patient records.
   [rng providers ward-id]
   (let [eligible (filterv #(some #{ward-id} (:wards %)) providers)]
     (:id (choose rng eligible))))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/gmf.clj ==========
+(ns ehr-testing-sim.gmf
+  "The GMF module loader (Milestone M5a Task 1, docs/gmf-interpreter.md
+  section 1). Parses a Synthea Generic Module Framework JSON module,
+  normalizes it to this project's own idiom (kebab-case keyword keys and
+  state-name references, code systems as :snomed/:loinc/:rxnorm/:icd10cm/
+  :cvx keywords per ehr-testing-sim.pathway/Concept), and validates it
+  against the v1 subset docs/gmf-interpreter.md section 1 defines.
+
+  Load-time enforcement, result-not-throw (ehr-testing-sim.result):
+  a module using a state type OUTSIDE v1's subset (CallSubmodule, Counter,
+  MultiObservation, Death, Device/DeviceEnd, CarePlanStart/CarePlanEnd --
+  section 1's own deferred-type table) is REJECTED with
+  :unsupported-state-type, never silently skipped and never thrown -- this
+  is a stricter, mechanical gate than the informal 'read past what you
+  don't execute' survey-reading section 1 also describes (that describes
+  reading a module's states for SURVEY purposes, e.g. the design doc's own
+  candidate-module appendix; this loader is the boundary a module crosses
+  to actually be RUN, where ADR-0013 point 4's curation criterion applies
+  in full: any deferred-type use fails it, full stop). A module whose own
+  SetAttribute/Symptom writes a bare (non-namespaced) attribute name
+  colliding with an engine-reserved key (`:donor`, docs/patient-state-
+  model.md's post-mortem entry) is REJECTED with :attribute-collision
+  (section 5). Every attribute write compiles to a MODULE-NAMESPACED
+  keyword (section 5) -- `:fixture-clinic/onset-logged`, never a bare
+  `:onset-logged` -- so cross-module collisions are structurally
+  impossible, per that section's own argument; only a bare reserved-key
+  write is a real, checkable collision.
+
+  The loaded set is listable (`loaded-modules`) -- no hidden modules,
+  section 5's own corollary applied to module content specifically."
+  (:require [clojure.data.json :as json]
+            [clojure.string :as str]
+            [ehr-testing-sim.pathway :as pathway]
+            [ehr-testing-sim.result :as result]
+            [malli.core :as m]))
+
+;; --- Normalization: JSON's snake_case/CamelCase -> this project's kebab
+;; keyword idiom -----------------------------------------------------------
+
+(defn slug
+  "Any raw GMF name string (a JSON key, a state name, an attribute or
+  symptom name) -> this project's own lower-kebab form -- 'Check_Age_Guard'
+  and 'Nasal Congestion' both become the same shape ('check-age-guard',
+  'nasal-congestion'), so state-map keys, transition-target references,
+  and attribute names all compare and namespace uniformly. Public: also
+  reused by ehr-testing-sim.gmf-interpreter to turn a Guard/conditional's
+  raw :attribute name into the SAME module-namespaced key this loader's
+  own `declared-attributes` computes (one transform, one place)."
+  [s]
+  (-> s str/lower-case (str/replace #"[_\s]+" "-")))
+
+(defn- kebab-key
+  "clojure.data.json's :key-fn -- applied to EVERY JSON object key at
+  every depth, so 'direct_transition', 'condition_type', a state's own
+  name ('Check_Age_Guard'), and every other JSON key normalize uniformly
+  in one parse pass."
+  [s]
+  (keyword (slug s)))
+
+(def ^:private gmf-type->keyword
+  "v1's state-type subset (docs/gmf-interpreter.md section 1, `Symptom`
+  ratified into v1 alongside the rest -- see that document's own
+  closing ratification record). Any :type string NOT a key here is a
+  deferred type (section 1's own table) -- `unsupported-state-type`,
+  below, is exactly 'not a key in this map.'"
+  {"Initial" :initial
+   "Terminal" :terminal
+   "Simple" :simple
+   "Delay" :delay
+   "Guard" :guard
+   "SetAttribute" :set-attribute
+   "Symptom" :symptom
+   "ConditionOnset" :condition-onset
+   "ConditionEnd" :condition-end
+   "Encounter" :encounter
+   "EncounterEnd" :encounter-end
+   "Procedure" :procedure
+   "Observation" :observation
+   "MedicationOrder" :medication-order
+   "MedicationEnd" :medication-end})
+
+(def ^:private code-system->keyword
+  "GMF's own code-system strings -> ehr-testing-sim.pathway/Concept's
+  :system keyword vocabulary (architecture.md's Terminology decisions:
+  :snomed :loinc :rxnorm :icd10cm :cvx)."
+  {"SNOMED-CT" :snomed
+   "LOINC" :loinc
+   "RxNorm" :rxnorm
+   "ICD10-CM" :icd10cm
+   "CVX" :cvx})
+
+(def ^:private encounter-class->keyword
+  "GMF's own encounter-class strings (docs/gmf-interpreter.md section 4) --
+  kept as their own map (distinct from `slug`'s generic transform) since
+  these are a CLOSED v1 vocabulary, not free-form names."
+  {"wellness" :wellness "ambulatory" :ambulatory "emergency" :emergency "inpatient" :inpatient})
+
+(def ^:private condition-type->keyword
+  "v1's four condition predicates (docs/gmf-interpreter.md section 2):
+  age, sex (Gender), attribute, PriorState."
+  {"Age" :age "Gender" :gender "Attribute" :attribute "PriorState" :prior-state})
+
+(defn- normalize-code
+  [{:keys [system code display]}]
+  (cond-> {:system (get code-system->keyword system (keyword (slug system))) :code code}
+    display (assoc :display display)))
+
+(defn- normalize-condition
+  "A leaf condition map ({:condition-type ...}) -> the same shape with
+  :condition-type keywordized to v1's vocabulary. Nested compound
+  conditions (`At Least`, boolean `And`/`Or`) are OUT of v1's scope
+  (docs/gmf-interpreter.md section 2's own gap note) -- passed through
+  unrecognized rather than validated here; the interpreter (M5a Task 2)
+  is where an actually-unsupported condition type surfaces, at
+  evaluation time, not at load time (section 1's own state-type gate is
+  the load-time enforcement point; conditions are a narrower, later
+  concern this loader does not gate)."
+  [condition]
+  (when condition
+    (let [condition-type (get condition-type->keyword (:condition-type condition)
+                               (keyword (slug (:condition-type condition))))]
+      (cond-> (assoc condition :condition-type condition-type)
+        (and (= :prior-state condition-type) (:name condition))
+        (update :name (fn [n] (keyword (slug n))))))))
+
+(defn- normalize-transition-entry
+  [{:keys [transition condition distributions] :as entry}]
+  (cond-> entry
+    transition (assoc :transition (keyword (slug transition)))
+    condition (assoc :condition (normalize-condition condition))
+    distributions (assoc :distributions (mapv #(update % :transition (fn [t] (keyword (slug t)))) distributions))))
+
+(defn- normalize-transitions
+  [state]
+  (cond-> state
+    (:direct-transition state) (update :direct-transition (fn [t] (keyword (slug t))))
+    (:distributed-transition state) (update :distributed-transition #(mapv normalize-transition-entry %))
+    (:conditional-transition state) (update :conditional-transition #(mapv normalize-transition-entry %))
+    (:complex-transition state) (update :complex-transition #(mapv normalize-transition-entry %))))
+
+(defn- normalize-state
+  [state]
+  (let [raw-type (:type state)
+        kw-type (get gmf-type->keyword raw-type)]
+    (if (nil? kw-type)
+      {:unsupported-state-type {:raw-type raw-type}}
+      (-> state
+          (assoc :type kw-type)
+          (cond-> (:codes state) (update :codes #(mapv normalize-code %))
+                  (:allow state) (update :allow normalize-condition)
+                  (:encounter-class state) (update :encounter-class
+                                                    (fn [c] (get encounter-class->keyword c (keyword (slug c)))))
+                  (:condition-onset state) (update :condition-onset (fn [t] (keyword (slug t))))
+                  (:medication-order state) (update :medication-order (fn [t] (keyword (slug t))))
+                  (:target-encounter state) (update :target-encounter (fn [t] (keyword (slug t)))))
+          normalize-transitions))))
+
+(defn- normalize-states
+  "Normalizes every state; short-circuits with the FIRST deferred-type
+  state found (deterministic -- iterates in the module's own key order),
+  since a module using even one deferred type fails load, full stop
+  (this namespace's own docstring)."
+  [raw-states]
+  (reduce (fn [acc [state-name raw-state]]
+            (let [normalized (normalize-state raw-state)]
+              (if (:unsupported-state-type normalized)
+                (reduced {:unsupported {:state state-name
+                                        :raw-type (:raw-type (:unsupported-state-type normalized))}})
+                (update acc :states assoc state-name normalized))))
+          {:states {}}
+          raw-states))
+
+;; --- Attributes registry (section 5) --------------------------------------
+
+(def engine-reserved-attribute-names
+  "The bare (non-namespaced) attribute names this project's OWN
+  engine-internal logic reserves -- currently just `donor`
+  (docs/patient-state-model.md's post-mortem entry). A module writing
+  one of these AS ITS OWN RAW (pre-namespace) attribute name is rejected
+  at load time (section 5)."
+  #{"donor"})
+
+(defn- raw-attribute-writes
+  "Every raw (pre-namespace) attribute name a module's own SetAttribute/
+  Symptom states write -- SetAttribute's :attribute field, Symptom's own
+  :symptom field (section 1: Symptom is structurally identical to
+  SetAttribute, a leaf write into a module-namespaced key holding the
+  sampled severity)."
+  [states]
+  (keep (fn [[_ state]]
+          (case (:type state)
+            :set-attribute (:attribute state)
+            :symptom (:symptom state)
+            nil))
+        states))
+
+(defn- reserved-attribute-collision
+  [states]
+  (first (filter engine-reserved-attribute-names (raw-attribute-writes states))))
+
+(defn declared-attributes
+  "Every namespaced attribute keyword `module`'s own SetAttribute/Symptom
+  states write (section 5) -- `grep`-able listability, the mechanism
+  `loaded-modules` exposes below."
+  [module]
+  (into #{}
+        (map (fn [raw] (keyword (:id module) (slug raw))))
+        (raw-attribute-writes (:states module))))
+
+;; --- Schema (v1 subset, post-normalization) -------------------------------
+
+(def ^:private Range [:map [:low number?] [:high number?] [:unit {:optional true} :string]])
+(def ^:private Exact [:map [:quantity number?] [:unit {:optional true} :string]])
+
+(def ^:private TransitionFields
+  [[:direct-transition {:optional true} :keyword]
+   [:distributed-transition {:optional true}
+    [:vector [:map [:transition :keyword] [:distribution number?]]]]
+   [:conditional-transition {:optional true}
+    [:vector [:map [:transition {:optional true} :keyword] [:condition {:optional true} [:map-of :keyword :any]]]]]
+   [:complex-transition {:optional true}
+    [:vector [:map [:condition {:optional true} [:map-of :keyword :any]]
+              [:distributions [:vector [:map [:transition :keyword] [:distribution number?]]]]]]]])
+
+(defn- with-transitions [& kvs] (into [:map] (into (vec kvs) TransitionFields)))
+
+(def GmfState
+  [:multi {:dispatch :type}
+   [:initial (into [:map [:type [:= :initial]]] TransitionFields)]
+   [:terminal [:map [:type [:= :terminal]]]]
+   [:simple (into [:map [:type [:= :simple]]] TransitionFields)]
+   [:delay (with-transitions [:type [:= :delay]]
+             [:range {:optional true} Range] [:exact {:optional true} Exact])]
+   [:guard (with-transitions [:type [:= :guard]] [:allow [:map-of :keyword :any]])]
+   [:set-attribute (with-transitions [:type [:= :set-attribute]] [:attribute :string] [:value {:optional true} :any])]
+   [:symptom (with-transitions [:type [:= :symptom]] [:symptom :string]
+               [:range {:optional true} Range] [:exact {:optional true} Exact])]
+   [:condition-onset (with-transitions [:type [:= :condition-onset]] [:codes [:vector pathway/Concept]]
+                        [:target-encounter {:optional true} :keyword])]
+   [:condition-end (with-transitions [:type [:= :condition-end]] [:condition-onset {:optional true} :keyword])]
+   [:encounter (with-transitions [:type [:= :encounter]]
+                 [:encounter-class [:enum :wellness :ambulatory :emergency :inpatient]]
+                 [:codes [:vector pathway/Concept]] [:reason {:optional true} :string])]
+   [:encounter-end (into [:map [:type [:= :encounter-end]]] TransitionFields)]
+   [:procedure (with-transitions [:type [:= :procedure]] [:codes [:vector pathway/Concept]]
+                 [:target-encounter {:optional true} :keyword] [:reason {:optional true} :string]
+                 [:duration {:optional true} Range])]
+   [:observation (with-transitions [:type [:= :observation]] [:codes [:vector pathway/Concept]]
+                   [:category {:optional true} :string] [:unit {:optional true} :string]
+                   [:range {:optional true} Range])]
+   [:medication-order (with-transitions [:type [:= :medication-order]] [:codes [:vector pathway/Concept]]
+                        [:reason {:optional true} :string])]
+   [:medication-end (with-transitions [:type [:= :medication-end]] [:medication-order {:optional true} :keyword])]])
+
+(def GmfModule
+  [:map
+   [:id :string]
+   [:name :string]
+   [:remarks {:optional true} [:vector :string]]
+   [:states [:map-of :keyword GmfState]]])
+
+(defn valid-module? [module] (m/validate GmfModule module))
+(defn explain-module [module] (m/explain GmfModule module))
+
+;; --- Loading ---------------------------------------------------------------
+
+(defn load-module
+  "Parses and validates `json-text` (a GMF module's raw JSON) as `id`
+  (never derived from a filename here -- the caller's own concern,
+  e.g. a directory loader stripping '.json'; keeping this function pure
+  over its two explicit arguments is what makes it directly testable
+  against inline JSON strings, as this namespace's own red tests do).
+
+  Returns a Result: :ok with the normalized module map ({:id :name
+  :remarks :states}); :rejected :unsupported-state-type (payload {:state
+  :raw-type}) for a module using a deferred GMF state type; :rejected
+  :attribute-collision (payload {:attribute name}) for a module whose own
+  SetAttribute/Symptom writes a bare engine-reserved attribute name;
+  :rejected :schema-invalid (payload {:explain ...}) for any other v1
+  structural mismatch."
+  [id json-text]
+  (let [raw (json/read-str json-text :key-fn kebab-key)
+        {:keys [states unsupported]} (normalize-states (:states raw))]
+    (cond
+      unsupported
+      (result/rejected :unsupported-state-type unsupported)
+
+      (reserved-attribute-collision states)
+      (result/rejected :attribute-collision {:attribute (reserved-attribute-collision states)})
+
+      :else
+      (let [module {:id id :name (:name raw) :remarks (:remarks raw) :states states}]
+        (if (valid-module? module)
+          (result/ok module)
+          (result/rejected :schema-invalid {:explain (explain-module module)}))))))
+
+;; --- Registry (no hidden modules, section 5) -------------------------------
+
+(defn empty-registry [] {})
+
+(defn register
+  "Adds `module` (an already-loaded, :ok'd module map) to `registry` under
+  `id`. :rejected :module-id-collision when `id` is already registered --
+  the registry-level half of section 5's own collision language (the
+  other half, a bare reserved-attribute write, is caught by `load-module`
+  itself, per-module, above)."
+  [registry id module]
+  (if (contains? registry id)
+    (result/rejected :module-id-collision {:id id})
+    (result/ok (assoc registry id module))))
+
+(defn loaded-modules
+  "The full loaded set, listable -- no hidden modules (section 5's own
+  corollary): every registered module's id, name, state count, and
+  declared (namespaced) attribute set."
+  [registry]
+  (mapv (fn [[id module]]
+          {:id id :name (:name module) :state-count (count (:states module))
+           :attributes (declared-attributes module)})
+        registry))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/gmf_interpreter.clj ==========
+(ns ehr-testing-sim.gmf-interpreter
+  "The GMF interpreter core (Milestone M5a Task 2, docs/gmf-interpreter.md
+  sections 1, 2, and 6). Pure, seeded, engine-free: one module instance
+  per patient. `step` advances exactly one state -- evaluates that
+  state's own effect (an attribute write, a sampled time advance, or a
+  cited trajectory event) and resolves its own transition (direct,
+  distributed, conditional, or complex) -- consuming the passed `rng`
+  only in the documented order this namespace's own functions state.
+  `walk-module` drives `step` repeatedly from a patient's current state
+  until the module reaches a Terminal state or BLOCKS on a Guard whose
+  condition does not (yet) hold; Milestone M5a's own history/horizon
+  two-phase run (Task 3, `ehr-testing-sim.gmf-interpreter.horizon` or
+  this namespace's own `run-module`) is what resumes a blocked walk
+  across a phase boundary.
+
+  Condition vocabulary, v1 (section 2): age, sex (:gender), :attribute,
+  :prior-state. `:prior-state` compiles to a query over the
+  ACCUMULATING TRAJECTORY threaded through `ctx` -- in M5a this trajectory
+  IS the log-view the design doc names (\"the log-view IS the
+  accumulating trajectory; the engine's real log arrives M5b\"); the
+  query helper (`prior-state-condition-holds?`) is written against the
+  same event shape (`{:module :state :t ...}`) so M5b can swap the
+  source (a real ground-truth log) without touching this logic.
+
+  Time model: virtual time (`ctx`'s `:t`) is an EPOCH DAY (java.time.
+  LocalDate/toEpochDay) -- a plain long, so Delay/Guard-age arithmetic is
+  ordinary integer comparison, and java.time.LocalDate carries the
+  calendar-correct month/year math GMF's own Delay/Age units need
+  (`.plusMonths`/`.plusYears` are NOT fixed day-counts). This is an
+  interpreter-internal representation; mapping it onto the engine's own
+  seconds-from-run-start clock (ADR-0011) is M5b's concern (RunModules
+  meeting the real engine), not this session's.
+
+  A documented v1 simplification, recorded here rather than left as a
+  silent assumption: a Guard whose condition currently fails BLOCKS the
+  walk (no progress) UNLESS the condition is `:age` with operator `>=` --
+  in that one case, `step` computes the exact virtual-clock advance
+  needed to satisfy it (a deterministic date computation, consuming NO
+  rng draw) and proceeds, rather than blocking. This is the mechanism
+  that lets 'wait until old enough' Guards make progress under this
+  project's own 'no fixed tick' design (docs/gmf-interpreter.md section 3)
+  without reintroducing the tick loop that design deliberately rejects:
+  the jump is exactly as much virtual time as the one age threshold
+  needs, not a polling interval. A Guard blocked on any other condition
+  (or a non-`>=` age comparison) simply halts progress -- a module
+  author's own responsibility to route around (the same responsibility
+  real Synthea's own Delay-then-Guard idiom already carries), not
+  something this interpreter resolves for them."
+  (:require [ehr-testing-sim.gmf :as gmf])
+  (:import [java.time LocalDate Period]
+           [java.util Random]))
+
+;; --- Time -------------------------------------------------------------------
+
+(defn- parse-dob ^LocalDate [persona] (LocalDate/parse (:dob persona)))
+
+(defn dob-epoch-day
+  "The epoch-day (java.time.LocalDate/toEpochDay) of `persona`'s own DOB --
+  the virtual-time origin a fresh module walk starts from (history phase,
+  Task 3: 'from Initial starting at the patient's DOB')."
+  [persona]
+  (.toEpochDay (parse-dob persona)))
+
+(defn initial-context
+  "The patient-ctx a fresh module walk starts from: current state
+  `:initial` (every GMF module's own entry-point convention), virtual
+  time at the persona's own DOB, an empty attributes map, and an empty
+  accumulating trajectory."
+  [persona]
+  {:current :initial :t (dob-epoch-day persona) :attributes {} :persona persona :trajectory []})
+
+(defn- advance-date
+  "epoch-day `t` advanced by `n` `unit`s -- day/week arithmetic is a plain
+  day-count; month/year arithmetic goes through java.time.LocalDate
+  (calendar-correct, NOT a fixed day-count)."
+  ^long [^long t unit ^long n]
+  (case unit
+    "weeks" (+ t (* 7 n))
+    "months" (.toEpochDay (.plusMonths (LocalDate/ofEpochDay t) n))
+    "years" (.toEpochDay (.plusYears (LocalDate/ofEpochDay t) n))
+    (+ t n)))
+
+(defn- age-years-at
+  [persona ^long t]
+  (.getYears (Period/between (parse-dob persona) (LocalDate/ofEpochDay t))))
+
+;; --- RNG primitives (fixed-consumption law, per ehr-testing-sim.engine/
+;; ehr-testing-sim.persona's own precedent) ----------------------------------
+
+(defn- rand-int-in [^Random rng lo hi] (+ lo (.nextInt rng (inc (- hi lo)))))
+(defn- rand-double-in [^Random rng lo hi] (+ lo (* (.nextDouble rng) (- hi lo))))
+
+(defn- resolve-time-advance
+  "How much virtual time a Delay (or a Procedure's own :duration) advances
+  from `t`: `:exact` is deterministic, NO rng draw; `:range` samples
+  exactly one uniform integer draw, the same fixed-consumption law every
+  other stochastic choice in this project already follows. Neither
+  present -> no advance, no draw (a state with no timing info of its
+  own)."
+  [^Random rng ^long t {:keys [range exact]}]
+  (cond
+    exact (advance-date t (:unit exact) (long (:quantity exact)))
+    range (advance-date t (:unit range) (rand-int-in rng (long (:low range)) (long (:high range))))
+    :else t))
+
+;; --- Condition evaluation (v1's four predicates, section 2) ----------------
+
+(defn- compare-op
+  [op a b]
+  (case op ">=" (>= a b) ">" (> a b) "<=" (<= a b) "<" (< a b) "==" (= a b) (= a b)))
+
+(defn- age-condition-holds?
+  [{:keys [operator quantity unit]} persona t]
+  (compare-op operator (if (= unit "years") (age-years-at persona t) (age-years-at persona t)) quantity))
+
+(defn- gender-condition-holds?
+  [{:keys [gender]} persona]
+  (= (:sex persona) (case gender "F" :female "M" :male gender)))
+
+(defn- attribute-condition-holds?
+  [module-id ctx {:keys [attribute operator value]}]
+  (let [k (keyword module-id (gmf/slug attribute))
+        actual (get (:attributes ctx) k)]
+    (case operator
+      "!=" (not= actual value)
+      (= actual value))))
+
+(defn- window-days
+  [{:keys [quantity unit]}]
+  (case unit "weeks" (* 7 quantity) "months" (* 30 quantity) "years" (* 365 quantity) quantity))
+
+(defn- prior-state-condition-holds?
+  "PriorState (section 2): a query over `ctx`'s own accumulating
+  trajectory for the target module/state citation, most recent first,
+  optionally bounded by a time window -- the interpreter-local instance
+  of the SAME event shape a real ground-truth-log query (M5b) will use."
+  [module-id ctx {:keys [name window]}]
+  (let [max-age (when window (window-days window))]
+    (boolean (some (fn [event]
+                     (and (= module-id (:module event))
+                          (= name (:state event))
+                          (or (nil? max-age) (<= (- (:t ctx) (:t event)) max-age))))
+                   (:trajectory ctx)))))
+
+(defn evaluate-condition
+  "The interpreter's own guard evaluator (docs/gmf-interpreter.md section 2:
+  '(evaluate-condition condition patient-state (:ground-truth world)
+  step)', instantiated here over `ctx`'s own persona/attributes/
+  trajectory -- the M5a stand-in for `world`'s :ground-truth mirror)."
+  [module-id ctx condition]
+  (case (:condition-type condition)
+    :age (age-condition-holds? condition (:persona ctx) (:t ctx))
+    :gender (gender-condition-holds? condition (:persona ctx))
+    :attribute (attribute-condition-holds? module-id ctx condition)
+    :prior-state (prior-state-condition-holds? module-id ctx condition)
+    (throw (ex-info "ehr-testing-sim.gmf-interpreter: unsupported condition type"
+                     {:condition-type (:condition-type condition)}))))
+
+(defn- age-guard-jump-days
+  "The v1 simplification this namespace's own docstring names: a FAILING
+  `:age` condition with operator `>=` resolves analytically -- the exact
+  number of days until the persona's age reaches :quantity `:unit`s, a
+  deterministic java.time computation, NO rng draw. Any other failing
+  condition (a different operator, a non-age condition type) returns nil
+  -- 'not analytically resolvable', the walk blocks instead (`guard-step`,
+  below)."
+  [{:keys [condition-type operator quantity unit]} persona ^long t]
+  (when (and (= condition-type :age) (= operator ">=") (= unit "years"))
+    (let [target-day (.toEpochDay (.plusYears (parse-dob persona) (long quantity)))]
+      (when (> target-day t) (- target-day t)))))
+
+;; --- Transition resolution (direct, distributed, conditional, complex) ----
+
+(defn- weighted-pick-transition
+  "distributed_transition (and complex_transition's own nested
+  distributions): a cumulative-weight pick over `entries`
+  ({:transition :distribution}), consuming EXACTLY one `.nextDouble` --
+  fixed consumption regardless of which member is chosen, the same law
+  ehr-testing-sim.engine/assign-pathway and
+  ehr-testing-sim.order-profiles/sample-analyte-value already establish."
+  [^Random rng entries]
+  (let [total (reduce + (map :distribution entries))
+        target (* (.nextDouble rng) total)]
+    (loop [es entries acc 0.0]
+      (let [e (first es) more (rest es) acc' (+ acc (double (:distribution e)))]
+        (if (or (empty? more) (< target acc')) (:transition e) (recur more acc'))))))
+
+(defn- first-matching-entry
+  "conditional_transition's own first-match-wins semantics, and
+  complex_transition's own first-matching-condition's distribution list --
+  an entry with NO :condition at all is the trailing 'else' arm. Consumes
+  NO rng: purely a walk over already-known state (persona/attributes/
+  trajectory), never a stochastic choice of its own."
+  [module-id ctx entries]
+  (first (filter (fn [{:keys [condition]}] (or (nil? condition) (evaluate-condition module-id ctx condition)))
+                 entries)))
+
+(defn- resolve-transition
+  "The shared 4-kind transition dispatcher every non-Terminal v1 state
+  type resolves its own :next through -- one mechanism, reused by every
+  state type's own `step` handling below, rather than duplicated per
+  type."
+  [module-id ctx ^Random rng state]
+  (cond
+    (:direct-transition state) (:direct-transition state)
+    (:distributed-transition state) (weighted-pick-transition rng (:distributed-transition state))
+    (:conditional-transition state) (:transition (first-matching-entry module-id ctx (:conditional-transition state)))
+    (:complex-transition state) (weighted-pick-transition
+                                  rng (:distributions (first-matching-entry module-id ctx (:complex-transition state))))
+    :else nil))
+
+;; --- step --------------------------------------------------------------
+
+(defn- pass-through-outcome
+  [module-id ctx rng state advance events]
+  {:events events
+   :attributes (:attributes ctx)
+   :advance advance
+   :next (resolve-transition module-id ctx rng state)
+   :terminal? false
+   :blocked? false})
+
+(defn- blocked-outcome
+  [ctx]
+  {:events [] :attributes (:attributes ctx) :advance 0 :next nil :terminal? false :blocked? true})
+
+(defn- guard-step
+  [module-id ctx ^Random rng state]
+  (let [condition (:allow state)]
+    (if (evaluate-condition module-id ctx condition)
+      (pass-through-outcome module-id ctx rng state 0 [])
+      (if-let [jump (age-guard-jump-days condition (:persona ctx) (:t ctx))]
+        ;; `age-guard-jump-days` computes the EXACT day the condition
+        ;; starts holding -- re-evaluating after the jump would always
+        ;; pass by construction, so there is no second, still-blocked
+        ;; branch to handle here (a scenario that can't happen gets no
+        ;; defensive code for it, this project's own convention).
+        (let [ctx' (update ctx :t + jump)]
+          (update (pass-through-outcome module-id ctx' rng state 0 []) :advance + jump))
+        (blocked-outcome ctx)))))
+
+(defn- trajectory-event
+  [module-id ctx event-type extra]
+  (merge {:module module-id :state (:current ctx) :t (:t ctx) :event event-type} extra))
+
+(defn- index-of-citation
+  "Where in `trajectory` the event citing `{:module :state target-state}`
+  and of the given `event-type` sits -- the shape ConditionEnd/
+  MedicationEnd's own reference to its opening event uses (docs/gmf-
+  interpreter.md section 1: 'the same 'references an existing prior
+  event' shape :cancel-*/:result-available already establish')."
+  [trajectory module-id event-type target-state]
+  (when target-state
+    (some (fn [[i event]]
+            (when (and (= module-id (:module event)) (= event-type (:event event)) (= target-state (:state event)))
+              i))
+          (map-indexed vector trajectory))))
+
+(defn- index-of-last-open-encounter
+  [trajectory module-id]
+  (last (keep (fn [[i event]] (when (and (= module-id (:module event)) (= :encounter (:event event))) i))
+              (map-indexed vector trajectory))))
+
+(defn- emit-and-advance
+  "Every v1 trajectory-event-producing state type shares this shape: cite
+  `{:module :state :t}` (glass-box law), carry `extra` (typically :codes,
+  verbatim -- code passthrough law) into the event, append it to the
+  accumulating trajectory, then resolve the ORDINARY transition
+  (optionally after its own sampled `:duration`, Procedure's own case)."
+  [module-id ctx ^Random rng state event-type extra]
+  (let [event (trajectory-event module-id ctx event-type extra)
+        ctx' (update ctx :trajectory conj event)
+        advance (if-let [duration (:duration state)] (- (resolve-time-advance rng (:t ctx) duration) (:t ctx)) 0)]
+    (pass-through-outcome module-id ctx' rng state advance [event])))
+
+(defn- round1 [^double v] (/ (Math/round (* v 10.0)) 10.0))
+
+(defn- sample-observation-extra
+  [^Random rng state]
+  (let [codes (:codes state)]
+    (if-let [{:keys [low high]} (:range state)]
+      {:codes codes :value (round1 (rand-double-in rng low high)) :unit (:unit state)}
+      {:codes codes})))
+
+(defn step
+  "Advances ONE state from `ctx`'s own `:current` -- consuming `rng` only
+  in this function's own documented order (per-state-type below). Returns
+  {:events [...] :attributes {...} :advance seconds :next state-or-nil
+  :terminal? bool :blocked? bool}; NEVER mutates `ctx` -- the caller
+  (`walk-module`, below) is what folds an outcome back into a new ctx,
+  the same decide/evolve-style separation ehr-testing-sim.engine already
+  establishes (ADR-0008), scaled down to this interpreter's own single-
+  function `step`, since a GMF state's own effect and its own transition
+  are never independently interesting the way decide/evolve's
+  cross-patient split is."
+  [module rng ctx]
+  (let [module-id (:id module)
+        state (get-in module [:states (:current ctx)])]
+    (case (:type state)
+      :terminal {:events [] :attributes (:attributes ctx) :advance 0 :next nil :terminal? true :blocked? false}
+      :initial (pass-through-outcome module-id ctx rng state 0 [])
+      :simple (pass-through-outcome module-id ctx rng state 0 [])
+      :delay (let [t' (resolve-time-advance rng (:t ctx) state)]
+               (pass-through-outcome module-id ctx rng state (- t' (:t ctx)) []))
+      :guard (guard-step module-id ctx rng state)
+      :set-attribute (let [k (keyword module-id (gmf/slug (:attribute state)))
+                           ctx' (update ctx :attributes assoc k (:value state))]
+                       (pass-through-outcome module-id ctx' rng state 0 []))
+      :symptom (let [severity (cond (:exact state) (:quantity (:exact state))
+                                     (:range state) (rand-int-in rng (:low (:range state)) (:high (:range state)))
+                                     :else nil)
+                     k (keyword module-id (gmf/slug (:symptom state)))
+                     ctx' (update ctx :attributes assoc k severity)]
+                 (pass-through-outcome module-id ctx' rng state 0 []))
+      :condition-onset (emit-and-advance module-id ctx rng state :condition-onset {:codes (:codes state)})
+      :condition-end (emit-and-advance module-id ctx rng state :condition-end
+                                        {:references (index-of-citation (:trajectory ctx) module-id
+                                                                         :condition-onset (:condition-onset state))})
+      :encounter (emit-and-advance module-id ctx rng state :encounter
+                                    {:codes (:codes state) :encounter-class (:encounter-class state)})
+      :encounter-end (emit-and-advance module-id ctx rng state :encounter-end
+                                        {:references (index-of-last-open-encounter (:trajectory ctx) module-id)})
+      :procedure (emit-and-advance module-id ctx rng state :procedure {:codes (:codes state)})
+      :observation (emit-and-advance module-id ctx rng state :observation (sample-observation-extra rng state))
+      :medication-order (emit-and-advance module-id ctx rng state :medication-order {:codes (:codes state)})
+      :medication-end (emit-and-advance module-id ctx rng state :medication-end
+                                         {:references (index-of-citation (:trajectory ctx) module-id
+                                                                          :medication-order (:medication-order state))}))))
+
+;; --- walk-module: drives `step` from :initial to Terminal or blocked ------
+
+(def ^:private max-steps
+  "A runaway-loop backstop, not a design limit: a real v1 module always
+  terminates or blocks in far fewer steps than this. Exceeding it means a
+  module authoring bug (a zero-time-advance transition cycle), a
+  programmer error this project's own conventions reserve exceptions
+  for -- never a result-not-throw outcome, since no legitimate module
+  should ever reach it."
+  10000)
+
+(defn walk-module
+  "Drives `step` from `ctx`'s own `:current` until the module reaches a
+  Terminal state (`:status :terminal`) or BLOCKS on a Guard whose
+  condition does not hold (`:status :blocked`, `ctx`'s own `:current`
+  left AT the blocked Guard, ready for a caller -- Task 3's history/
+  horizon two-phase run -- to resume the SAME walk later with more
+  virtual time or more attributes available)."
+  [module rng ctx]
+  (loop [ctx ctx n 0]
+    (when (>= n max-steps)
+      (throw (ex-info "ehr-testing-sim.gmf-interpreter: walk-module exceeded max-steps -- likely a module authoring bug (a zero-time-advance transition cycle)"
+                       {:module (:id module) :current (:current ctx)})))
+    (let [outcome (step module rng ctx)
+          ctx' (-> ctx
+                   (assoc :attributes (:attributes outcome))
+                   (update :trajectory into (:events outcome))
+                   (update :t + (:advance outcome)))]
+      (cond
+        (:terminal? outcome) (assoc ctx' :status :terminal)
+        (:blocked? outcome) (assoc ctx' :status :blocked)
+        :else (recur (assoc ctx' :current (:next outcome)) (inc n))))))
+
+;; --- run-module: the history/horizon two-phase run (Task 3, docs/gmf-
+;; interpreter.md section 3) -------------------------------------------------
+
+(defn run-module
+  "The ratified history/horizon design (section 3): ONE continuous walk
+  from `persona`'s own DOB (Task 2's `initial-context`) -- no fixed tick,
+  no separately-invoked phase pass. Every trajectory event this walk
+  emits is marked `:pre-horizon` by the exact pure predicate `(< t
+  registration-t)` -- the same shape ADR-0011's own warm-up mark already
+  uses (`warm-up-mark-matches-window`), applied here to the history/
+  horizon boundary instead of a run's warm-up window. `registration-t`
+  is the caller-supplied virtual instant (an epoch-day, `dob-epoch-day`'s
+  own unit) this patient's history phase ends and horizon phase begins
+  at -- 'that patient's own :registered event time' (section 3), passed
+  in explicitly here since M5a has no real engine `:registered` event
+  yet to read it from (M5b's own integration point).
+
+  `horizon-end-t` (optional, an epoch-day) bounds the horizon phase --
+  omitted, the walk runs to Terminal or blocked, same as `walk-module`;
+  supplied, the walk also stops (status `:horizon-complete`) once `:t`
+  reaches it, without emitting whatever state it stopped at.
+
+  Because this is genuinely ONE walk (not two independently driven
+  passes), 'the phases genuinely share state' (section 3's own property)
+  holds by construction: the SAME accumulating `:attributes` map and
+  `:trajectory` are threaded across the registration boundary, so a Guard
+  blocked on an attribute set earlier in the SAME walk sees it, whichever
+  side of `registration-t` each state happens to fall on."
+  ([module rng persona registration-t] (run-module module rng persona registration-t nil))
+  ([module rng persona registration-t horizon-end-t]
+   (loop [ctx (initial-context persona) n 0]
+     (when (>= n max-steps)
+       (throw (ex-info "ehr-testing-sim.gmf-interpreter: run-module exceeded max-steps -- likely a module authoring bug (a zero-time-advance transition cycle)"
+                        {:module (:id module) :current (:current ctx)})))
+     (if (and horizon-end-t (>= (:t ctx) horizon-end-t))
+       (assoc ctx :status :horizon-complete)
+       (let [outcome (step module rng ctx)
+             marked-events (mapv #(assoc % :pre-horizon (< (:t %) registration-t)) (:events outcome))
+             ctx' (-> ctx
+                      (assoc :attributes (:attributes outcome))
+                      (update :trajectory into marked-events)
+                      (update :t + (:advance outcome)))]
+         (cond
+           (:terminal? outcome) (assoc ctx' :status :terminal)
+           (:blocked? outcome) (assoc ctx' :status :blocked)
+           :else (recur (assoc ctx' :current (:next outcome)) (inc n))))))))
 
 ========== END FILE ==========
 
@@ -13501,6 +14892,213 @@ logic, not patient records.
 
 ========== END FILE ==========
 
+========== FILE: ./test/ehr_testing_sim/fixtures/fixture-clinic.json ==========
+{
+  "name": "Fixture Clinic",
+  "remarks": [
+    "Hand-authored GMF fixture for ehr-testing-sim's M5a interpreter tests",
+    "(notes/ADRs.md ADR-0013 point 6): this project's own authored data,",
+    "not derived from or copied out of any real Synthea module, so it carries",
+    "no NOTICE/provenance obligation the way a vendored module would.",
+    "Every v1 state type (docs/gmf-interpreter.md section 1) and all four",
+    "transition kinds (section 2) appear at least once. Concept triplets are",
+    "real, independently verified SNOMED CT/LOINC/RxNorm codes",
+    "(notes/facts-register.md F10-F12), reused across a small set of states",
+    "rather than one invented code per state."
+  ],
+  "states": {
+    "Initial": {
+      "type": "Initial",
+      "direct_transition": "Check_Age_Guard"
+    },
+
+    "Check_Age_Guard": {
+      "type": "Guard",
+      "allow": {"condition_type": "Age", "operator": ">=", "quantity": 0, "unit": "years"},
+      "direct_transition": "Log_Onset_Attribute"
+    },
+
+    "Log_Onset_Attribute": {
+      "type": "SetAttribute",
+      "attribute": "onset_logged",
+      "value": true,
+      "direct_transition": "Nasal_Congestion_Symptom"
+    },
+
+    "Nasal_Congestion_Symptom": {
+      "type": "Symptom",
+      "symptom": "Nasal Congestion",
+      "range": {"low": 10, "high": 40},
+      "direct_transition": "Sex_Branch"
+    },
+
+    "Sex_Branch": {
+      "type": "Simple",
+      "conditional_transition": [
+        {"condition": {"condition_type": "Gender", "gender": "F"}, "transition": "Route_Female"},
+        {"transition": "Route_Male"}
+      ]
+    },
+
+    "Route_Female": {
+      "type": "SetAttribute",
+      "attribute": "intake_branch",
+      "value": "female",
+      "direct_transition": "Merge_Point"
+    },
+
+    "Route_Male": {
+      "type": "SetAttribute",
+      "attribute": "intake_branch",
+      "value": "male",
+      "direct_transition": "Merge_Point"
+    },
+
+    "Merge_Point": {
+      "type": "Simple",
+      "distributed_transition": [
+        {"distribution": 0.7, "transition": "Sinusitis_Onset"},
+        {"distribution": 0.3, "transition": "No_Onset_Terminal"}
+      ]
+    },
+
+    "No_Onset_Terminal": {
+      "type": "Terminal"
+    },
+
+    "Sinusitis_Onset": {
+      "type": "ConditionOnset",
+      "target_encounter": "Doctor_Visit_Encounter",
+      "codes": [
+        {"system": "SNOMED-CT", "code": "36971009", "display": "Sinusitis (disorder)"}
+      ],
+      "direct_transition": "Symptom_To_Visit_Delay"
+    },
+
+    "Symptom_To_Visit_Delay": {
+      "type": "Delay",
+      "range": {"low": 2, "high": 5, "unit": "days"},
+      "direct_transition": "Doctor_Visit_Encounter"
+    },
+
+    "Doctor_Visit_Encounter": {
+      "type": "Encounter",
+      "encounter_class": "ambulatory",
+      "reason": "onset_logged",
+      "codes": [
+        {"system": "SNOMED-CT", "code": "185345009", "display": "Encounter for symptom"}
+      ],
+      "direct_transition": "Take_Temperature"
+    },
+
+    "Take_Temperature": {
+      "type": "Observation",
+      "category": "vital-signs",
+      "unit": "Cel",
+      "codes": [
+        {"system": "LOINC", "code": "8310-5", "display": "Body temperature"}
+      ],
+      "range": {"low": 37.5, "high": 39.5},
+      "direct_transition": "Severity_Guard"
+    },
+
+    "Severity_Guard": {
+      "type": "Guard",
+      "allow": {"condition_type": "Attribute", "attribute": "onset_logged", "operator": "==", "value": true},
+      "direct_transition": "Treatment_Branch"
+    },
+
+    "Treatment_Branch": {
+      "type": "Simple",
+      "complex_transition": [
+        {
+          "condition": {"condition_type": "Attribute", "attribute": "intake_branch", "operator": "==", "value": "female"},
+          "distributions": [
+            {"distribution": 0.6, "transition": "Prescribe_Amoxicillin"},
+            {"distribution": 0.3, "transition": "Skip_Meds"},
+            {"distribution": 0.1, "transition": "Sinus_Surgery"}
+          ]
+        },
+        {
+          "distributions": [
+            {"distribution": 1.0, "transition": "Skip_Meds"}
+          ]
+        }
+      ]
+    },
+
+    "Prescribe_Amoxicillin": {
+      "type": "MedicationOrder",
+      "reason": "onset_logged",
+      "codes": [
+        {"system": "RxNorm", "code": "308191", "display": "Amoxicillin 500 MG Oral Capsule"}
+      ],
+      "direct_transition": "Mark_Medicated"
+    },
+
+    "Mark_Medicated": {
+      "type": "SetAttribute",
+      "attribute": "medicated",
+      "value": true,
+      "direct_transition": "Treatment_Delay"
+    },
+
+    "Skip_Meds": {
+      "type": "Simple",
+      "direct_transition": "Treatment_Delay"
+    },
+
+    "Sinus_Surgery": {
+      "type": "Procedure",
+      "target_encounter": "Doctor_Visit_Encounter",
+      "reason": "onset_logged",
+      "codes": [
+        {"system": "SNOMED-CT", "code": "315618009", "display": "FESS - Functional endoscopic sinus surgery - sphenoethmoidectomy"}
+      ],
+      "duration": {"low": 30, "high": 60, "unit": "minutes"},
+      "direct_transition": "Treatment_Delay"
+    },
+
+    "Treatment_Delay": {
+      "type": "Delay",
+      "range": {"low": 7, "high": 10, "unit": "days"},
+      "direct_transition": "Prior_Visit_Guard"
+    },
+
+    "Prior_Visit_Guard": {
+      "type": "Guard",
+      "allow": {"condition_type": "PriorState", "name": "Doctor_Visit_Encounter"},
+      "direct_transition": "End_Encounter"
+    },
+
+    "End_Encounter": {
+      "type": "EncounterEnd",
+      "conditional_transition": [
+        {"condition": {"condition_type": "Attribute", "attribute": "medicated", "operator": "==", "value": true}, "transition": "End_Medication"},
+        {"transition": "Resolve_Condition"}
+      ]
+    },
+
+    "End_Medication": {
+      "type": "MedicationEnd",
+      "medication_order": "Prescribe_Amoxicillin",
+      "direct_transition": "Resolve_Condition"
+    },
+
+    "Resolve_Condition": {
+      "type": "ConditionEnd",
+      "condition_onset": "Sinusitis_Onset",
+      "direct_transition": "Terminal_Resolved"
+    },
+
+    "Terminal_Resolved": {
+      "type": "Terminal"
+    }
+  }
+}
+
+========== END FILE ==========
+
 ========== FILE: ./test/ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn ==========
 ;; Captured from ehr-testing-sim.engine/run {:seed 42 :patients 5}
 ;; POST-M4 (2026-07-26) -- see notes/ADRs.md ADR-0009 (seed-stability
@@ -13540,6 +15138,682 @@ logic, not patient records.
 ;; not a bug to chase). See
 ;; ehr_testing_sim.engine_test/pinned-seed-survives-decide-evolve-refactor.
 {:ground-truth [{:event :registered, :t 0, :active-mrn "MRN000001", :persona {:name {:family "Gonzalez", :given "Lisa"}, :sex :female, :dob "1965-06-12", :age 59, :address {:street "271 Brookside Ave", :city "Milwaukee", :state "WI", :zip "53202"}, :phone "823-937-3975", :ssn "900-07-4424", :payer {:id "medicaid", :name "Medicaid", :type :medicaid}}, :participants [{:patient-id "PID-000000-918175ce", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000000-918175ce", :role :subject}], :active-mrn "MRN000001", :attending "0384055899", :warm-up false, :reason "Kidney problems", :event :admission, :t 0, :location {:ward "Renal", :bed "RENAL-02", :placement :licensed}, :forced false} {:event :registered, :t 3480, :active-mrn "MRN000002", :persona {:name {:family "Lopez", :given "James"}, :sex :male, :dob "1945-11-22", :age 79, :address {:street "48 Sycamore St", :city "Buffalo", :state "NY", :zip "14202"}, :phone "401-494-0794", :ssn "900-06-0257", :payer {:id "medicare-65", :name "Medicare", :type :medicare}}, :participants [{:patient-id "PID-000001-881e2907", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000001-881e2907", :role :subject}], :active-mrn "MRN000002", :attending "0384055899", :warm-up false, :reason "Kidney problems", :event :admission, :t 3480, :location {:ward "Renal", :bed "RENAL-03", :placement :licensed}, :forced false} {:event :registered, :t 4680, :active-mrn "MRN000003", :persona {:name {:family "Martinez", :given "Ashley"}, :sex :female, :dob "1991-03-01", :age 33, :address {:street "9 Willow Ct", :city "Richmond", :state "VA", :zip "23219"}, :phone "407-793-4109", :ssn "900-76-9258", :payer {:id "medicaid", :name "Medicaid", :type :medicaid}}, :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}], :active-mrn "MRN000003", :attending "0384055899", :warm-up false, :reason "Kidney problems", :event :admission, :t 4680, :location {:ward "Renal", :bed "RENAL-04", :placement :licensed}, :forced false} {:event :registered, :t 5580, :active-mrn "MRN000004", :persona {:name {:family "Smith", :given "Amanda"}, :sex :female, :dob "1986-01-09", :age 38, :address {:street "271 Brookside Ave", :city "Milwaukee", :state "WI", :zip "53202"}, :phone "511-509-3246", :ssn "900-23-6285", :payer {:id "commercial-ppo", :name "Commercial PPO", :type :commercial}}, :participants [{:patient-id "PID-000003-75598130", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000003-75598130", :role :subject}], :active-mrn "MRN000004", :attending "0384055899", :warm-up false, :reason "Kidney problems", :event :admission, :t 5580, :location {:ward "Renal", :bed "RENAL-01", :placement :licensed}, :forced false} {:event :registered, :t 8580, :active-mrn "MRN000005", :persona {:name {:family "Okafor", :given "Susan"}, :sex :female, :dob "1963-03-24", :age 61, :address {:street "204 Maple Ave", :city "Portland", :state "OR", :zip "97201"}, :phone "922-523-6433", :ssn "900-65-1877", :payer {:id "medicaid", :name "Medicaid", :type :medicaid}}, :participants [{:patient-id "PID-000004-2467dffa", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000004-2467dffa", :role :subject}], :active-mrn "MRN000005", :attending "3903633105", :warm-up false, :reason "Kidney problems", :event :admission, :t 8580, :location {:ward "Renal", :bed "RENAL-H02", :placement :surge}, :forced false} {:event :discharge, :t 8820, :active-mrn "MRN000001", :location {:ward "Renal", :bed "RENAL-02", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000000-918175ce", :role :subject}], :warm-up false} {:event :discharge, :t 8940, :active-mrn "MRN000002", :location {:ward "Renal", :bed "RENAL-03", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000001-881e2907", :role :subject}], :warm-up false} {:event :discharge, :t 14940, :active-mrn "MRN000004", :location {:ward "Renal", :bed "RENAL-01", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000003-75598130", :role :subject}], :warm-up false} {:event :discharge, :t 15600, :active-mrn "MRN000003", :location {:ward "Renal", :bed "RENAL-04", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}], :warm-up false} {:event :discharge, :t 20760, :active-mrn "MRN000005", :location {:ward "Renal", :bed "RENAL-H02", :placement :surge}, :attending "3903633105", :participants [{:patient-id "PID-000004-2467dffa", :role :subject}], :warm-up false}]}
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/gmf_horizon_test.clj ==========
+(ns ehr-testing-sim.gmf-horizon-test
+  "Red tests for the history/horizon two-phase run (M5a Task 3, docs/gmf-
+  interpreter.md section 3) -- written before ehr-testing-sim.gmf-
+  interpreter/run-module exists (ADR-0004 test-first). The ratified
+  design: ONE continuous walk from the persona's own DOB (Task 2's
+  `initial-context`) through registration and on to a (caller-supplied)
+  horizon end, no fixed tick -- every emitted trajectory event is marked
+  `:pre-horizon` by the SAME pure predicate ADR-0011's own warm-up mark
+  already uses (`t < boundary`), never a second, separately-driven phase
+  pass. This is what makes 'the phases genuinely share state' true by
+  construction rather than by extra plumbing: attributes and the
+  trajectory-so-far are the SAME accumulating values threaded across the
+  boundary, because there never were two accumulators to begin with."
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.gmf :as gmf]
+            [ehr-testing-sim.gmf-interpreter :as interp]
+            [ehr-testing-sim.persona :as persona])
+  (:import [java.time LocalDate]
+           [java.util Random]))
+
+(def fixture-clinic-json (slurp (io/resource "ehr_testing_sim/fixtures/fixture-clinic.json")))
+(def fixture-clinic (:payload (gmf/load-module "fixture-clinic" fixture-clinic-json)))
+
+(defn- adult [seed] (assoc (persona/persona (Random. seed) {}) :sex :female))
+
+;; A registration instant well past DOB, so the module has room to run
+;; both an onset (history) and an encounter+observation (horizon).
+(defn- registration-t-for [persona] (+ (interp/dob-epoch-day persona) (* 365 20)))
+
+;; --- Property 1: the phase boundary is exactly t < registration-t --------
+
+(defspec phase-boundary-is-exactly-t-less-than-registration-instant 150
+  (prop/for-all [seed gen/large-integer]
+    (let [p (adult seed)
+          reg-t (registration-t-for p)
+          {:keys [trajectory]} (interp/run-module fixture-clinic (Random. seed) p reg-t)]
+      (every? (fn [event] (= (boolean (:pre-horizon event)) (< (:t event) reg-t))) trajectory))))
+
+;; --- Property 2: determinism across both phases --------------------------
+
+(defspec run-module-is-deterministic-for-the-same-inputs 150
+  (prop/for-all [seed gen/large-integer]
+    (let [p (adult seed)
+          reg-t (registration-t-for p)
+          run1 (interp/run-module fixture-clinic (Random. seed) p reg-t)
+          run2 (interp/run-module fixture-clinic (Random. seed) p reg-t)]
+      (= run1 run2))))
+
+;; --- Property 3: a Guard blocking on an attribute set only in history
+;; passes in horizon -- the phases genuinely share state -------------------
+
+(def shared-state-module
+  {:id "shared-mod"
+   :name "SharedState"
+   :states {:initial {:type :initial :direct-transition :mark}
+            :mark {:type :set-attribute :attribute "seen-doctor" :value true :direct-transition :wait}
+            :wait {:type :delay :range {:low 400 :high 400 :unit "days"} :direct-transition :check}
+            :check {:type :guard
+                    :allow {:condition-type :attribute :attribute "seen-doctor" :operator "==" :value true}
+                    :direct-transition :visit}
+            :visit {:type :encounter :encounter-class :ambulatory
+                    :codes [{:system :snomed :code "185345009" :display "Encounter for symptom"}]
+                    :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest guard-blocking-on-an-attribute-set-only-in-history-passes-in-horizon
+  (let [p (adult 7)
+        ;; :mark (history, t = DOB) sets the attribute; :wait's 400-day
+        ;; delay crosses well past a registration instant set at +100
+        ;; days, so :check (and the resulting :visit encounter) fall in
+        ;; the HORIZON phase, reading an attribute this same run set
+        ;; during HISTORY -- there is no second module instance, no
+        ;; attribute reset at the boundary.
+        reg-t (+ (interp/dob-epoch-day p) 100)
+        result (interp/run-module shared-state-module (Random. 1) p reg-t)]
+    (is (= :terminal (:status result)))
+    (is (true? (get-in result [:attributes :shared-mod/seen-doctor])))
+    (let [visit-event (first (filter #(= :encounter (:event %)) (:trajectory result)))]
+      (is (some? visit-event))
+      (is (false? (:pre-horizon visit-event)) "the encounter fires in horizon, unmarked"))))
+
+;; --- Property 4: an under-age Guard flips correctly as the virtual clock
+;; crosses the threshold -----------------------------------------------------
+
+(def age-gated-module
+  {:id "age-gate-mod"
+   :name "AgeGate"
+   :states {:initial {:type :initial :direct-transition :check}
+            :check {:type :guard
+                    :allow {:condition-type :age :operator ">=" :quantity 5 :unit "years"}
+                    :direct-transition :visit}
+            :visit {:type :encounter :encounter-class :wellness
+                    :codes [{:system :snomed :code "185345009" :display "Encounter for symptom"}]
+                    :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest age-guard-crossing-lands-in-history-when-registration-is-still-early
+  (let [p (adult 3)
+        five-years-days (* 365 5)
+        ;; registration BEFORE the age-5 threshold is reached -- the
+        ;; guard's own analytic jump still crosses it (no fixed tick, no
+        ;; polling), but the resulting encounter's own :t is still less
+        ;; than registration-t, so it is :pre-horizon true.
+        reg-t (+ (interp/dob-epoch-day p) five-years-days 10)
+        result (interp/run-module age-gated-module (Random. 1) p reg-t)
+        visit-event (first (filter #(= :encounter (:event %)) (:trajectory result)))]
+    (is (true? (:pre-horizon visit-event)))))
+
+(deftest age-guard-crossing-lands-in-horizon-when-registration-is-early-enough
+  (let [p (adult 3)
+        ;; registration set BEFORE the patient turns 5 -- the guard still
+        ;; resolves the SAME way (the analytic jump doesn't know or care
+        ;; about registration-t), but now the crossing happens AFTER
+        ;; registration, so the same encounter is unmarked.
+        reg-t (+ (interp/dob-epoch-day p) 30)
+        result (interp/run-module age-gated-module (Random. 1) p reg-t)
+        visit-event (first (filter #(= :encounter (:event %)) (:trajectory result)))]
+    (is (false? (:pre-horizon visit-event)))))
+
+;; --- Task 3.3: scripted end-to-end against fixture-clinic -----------------
+
+(deftest scripted-end-to-end-fixture-clinic-onset-in-history-encounter-in-horizon
+  (testing "a persona and seed chosen so the module takes the onset branch
+            (Merge_Point's 0.7 arm) and the female intake branch (so
+            Treatment_Branch's own 3-way split is reachable), with
+            registration landing between the condition onset and the
+            doctor visit"
+    (let [seed 1
+          p (adult seed)
+          onset-run (interp/run-module fixture-clinic (Random. seed) p (+ (interp/dob-epoch-day p) 1))
+          onset-event (first (filter #(= :condition-onset (:event %)) (:trajectory onset-run)))
+          _ (is (some? onset-event) "seed 1 must take the onset branch for this demo to mean anything")
+          reg-t (inc (:t onset-event))
+          result (interp/run-module fixture-clinic (Random. seed) p reg-t)
+          citations (mapv (fn [e] (cond-> {:module (:module e) :state (:state e) :event (:event e)
+                                            :pre-horizon (boolean (:pre-horizon e))}
+                                     (:references e) (assoc :references (:references e))))
+                          (:trajectory result))]
+      (is (= :terminal (:status result)))
+      (is (= [{:module "fixture-clinic" :state :sinusitis-onset :event :condition-onset :pre-horizon true}
+              {:module "fixture-clinic" :state :doctor-visit-encounter :event :encounter :pre-horizon false}
+              {:module "fixture-clinic" :state :take-temperature :event :observation :pre-horizon false}
+              {:module "fixture-clinic" :state :prescribe-amoxicillin :event :medication-order :pre-horizon false}
+              {:module "fixture-clinic" :state :end-encounter :event :encounter-end :pre-horizon false :references 1}
+              {:module "fixture-clinic" :state :end-medication :event :medication-end :pre-horizon false :references 3}
+              {:module "fixture-clinic" :state :resolve-condition :event :condition-end :pre-horizon false :references 0}]
+             citations)
+          "exact event sequence (module/state/event citations, pre-horizon
+           marks, and cross-event references): onset in history, everything
+           from the doctor visit onward in horizon -- glass-box-traceable,
+           per docs/gmf-interpreter.md section 6")
+      (testing "concept triplets carried verbatim (code passthrough law)"
+        (is (= [{:system :snomed :code "36971009" :display "Sinusitis (disorder)"}]
+               (:codes (first (:trajectory result)))))
+        (is (= [{:system :snomed :code "185345009" :display "Encounter for symptom"}]
+               (:codes (second (:trajectory result)))))))))
+
+;; --- Remaining coverage: PriorState's own windowed form, and
+;; run-module's optional horizon-end-t bound --------------------------------
+
+(def windowed-prior-state-module
+  {:id "window-mod" :name "Window"
+   :states {:initial {:type :initial :direct-transition :visit}
+            :visit {:type :encounter :encounter-class :ambulatory
+                    :codes [{:system :snomed :code "185345009" :display "Encounter for symptom"}]
+                    :direct-transition :wait}
+            :wait {:type :delay :exact {:quantity 40 :unit "days"} :direct-transition :check}
+            :check {:type :guard
+                    :allow {:condition-type :prior-state :name :visit :window {:quantity 30 :unit "days"}}
+                    :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest prior-state-with-a-window-blocks-once-the-visit-is-outside-it
+  (let [ctx (interp/initial-context (adult 1))
+        outcome (interp/walk-module windowed-prior-state-module (Random. 1) ctx)]
+    (is (= :blocked (:status outcome))
+        "the visit was 40 days ago, outside the guard's own 30-day window")))
+
+(deftest run-module-stops-at-an-explicit-horizon-end-t
+  (let [p (adult 1)
+        early-end (+ (interp/dob-epoch-day p) 1)
+        result (interp/run-module fixture-clinic (Random. 1) p early-end early-end)]
+    (is (= :horizon-complete (:status result)))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/gmf_interpreter_test.clj ==========
+(ns ehr-testing-sim.gmf-interpreter-test
+  "Red tests for the GMF interpreter core (M5a Task 2, docs/gmf-
+  interpreter.md sections 1-2 and 6) -- written before
+  ehr-testing-sim.gmf-interpreter exists (ADR-0004 test-first). Pure,
+  seeded, engine-free: `step` advances one state at a time, consuming
+  the passed rng only in documented order; transitions (direct,
+  distributed, conditional, complex) and the v1 condition vocabulary
+  (age, sex, attribute, PriorState) are each exercised directly.
+  Properties: determinism, code passthrough, glass-box traceability,
+  attribute-registry-only writes -- the ADR-0004 law-bearing set this
+  session's own Task 2 names as THE seam."
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.gmf :as gmf]
+            [ehr-testing-sim.gmf-interpreter :as interp]
+            [ehr-testing-sim.persona :as persona])
+  (:import [java.util Random]))
+
+(def fixture-clinic-json
+  (slurp (io/resource "ehr_testing_sim/fixtures/fixture-clinic.json")))
+
+(def fixture-clinic
+  (:payload (gmf/load-module "fixture-clinic" fixture-clinic-json)))
+
+(defn- persona-at [seed & [config]]
+  (persona/persona (Random. seed) (or config {})))
+
+(defn- ctx-for [p] (interp/initial-context p))
+
+;; --- step mechanics, one transition kind at a time ------------------------
+
+(def direct-only-module
+  {:id "direct-mod"
+   :name "Direct"
+   :states {:initial {:type :initial :direct-transition :a}
+            :a {:type :simple :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest direct-transition-advances-with-zero-time-and-no-event
+  (let [ctx (ctx-for (persona-at 1))
+        outcome (interp/step direct-only-module (Random. 1) ctx)]
+    (is (= :a (:next outcome)))
+    (is (= 0 (:advance outcome)))
+    (is (= [] (:events outcome)))
+    (is (false? (:blocked? outcome)))))
+
+(def delay-module
+  {:id "delay-mod"
+   :name "Delay"
+   :states {:initial {:type :initial :direct-transition :wait}
+            :wait {:type :delay :range {:low 7 :high 10 :unit "days"} :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest delay-samples-exactly-one-draw-and-advances-within-its-range
+  (let [ctx (assoc (ctx-for (persona-at 1)) :current :wait)
+        rng (Random. 42)
+        outcome (interp/step delay-module rng ctx)]
+    (is (<= 7 (:advance outcome) 10))
+    (is (= :done (:next outcome)))))
+
+(defspec delay-consumes-a-fixed-single-rng-draw 100
+  (prop/for-all [seed gen/large-integer]
+    (let [ctx (assoc (ctx-for (persona-at 1)) :current :wait)
+          calls (atom 0)
+          rng (proxy [Random] [(long seed)]
+                (nextInt
+                  ([n] (swap! calls inc) (proxy-super nextInt n))))]
+      (interp/step delay-module rng ctx)
+      (= 1 @calls))))
+
+(def exact-delay-module
+  {:id "exact-delay-mod"
+   :name "ExactDelay"
+   :states {:initial {:type :initial :direct-transition :wait}
+            :wait {:type :delay :exact {:quantity 3 :unit "days"} :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest exact-delay-advances-deterministically-with-no-rng-draw
+  (let [ctx (assoc (ctx-for (persona-at 1)) :current :wait)
+        calls (atom 0)
+        rng (proxy [Random] [(long 1)]
+              (nextInt ([n] (swap! calls inc) (proxy-super nextInt n))))
+        outcome (interp/step exact-delay-module rng ctx)]
+    (is (= 3 (:advance outcome)))
+    (is (= 0 @calls))))
+
+(def distributed-module
+  {:id "dist-mod"
+   :name "Distributed"
+   :states {:initial {:type :initial :direct-transition :split}
+            :split {:type :simple
+                    :distributed-transition [{:distribution 0.7 :transition :heads}
+                                              {:distribution 0.3 :transition :tails}]}
+            :heads {:type :terminal}
+            :tails {:type :terminal}}})
+
+(deftest distributed-transition-is-weighted-toward-the-70-percent-branch
+  ;; A single shared rng drawing 2000 times, NOT 2000 fresh `(Random.
+  ;; seed)` instances each read once -- java.util.Random's first
+  ;; nextDouble() draw is a well-known poorly-avalanched function of a
+  ;; small/sequential seed (confirmed this session: seeds 0..9 all drew
+  ;; ~0.73 on their first call), which silently made an earlier draft of
+  ;; this property vacuous. A single rng making many draws is both the
+  ;; statistically sound test and the realistic usage shape (this
+  ;; project's own single-seeded-RNG-per-run law).
+  (let [ctx (assoc (ctx-for (persona-at 1)) :current :split)
+        rng (Random. 12345)
+        outcomes (repeatedly 2000 #(:next (interp/step distributed-module rng ctx)))
+        heads (count (filter #(= :heads %) outcomes))]
+    (is (< 0.6 (/ heads 2000.0) 0.8))))
+
+(def conditional-module
+  {:id "cond-mod"
+   :name "Conditional"
+   :states {:initial {:type :initial :direct-transition :branch}
+            :branch {:type :simple
+                     :conditional-transition [{:condition {:condition-type :gender :gender "F"} :transition :female}
+                                               {:transition :male}]}
+            :female {:type :terminal}
+            :male {:type :terminal}}})
+
+(deftest conditional-transition-picks-the-first-matching-condition
+  (let [female-persona (assoc (persona-at 1) :sex :female)
+        male-persona (assoc (persona-at 1) :sex :male)]
+    (is (= :female (:next (interp/step conditional-module (Random. 1)
+                                        (assoc (ctx-for female-persona) :current :branch)))))
+    (is (= :male (:next (interp/step conditional-module (Random. 1)
+                                      (assoc (ctx-for male-persona) :current :branch)))))))
+
+(deftest conditional-transition-consumes-no-rng
+  (let [calls (atom 0)
+        rng (proxy [Random] [(long 1)]
+              (nextDouble [] (swap! calls inc) (proxy-super nextDouble))
+              (nextInt ([n] (swap! calls inc) (proxy-super nextInt n))))]
+    (interp/step conditional-module rng (assoc (ctx-for (persona-at 1)) :current :branch))
+    (is (= 0 @calls))))
+
+(def complex-module
+  {:id "complex-mod"
+   :name "Complex"
+   :states {:initial {:type :initial :direct-transition :branch}
+            :branch {:type :simple
+                     :complex-transition [{:condition {:condition-type :gender :gender "F"}
+                                            :distributions [{:distribution 0.5 :transition :a}
+                                                             {:distribution 0.5 :transition :b}]}
+                                           {:distributions [{:distribution 1.0 :transition :c}]}]}
+            :a {:type :terminal} :b {:type :terminal} :c {:type :terminal}}})
+
+(deftest complex-transition-routes-through-the-matching-condition-then-samples
+  (let [male-persona (assoc (persona-at 1) :sex :male)]
+    (is (= :c (:next (interp/step complex-module (Random. 1)
+                                   (assoc (ctx-for male-persona) :current :branch)))))))
+
+(defspec complex-transition-always-consumes-exactly-one-draw 100
+  (prop/for-all [seed gen/large-integer
+                 female? gen/boolean]
+    (let [p (assoc (persona-at 1) :sex (if female? :female :male))
+          calls (atom 0)
+          rng (proxy [Random] [(long seed)]
+                (nextDouble [] (swap! calls inc) (proxy-super nextDouble)))]
+      (interp/step complex-module rng (assoc (ctx-for p) :current :branch))
+      (= 1 @calls))))
+
+;; --- Guard: age, sex, attribute, PriorState --------------------------------
+
+(def attribute-guard-module
+  {:id "attr-guard-mod"
+   :name "AttrGuard"
+   :states {:initial {:type :initial :direct-transition :check}
+            :check {:type :guard
+                    :allow {:condition-type :attribute :attribute "ready" :operator "==" :value true}
+                    :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest attribute-guard-passes-when-the-namespaced-attribute-matches
+  (let [ctx (-> (ctx-for (persona-at 1)) (assoc :current :check)
+                (assoc :attributes {:attr-guard-mod/ready true}))
+        outcome (interp/step attribute-guard-module (Random. 1) ctx)]
+    (is (= :done (:next outcome)))
+    (is (false? (:blocked? outcome)))))
+
+(deftest attribute-guard-blocks-when-the-namespaced-attribute-does-not-match
+  (let [ctx (assoc (ctx-for (persona-at 1)) :current :check)
+        outcome (interp/step attribute-guard-module (Random. 1) ctx)]
+    (is (true? (:blocked? outcome)))
+    (is (nil? (:next outcome)))))
+
+(def prior-state-guard-module
+  {:id "prior-mod"
+   :name "Prior"
+   :states {:initial {:type :initial :direct-transition :visit}
+            :visit {:type :encounter :encounter-class :ambulatory
+                    :codes [{:system :snomed :code "185345009" :display "Encounter for symptom"}]
+                    :direct-transition :check}
+            :check {:type :guard
+                    :allow {:condition-type :prior-state :name :visit}
+                    :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest prior-state-guard-passes-once-the-target-state-has-been-visited
+  (let [walked (interp/walk-module prior-state-guard-module (Random. 1) (ctx-for (persona-at 1)))]
+    (is (= :terminal (:status walked)))))
+
+(deftest prior-state-guard-blocks-when-the-target-state-was-never-visited
+  (let [ctx (assoc (ctx-for (persona-at 1)) :current :check)
+        outcome (interp/step prior-state-guard-module (Random. 1) ctx)]
+    (is (true? (:blocked? outcome)))))
+
+(def age-guard-module
+  {:id "age-mod"
+   :name "Age"
+   :states {:initial {:type :initial :direct-transition :check}
+            :check {:type :guard
+                    :allow {:condition-type :age :operator ">=" :quantity 5 :unit "years"}
+                    :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest age-guard-jumps-the-virtual-clock-forward-with-no-rng-when-under-age
+  (let [young (assoc (persona-at 1) :dob "2020-01-01")
+        ctx (assoc (ctx-for young) :current :check)
+        calls (atom 0)
+        rng (proxy [Random] [(long 1)]
+              (nextDouble [] (swap! calls inc) (proxy-super nextDouble))
+              (nextInt ([n] (swap! calls inc) (proxy-super nextInt n))))
+        outcome (interp/step age-guard-module rng ctx)]
+    (is (false? (:blocked? outcome)))
+    (is (= :done (:next outcome)))
+    (is (pos? (:advance outcome)) "advanced the virtual clock to reach the age threshold")
+    (is (= 0 @calls) "the age jump is a deterministic computation, not an RNG draw")))
+
+(deftest age-guard-passes-through-with-zero-advance-when-already-old-enough
+  (let [old (assoc (persona-at 1) :dob "2000-01-01")
+        ;; :t is 10 years past DOB (well past the guard's 5-year
+        ;; threshold) -- ctx-for alone starts :t AT dob-epoch-day (age 0),
+        ;; so "already old enough" must advance :t explicitly, not just
+        ;; pick an early DOB.
+        ctx (-> (ctx-for old) (assoc :current :check) (update :t + (* 365 10)))
+        outcome (interp/step age-guard-module (Random. 1) ctx)]
+    (is (false? (:blocked? outcome)))
+    (is (= 0 (:advance outcome)))))
+
+;; --- SetAttribute / Symptom -------------------------------------------------
+
+(deftest set-attribute-writes-a-module-namespaced-key
+  (let [ctx (assoc (ctx-for (persona-at 1)) :current :log-onset-attribute)
+        outcome (interp/step fixture-clinic (Random. 1) ctx)]
+    (is (= true (get-in outcome [:attributes :fixture-clinic/onset-logged])))
+    (is (= [] (:events outcome)) "SetAttribute is consumed internally -- no trajectory event")))
+
+(deftest symptom-writes-a-module-namespaced-key-with-a-sampled-severity
+  (let [ctx (assoc (ctx-for (persona-at 1)) :current :nasal-congestion-symptom)
+        outcome (interp/step fixture-clinic (Random. 5) ctx)
+        severity (get-in outcome [:attributes :fixture-clinic/nasal-congestion])]
+    (is (<= 10 severity 40))
+    (is (= [] (:events outcome)) "Symptom is consumed internally -- no trajectory event, docs/gmf-interpreter.md section 1")))
+
+;; --- Trajectory events: citations, code passthrough, references -----------
+
+(deftest condition-onset-emits-a-cited-event-with-verbatim-codes
+  (let [ctx (assoc (ctx-for (persona-at 1)) :current :sinusitis-onset)
+        outcome (interp/step fixture-clinic (Random. 1) ctx)
+        [event] (:events outcome)]
+    (is (= :condition-onset (:event event)))
+    (is (= "fixture-clinic" (:module event)))
+    (is (= :sinusitis-onset (:state event)))
+    (is (= [{:system :snomed :code "36971009" :display "Sinusitis (disorder)"}] (:codes event)))))
+
+(deftest condition-end-references-its-condition-onset-events-trajectory-index
+  (let [ctx0 (ctx-for (persona-at 1))
+        onset-outcome (interp/step fixture-clinic (Random. 1) (assoc ctx0 :current :sinusitis-onset))
+        onset-event (first (:events onset-outcome))
+        ctx1 (-> ctx0 (assoc :current :resolve-condition) (update :trajectory conj onset-event))
+        outcome (interp/step fixture-clinic (Random. 1) ctx1)
+        [event] (:events outcome)]
+    (is (= :condition-end (:event event)))
+    (is (= 0 (:references event)))))
+
+(deftest observation-samples-a-value-within-its-declared-range-consuming-one-draw
+  (let [ctx (assoc (ctx-for (persona-at 1)) :current :take-temperature)
+        calls (atom 0)
+        rng (proxy [Random] [(long 1)]
+              (nextDouble [] (swap! calls inc) (proxy-super nextDouble)))
+        outcome (interp/step fixture-clinic rng ctx)
+        [event] (:events outcome)]
+    (is (<= 37.5 (:value event) 39.5))
+    (is (= 1 @calls))))
+
+;; --- Properties (Task 2.4, THE seam) ---------------------------------------
+
+(defn- run-fixture [seed persona-config]
+  (interp/walk-module fixture-clinic (Random. seed) (interp/initial-context (persona-at seed persona-config))))
+
+(defspec determinism-holds-for-the-same-module-persona-and-seed 150
+  (prop/for-all [seed gen/large-integer]
+    (= (run-fixture seed {}) (run-fixture seed {}))))
+
+(defspec code-passthrough-every-trajectory-event-cites-its-source-modules-own-codes 150
+  (prop/for-all [seed gen/large-integer]
+    (let [{:keys [trajectory]} (run-fixture seed {})]
+      (every? (fn [event]
+                (let [state (get-in fixture-clinic [:states (:state event)])]
+                  (or (nil? (:codes state)) (= (:codes event) (:codes state)))))
+              trajectory))))
+
+(defspec glass-box-every-trajectory-event-cites-a-real-module-and-state 150
+  (prop/for-all [seed gen/large-integer]
+    (let [{:keys [trajectory]} (run-fixture seed {})]
+      (every? (fn [event]
+                (and (= "fixture-clinic" (:module event))
+                     (contains? (:states fixture-clinic) (:state event))))
+              trajectory))))
+
+(defspec attribute-writes-are-always-in-the-declared-registry 150
+  (prop/for-all [seed gen/large-integer]
+    (let [{:keys [attributes]} (run-fixture seed {})
+          declared (gmf/declared-attributes fixture-clinic)]
+      (every? declared (keys attributes)))))
+
+;; --- Remaining unit/branch coverage: Delay's non-day units, the "!="
+;; attribute operator, an unrecognized condition type, and the
+;; runaway-loop backstop -----------------------------------------------------
+
+(deftest delay-supports-weeks-months-and-years-units
+  (let [module-for (fn [unit] {:id "unit-mod" :name "Unit"
+                               :states {:initial {:type :initial :direct-transition :wait}
+                                        :wait {:type :delay :exact {:quantity 1 :unit unit} :direct-transition :done}
+                                        :done {:type :terminal}}})
+        ctx (assoc (ctx-for (persona-at 1)) :current :wait)]
+    (is (= 7 (:advance (interp/step (module-for "weeks") (Random. 1) ctx))))
+    (is (<= 28 (:advance (interp/step (module-for "months") (Random. 1) ctx)) 31))
+    (is (<= 365 (:advance (interp/step (module-for "years") (Random. 1) ctx)) 366))))
+
+(def not-equal-attribute-module
+  {:id "ne-mod" :name "NotEqual"
+   :states {:initial {:type :initial :direct-transition :check}
+            :check {:type :guard
+                    :allow {:condition-type :attribute :attribute "status" :operator "!=" :value "closed"}
+                    :direct-transition :done}
+            :done {:type :terminal}}})
+
+(deftest attribute-guard-supports-the-not-equal-operator
+  (let [ctx-open (assoc (ctx-for (persona-at 1)) :current :check :attributes {:ne-mod/status "open"})
+        ctx-closed (assoc (ctx-for (persona-at 1)) :current :check :attributes {:ne-mod/status "closed"})]
+    (is (false? (:blocked? (interp/step not-equal-attribute-module (Random. 1) ctx-open))))
+    (is (true? (:blocked? (interp/step not-equal-attribute-module (Random. 1) ctx-closed))))))
+
+(deftest evaluate-condition-throws-on-an-unrecognized-condition-type
+  (is (thrown? clojure.lang.ExceptionInfo
+               (interp/evaluate-condition "any-mod" (ctx-for (persona-at 1))
+                                           {:condition-type :active-allergy}))))
+
+(def infinite-loop-module
+  {:id "loop-mod" :name "Loop"
+   :states {:initial {:type :initial :direct-transition :a}
+            :a {:type :simple :direct-transition :b}
+            :b {:type :simple :direct-transition :a}}})
+
+(deftest walk-module-throws-past-the-max-steps-backstop-on-a-zero-advance-cycle
+  (is (thrown? clojure.lang.ExceptionInfo
+               (interp/walk-module infinite-loop-module (Random. 1) (ctx-for (persona-at 1))))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/gmf_test.clj ==========
+(ns ehr-testing-sim.gmf-test
+  "Red tests for the GMF module loader (M5a Task 1, docs/gmf-interpreter.md
+  section 1, ADR-0013 point 6) -- written before ehr-testing-sim.gmf exists
+  (ADR-0004 test-first). Covers: the hand-written fixture module loads and
+  validates against the v1 subset; a module using a deferred state type is
+  REJECTED with :unsupported-state-type (result-not-throw, never a throw);
+  a module whose own SetAttribute writes a bare engine-reserved attribute
+  name is REJECTED with :attribute-collision; the loaded set is listable
+  (no hidden modules, docs/gmf-interpreter.md section 5)."
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
+            [ehr-testing-sim.gmf :as gmf]
+            [ehr-testing-sim.result :as result]))
+
+(def fixture-clinic-json
+  (slurp (io/resource "ehr_testing_sim/fixtures/fixture-clinic.json")))
+
+(deftest fixture-clinic-loads-and-validates
+  (let [loaded (gmf/load-module "fixture-clinic" fixture-clinic-json)]
+    (is (result/ok? loaded))
+    (testing "every v1 state type appears at least once"
+      (let [types (into #{} (map :type) (vals (:states (:payload loaded))))]
+        (is (= #{:initial :terminal :simple :delay :guard :set-attribute :symptom
+                 :condition-onset :condition-end :encounter :encounter-end
+                 :procedure :observation :medication-order :medication-end}
+               types))))
+    (testing "small enough to hand-verify, per ADR-0013 point 6"
+      (is (<= 15 (count (:states (:payload loaded))) 30)))))
+
+(deftest fixture-clinic-uses-all-four-transition-kinds
+  (let [states (:states (:payload (gmf/load-module "fixture-clinic" fixture-clinic-json)))
+        has-key? (fn [k] (some #(contains? % k) (vals states)))]
+    (is (has-key? :direct-transition))
+    (is (has-key? :distributed-transition))
+    (is (has-key? :conditional-transition))
+    (is (has-key? :complex-transition))))
+
+(deftest fixture-clinic-concept-triplets-are-verbatim-and-real
+  (testing "notes/facts-register.md F10-F12 -- no invented codes"
+    (let [states (:states (:payload (gmf/load-module "fixture-clinic" fixture-clinic-json)))
+          onset (get states :sinusitis-onset)
+          encounter (get states :doctor-visit-encounter)
+          observation (get states :take-temperature)
+          med (get states :prescribe-amoxicillin)
+          procedure (get states :sinus-surgery)]
+      (is (= [{:system :snomed :code "36971009" :display "Sinusitis (disorder)"}] (:codes onset)))
+      (is (= [{:system :snomed :code "185345009" :display "Encounter for symptom"}] (:codes encounter)))
+      (is (= [{:system :loinc :code "8310-5" :display "Body temperature"}] (:codes observation)))
+      (is (= [{:system :rxnorm :code "308191" :display "Amoxicillin 500 MG Oral Capsule"}] (:codes med)))
+      (is (= [{:system :snomed :code "315618009"
+               :display "FESS - Functional endoscopic sinus surgery - sphenoethmoidectomy"}]
+             (:codes procedure))))))
+
+(def deferred-state-type-json
+  "A deliberately malformed module: uses CallSubmodule (docs/gmf-
+  interpreter.md's own deferred-type table) -- must be rejected, never
+  thrown, never silently skipped."
+  (str "{\"name\": \"Bad Module\","
+       " \"states\": {"
+       "   \"Initial\": {\"type\": \"Initial\", \"direct_transition\": \"Recurse\"},"
+       "   \"Recurse\": {\"type\": \"CallSubmodule\", \"submodule\": \"other\", \"direct_transition\": \"Done\"},"
+       "   \"Done\": {\"type\": \"Terminal\"}"
+       " }}"))
+
+(deftest module-with-deferred-state-type-is-rejected
+  (let [loaded (gmf/load-module "bad-module" deferred-state-type-json)]
+    (is (result/rejected? loaded))
+    (is (= :unsupported-state-type (:category loaded)))
+    (is (= :recurse (:state (:payload loaded))))
+    (is (= "CallSubmodule" (:raw-type (:payload loaded))))))
+
+(def reserved-attribute-collision-json
+  "A deliberately malformed module: SetAttribute writes the bare,
+  non-namespaced engine-reserved key `donor` (docs/gmf-interpreter.md
+  section 5; docs/patient-state-model.md's post-mortem entry) -- must be
+  rejected at load time, before any state runs."
+  (str "{\"name\": \"Bad Module 2\","
+       " \"states\": {"
+       "   \"Initial\": {\"type\": \"Initial\", \"direct_transition\": \"Mark_Donor\"},"
+       "   \"Mark_Donor\": {\"type\": \"SetAttribute\", \"attribute\": \"donor\", \"value\": true, \"direct_transition\": \"Done\"},"
+       "   \"Done\": {\"type\": \"Terminal\"}"
+       " }}"))
+
+(deftest module-writing-a-reserved-bare-attribute-is-rejected
+  (let [loaded (gmf/load-module "bad-module-2" reserved-attribute-collision-json)]
+    (is (result/rejected? loaded))
+    (is (= :attribute-collision (:category loaded)))
+    (is (= "donor" (:attribute (:payload loaded))))))
+
+(deftest loaded-modules-is-listable-no-hidden-modules
+  (testing "docs/gmf-interpreter.md section 5's no-hidden-modules corollary"
+    (let [registry (-> (gmf/empty-registry)
+                        (gmf/register "fixture-clinic" (:payload (gmf/load-module "fixture-clinic" fixture-clinic-json)))
+                        :payload)
+          listed (gmf/loaded-modules registry)]
+      (is (= 1 (count listed)))
+      (is (= "fixture-clinic" (:id (first listed))))
+      (is (= "Fixture Clinic" (:name (first listed))))
+      (is (= 25 (:state-count (first listed))))
+      (testing "declared attributes are namespaced by module id"
+        (is (= #{:fixture-clinic/onset-logged :fixture-clinic/intake-branch
+                 :fixture-clinic/medicated :fixture-clinic/nasal-congestion}
+               (:attributes (first listed))))))))
+
+(deftest registering-a-duplicate-module-id-is-rejected
+  (testing "collision across loaded modules -- docs/gmf-interpreter.md
+            section 1's Task 1.2 own phrasing, the registry-level half of
+            the collision check (the other half is the reserved-attribute
+            check above, per section 5)"
+    (let [module (:payload (gmf/load-module "fixture-clinic" fixture-clinic-json))
+          registry (:payload (gmf/register (gmf/empty-registry) "fixture-clinic" module))
+          re-register (gmf/register registry "fixture-clinic" module)]
+      (is (result/rejected? re-register))
+      (is (= :module-id-collision (:category re-register))))))
 
 ========== END FILE ==========
 
