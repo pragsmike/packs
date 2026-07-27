@@ -1,7 +1,7 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-27T00:46:32Z
-HEAD: f3453ebb0d374435cfba76394253e61e82b896a9
+generated (UTC): 2026-07-27T03:01:48Z
+HEAD: 6675fb9b87bcdb41b2147fd5f6cbfa1e0f46ecc7
 git status --porcelain:
 working tree clean
 elides: .agents/skills, .agents/prompts/archive
@@ -327,26 +327,105 @@ migration note. This is also **M5's own prerequisite**:
 assignment layer is infrastructure M5 needs regardless of where it
 landed first.
 
-## M4 — Persona + demographics tables; payer sampling; PID/IN1 enrichment
+## M4 — Persona + demographics tables; payer sampling; PID/IN1 enrichment — **landed**
 
-Lands **Persona** (`:planned`) for real: demographics sampling from
-vendored, hashed tables (`demographics-tables`, target 3), plus the
-`payer-pool` catalytic this session recorded as a comment-only forward
-reference on `:persona` — this is the milestone that turns that
-comment into a real `:catalytic` wire. PID gains demographic fields;
-IN1 lands as a segment for the first time, carrying the sampled payer
-(`docs/operational-models.md`'s payers model). **Upstream-demand
-citation** (`docs/research/SimHospital-Synthea-limitations-considered.md`
-§5.3): SimHospital issue #3 is a user unable to find a way to include
-the IN1 insurance segment — this milestone is the answer. PID's
-demographic enrichment also carries US phone formatting, named
-unavailable and uneditable in SimHospital issue #21 — the same issue
-that requests GT1/ZG1 (below, site-profiles' citation).
+Lands **Persona** (`:planned` → `:built`) for real: demographics
+sampling from vendored, hashed tables (`demographics-tables`, target
+3), plus the `payer-pool` catalytic this session recorded as a
+comment-only forward reference on `:persona` — this is the milestone
+that turns that comment into a real `:catalytic` wire. PID gains
+demographic fields; IN1 lands as a segment for the first time,
+carrying the sampled payer (`docs/operational-models.md`'s payers
+model). **Upstream-demand citation**
+(`docs/research/SimHospital-Synthea-limitations-considered.md` §5.3):
+SimHospital issue #3 is a user unable to find a way to include the IN1
+insurance segment — this milestone is the answer. PID's demographic
+enrichment also carries US phone formatting, named unavailable and
+uneditable in SimHospital issue #21 — the same issue that requests
+GT1/ZG1 (below, site-profiles' citation).
 
-Co-landing invariants: sampled demographics and payer are internally
-consistent with any age-linked rule (e.g. Medicare weighting at 65+
-is only checkable once age is a real field); schema round-trip tests
-for the new `persona` resource type.
+**The wiring fix, first (Task 0).** This session opened by fixing a
+real gap the tools consumer loop surfaced: M3's `:pathways` reached
+`ehr-testing-sim.engine/run` from a direct API caller (engine-test)
+but never from `ehr-testing-sim.run/run-command` — CLI-invisible
+despite 181 green tests and a demo. `ehr-testing-sim.engine/config-keys`
+is now the canonical, documented list of every key `engine/run`
+accepts; `run-command` forwards the full set (a plumbing-completeness
+test asserts this with sentinel values, not just the known gap), and
+`--config FILE.edn` is the passthrough vehicle for the data-heavy keys
+(`:pathway`/`:pathways`/`:order-profiles`/`:churn-profile`) that have
+no flag of their own. `AGENTS.md` gained a standing rule: demos and
+verification commands run through the CLI surface (`clojure -M:cli
+...`), never engine internals — the reason this class of gap is caught
+by review next time, not just by a downstream consumer.
+
+**Implementation shape, honestly recorded.** Persona's equation
+(`sim-config → persona`) is satisfied by an engine-internal
+`:registered` event `ehr-testing-sim.engine/run` prepends to every
+patient's step queue (never authorable IR, the same treatment
+`:result-followup` already gets) — folded into Execute's own
+step-queue mechanism rather than a structurally separate pipeline
+pass, since persona is needed at the same init moment Execute already
+owns. `docs/sim-theory.edn`'s `:persona` stage records this in its own
+`:contract` string rather than pretending the diagram and the code
+agree on shape, the same discipline M2a/M3 already established for
+their own engine-internal landings. `resources/demographics/` (given
+names by sex+decade, surnames, places) are SMALL and HAND-CURATED, not
+extracted from Synthea — no `../` checkout was available this session
+(`resources/demographics/NOTICE` records the decision precisely).
+
+**A real bug, caught by the fixed-consumption property test.** Persona's
+own docstring first claimed 14 fixed RNG draws per persona; the
+property test (`persona-consumes-a-fixed-number-of-rng-draws-regardless-of-content`,
+a call-counting `java.util.Random` proxy, not a synthetic skip
+sequence) caught the true count at 13 before this landed. A second,
+more consequential bug surfaced the same way: `:registered` initially
+carried no `:active-mrn`, which silently broke
+`ehr-testing-sim.engine/replay`'s own bootstrap (it seeds a
+never-yet-seen participant's initial state from the FIRST event naming
+them) for every patient, surfacing as a real `merge-survivor-absorbs-
+merged-mrns` invariant violation in the churned-run property test
+before the fix — not a `:registered`-specific check, the EXISTING M2b
+merge invariant, catching a gap in the NEW code. `:registered` now
+carries `:active-mrn` like every other event type, for exactly this
+reason.
+
+Co-landing invariants: `registered-is-every-patients-first-event` and
+`registered-persona-is-schema-valid` (structural — every persona
+resource this run creates is schema-valid and is genuinely each
+patient's first event, the fold-bootstrap correctness the merge-bug
+above depended on); the age-linked payer property
+(`persona-test/sixty-five-plus-personas-are-mostly-medicare` and its
+under-65 converse) checks Medicare dominance at 65+ statistically,
+since payer sampling is a weighted pool, not a hard per-event rule.
+**PID/IN1 enrichment, landed alongside.** PID gains XPN name (family^given),
+DOB (HL7 date), sex (Table 0001), XAD address, and phone, uniformly across
+every message type (not admission-only); IN1 lands as a segment for the
+first time, carrying the sampled payer's id/name, riding ONLY the admission
+message (the real HL7v2 convention) — SimHospital issue #3's own request
+(`docs/research/SimHospital-Synthea-limitations-considered.md` §5.3),
+answered. GT1 stays site-profiles territory, as scoped.
+
+**The ER7 escaping property, and a verified parser finding
+(`notes/facts-register.md` F9).** `org.clojars.cmiles74/clojure-hl7-parser`
+3.5.1 implements NO escape-sequence handling in either direction —
+confirmed by reading its own shipped source (the read-side decoder exists
+but its call sites are commented-out dead code; the write side never
+encodes at all). `ehr-testing-sim.emit-hl7/escape-er7`/`unescape-er7` are
+this repo's own documented workaround. The property test itself caught a
+second, self-inflicted bug in the workaround's first draft: naive five-pass
+sequential decoding let two adjacent encoded tokens spuriously spell a
+third at their boundary (encoding `"|E|"` produces a string a five-pass
+decode misreads); fixed to a single regex pass.
+
+207 tests / 582 assertions green, coverage 95.91%/98.00% (up from the M3
+baseline 95.35%/97.75%). The pinned fixture regenerated once (Persona's
+`:registered` event, prepended to every patient's step queue, shifts the
+entire downstream RNG stream — ADR-0009's own accept-and-record policy,
+documented in the fixture's own header). `docs/demos/` seeded with two
+CLI-produced traces (order/result post-Task-0, and Persona-enriched);
+`docs/sim-theory.edn`'s diagram companion files updated for the new
+`payer-pool` wire.
 
 ## M5 — GMF interpreter + module vendoring decision + CompileTrajectory
 
@@ -707,6 +786,11 @@ vocabulary.
   test` and `make coverage` must be green/reported before any
   session-final commit. Mechanical enforcement is partially live, not
   merely planned: the pre-push hook already runs `make test`.
+- **Demos and verification commands run through the CLI surface**
+  (`clojure -M:cli ...`), never engine internals — the CLI is the
+  product boundary consumers touch (M3's `:pathways` shipped
+  invisible to any CLI invocation despite 181 green tests and a demo
+  that called `engine/run` directly).
 
 ## Constraints
 
@@ -1032,11 +1116,14 @@ plus the full churn family — below), the facility and providers
 models (beds, the allocation ladder, boarding, bed-ready transfers,
 synthetic attendings — docs/operational-models.md), InjectChurn
 (cancel-admit/cancel-transfer/cancel-discharge, transfer-in-error,
-bed-swap, merge — docs/patient-state-model.md), and, as of Milestone
-M3, order/result step types with a real CBC+BMP order-profiles
-catalytic (verified LOINC codes) plus ORM^O01/ORU^R01 emission, a
-per-patient pathway-assignment layer (`:pathways`), and `:step-rejected`
-ground-truth events for decide-time rejections (ADR-0012).
+bed-swap, merge — docs/patient-state-model.md), order/result step
+types with a real CBC+BMP order-profiles catalytic (verified LOINC
+codes) plus ORM^O01/ORU^R01 emission (M3), a per-patient
+pathway-assignment layer (`:pathways`), `:step-rejected` ground-truth
+events for decide-time rejections (ADR-0012), and, as of Milestone M4,
+**Persona** — demographic sampling (name, DOB, sex, address, phone,
+SSN-shaped id) and age-linked payer sampling, folded into every
+patient's `:registered` event, with PID and IN1 segment enrichment.
 
 ## Pipeline: now / next / later
 
@@ -1049,8 +1136,8 @@ ground-truth events for decide-time rejections (ADR-0012).
 
 ```mermaid
 flowchart LR
-    Persona["Persona"]:::next
-    RunModules["RunModules"]:::planned
+    Persona["Persona"]:::built
+    RunModules["RunModules"]:::next
     CompileTrajectory["CompileTrajectory"]:::planned
     InjectChurn["InjectChurn"]:::built
     Execute["Execute"]:::built
@@ -1073,14 +1160,16 @@ flowchart LR
     classDef planned fill:#37474f,stroke:#78909c,color:#cfd8dc,stroke-width:1px,stroke-dasharray: 3 3;
 ```
 
-**Now** (green): Execute, Check, EmitHL7, InjectChurn (M2b), and, as of
-Milestone M3, Execute's own order/result step types and EmitHL7's
-ORM/ORU cycle — property-tested and green (181 tests / 503 assertions).
-**Next** (amber): **Persona**, Milestone M4 — demographics sampling
-from vendored, hashed tables, plus the `payer-pool` catalytic this
-theory currently only records as a comment at Persona, turning into a
-real wire once this stage lands. **Later** (dashed grey): everything
-else in the *want*.
+**Now** (green): Execute, Check, EmitHL7, InjectChurn (M2b), Execute's
+own order/result step types and EmitHL7's ORM/ORU cycle (M3), and, as
+of Milestone M4, **Persona** — demographics sampling from vendored,
+hashed tables plus a real `payer-pool` catalytic wire, folded into
+Execute's own step queue via the `:registered` event, plus PID/IN1
+enrichment — property-tested and green (207 tests / 582 assertions).
+**Next** (amber): **RunModules**, Milestone M5 — the GMF interpreter
+port, the `gmf-module-set` vendoring-vs-lockfile decision, and
+`CompileTrajectory`. **Later** (dashed grey): everything else in the
+*want*.
 
 [`docs/sim-theory-diagram.md`](docs/sim-theory-diagram.md) is the full
 detail view (every resource wire, catalytic input, and the
@@ -1378,11 +1467,789 @@ immediately after.
 
 ---
 
+## Results pending at discharge *(stub — mechanism landed, M3)*
+
+**The reality.** A lab result does not always come back before a
+patient goes home. Turnaround time is asynchronous to the rest of a
+patient's own course of care: a clinician can discharge a patient with
+labs still pending, on the reasonable expectation that the result will
+route to the ordering provider (or a follow-up encounter) once it
+finalizes. This is routine, not exceptional — the alternative (holding
+every patient hostage to their slowest pending lab) is not how
+hospitals actually operate.
+
+**The wire truth.** An ORU^R01 timestamped after the ADT^A03 that
+closed the encounter it belongs to is completely legitimate traffic —
+the result still carries the original order's context (patient,
+ordering provider, specimen) via ORC/OBR, it simply arrives on its own
+schedule, decoupled from the encounter's own ADT lifecycle.
+
+**Our model.** `:order`'s `decide` samples its paired `:result-
+available` event's full turnaround atomically at order-time but rides
+`:schedule-followup` (`ehr-testing-sim.engine`) to enter the log at its
+own correct future position — nothing in that mechanism blocks the
+patient's other steps, including `:discharge`, on the pending result.
+This surfaced as a real finding during M3's own integration testing,
+not a design decided up front: the first draft of the `check.clj`
+event-validity invariant for order/result events generalized
+"admitted-only" to *both* `:order-placed` and `:result-available`,
+which is wrong — a result arriving after a legitimate discharge would
+then read as a bug. The correction (`docs/patient-state-model.md`'s
+event-validity table, the `:result-available` row) scopes the
+admitted-only constraint to `:order-placed` alone; a result's own
+constraint is purely referential (it must name a real, preceding
+`:order-placed` event for the same patient), never status-based. This
+is the same invariant-scoping lesson `check.clj`'s
+`order-only-when-admitted` docstring and
+`result-references-existing-order-and-follows-it-in-time` now encode
+in code, cited here as the clinical-realities catalog entry that
+motivated it.
+
+**Why testers care.** Post-discharge results are a classic downstream
+breaker: an interface that assumes "this MRN's encounter is closed,
+therefore no more messages for it" will silently drop, misroute, or
+error on a perfectly legitimate late-arriving ORU — exactly the kind
+of naive-consumer failure this simulator exists to surface on purpose,
+generated here as ordinary traffic (no special flag needed), not as a
+contrived edge case.
+
+---
+
 *Adding an entry: follow the four-part shape; link the milestone that
 lands it or mark it (stub); if it motivates a mechanism (as
 post-mortem motivates conditional validity rows), name the mechanism
 explicitly so the design credit is traceable.*
 
+========== END FILE ==========
+
+========== FILE: ./docs/demos/README.md ==========
+# Demos
+
+Small, CLI-produced traces (`clojure -M:cli run ...` — never engine
+internals, per `AGENTS.md`'s M4 standing rule) captured as fixtures: the
+exact command, the resulting ground-truth log, and the rendered HL7v2
+messages, side by side. Each demo is ≤10 patients, small enough to read
+in full.
+
+**These double as future log-player fixtures.** A later milestone's
+log player (`.agents/plans/roadmap.md`'s consumer plan) will want small,
+known-good, CLI-produced traces to replay — these are seeded now so
+that future work has real examples to start from rather than
+generating throwaway ones.
+
+## Contents
+
+- [`order-result/`](order-result/) — the M3 order/result cycle
+  (ORM^O01 + ORU^R01), re-run through the CLI after Milestone M4
+  Task 0's wiring fix (`:pathways` now reaches the engine from
+  `run-command`, not just from a direct API caller — the gap the tools
+  consumer loop surfaced). Uses `--config` to supply the pathway
+  (`ehr-testing-sim.run/run-command`'s data-heavy-key passthrough
+  vehicle, since `:pathways` has no CLI flag of its own).
+- [`persona-enriched/`](persona-enriched/) — Milestone M4's Persona
+  landing: demographic PID enrichment (name, DOB, sex, address, phone)
+  and a payer-carrying IN1 segment, on a plain default run (no
+  `--config` needed — Persona samples for every patient unconditionally).
+  Seed 41 was chosen because it happens to produce an `O'Brien` patient,
+  so the excerpt also documents that ordinary apostrophes need no ER7
+  escaping at all (Task 4's own finding is about literal delimiter
+  characters, not everyday punctuation).
+
+Each subdirectory holds:
+
+- `README.md` — the exact command, what to look for, and an excerpt
+- `config.edn` — present only for `order-result/` (the `--config` file)
+- `ground-truth.edn` — the full ground-truth log, pretty-printed
+- `messages.txt` — the full rendered HL7v2 message set, blank-line
+  separated (each message's own segments are `\r`-delimited internally,
+  per the real ER7 wire format — a text viewer that shows them running
+  together per message is rendering that CR correctly, not truncating)
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/order-result/README.md ==========
+# Demo: order/result (ORM^O01 / ORU^R01), through the CLI post-Task-0
+
+Re-run of the M3 order/result cycle, but THROUGH the CLI this time —
+the M4 Task 0 wiring fix's own proof: `:pathways` (an authored pathway
+containing an `:order` step) now reaches the engine from
+`ehr-testing-sim.run/run-command`, not just from a direct
+`engine/run` API call the way `engine-test` already exercised it.
+Before Task 0, this exact config would have silently run the DEFAULT
+pathway instead — no error, just the wrong traffic, invisible to
+anyone watching only the CLI.
+
+## Command
+
+```bash
+clojure -M:cli run --seed 42 --patients 3 \
+  --config docs/demos/order-result/config.edn --emit hl7
+```
+
+[`config.edn`](config.edn) supplies `:pathways` — the data-heavy key
+with no flag of its own, per `run-command`'s own `--config`
+passthrough (Milestone M4 Task 0).
+
+## What to look for
+
+- [`ground-truth.edn`](ground-truth.edn): every patient's log opens
+  with `:registered` (Persona, M4), then `:admission`, `:order-placed`,
+  `:result-available`, `:discharge` — the authored pathway exactly, for
+  all 3 patients.
+- [`messages.txt`](messages.txt): 12 messages (4 per patient — ADT^A01,
+  ORM^O01, ORU^R01, ADT^A03). `:registered` renders no message of its
+  own (ADR-0012's own precedent: truth about the run, not wire traffic
+  a real ADT/ORM/ORU feed would carry).
+
+## Excerpt: ORM^O01 then ORU^R01 for patient 1 (MRN000001), verbatim from `messages.txt`
+
+```
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ORM^O01|MRN000001-O01-0|P|2.3
+PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157
+PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^Amara
+ORC|NW|MRN000001-O01-0
+OBR|1|||58410-2^CBC panel - Blood by Automated count^LN
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101012100+0000||ORU^R01|MRN000001-R01-4860|P|2.3
+PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157
+PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^Amara
+ORC|NW|MRN000001-R01-4860
+OBR|1|||58410-2^CBC panel - Blood by Automated count^LN
+OBX|1|NM|6690-2^Leukocytes [#/volume] in Blood by Automated count^LN||21.0|K/uL|4.5-11.0|H
+OBX|2|NM|789-8^Erythrocytes [#/volume] in Blood by Automated count^LN||4.7|M/uL|4.2-5.9|N
+OBX|3|NM|718-7^Hemoglobin [Mass/volume] in Blood^LN||19.6|g/dL|12.0-17.5|H
+OBX|4|NM|4544-3^Hematocrit [Volume Fraction] of Blood by Automated count^LN||41.2|%|36.0-50.0|N
+OBX|5|NM|777-3^Platelets [#/volume] in Blood by Automated count^LN||280.0|K/uL|150-450|N
+```
+
+(Segments are shown one per line here for readability; the real wire
+format in `messages.txt` uses `\r`, HL7v2's actual segment delimiter.)
+PID is enriched with the same patient's Persona-sampled demographics as
+every other message type — order/result messages are not a special
+case (`ehr-testing-sim.emit-hl7/pid-segment` applies uniformly). Note
+OBX-8 `H` (abnormal-high) on the leukocyte and hemoglobin results —
+computed truth from `ehr-testing-sim.order-profiles/abnormal-flag`,
+never a re-derivation at emit time.
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/order-result/config.edn ==========
+;; docs/demos/order-result/config.edn -- the --config passthrough vehicle
+;; (Milestone M4 Task 0) for a data-heavy key (:pathways) that has no CLI
+;; flag of its own. Run with:
+;;
+;;   clojure -M:cli run --seed 42 --patients 3 \
+;;     --config docs/demos/order-result/config.edn --emit hl7
+;;
+;; This demo proves Task 0's own wiring fix end to end THROUGH the CLI --
+;; the same :pathways value engine-test already exercised via the direct
+;; engine/run API now reaches the engine from a real CLI invocation too.
+{:pathways [{:pathway {:name "cbc-order"
+                       :steps [{:type :admission :location "Renal"}
+                               {:type :order :profile :cbc}
+                               {:type :discharge}]}
+             :weight 1}]}
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/order-result/ground-truth.edn ==========
+[{:event :registered,
+  :t 0,
+  :active-mrn "MRN000001",
+  :persona
+  {:name {:family "Gonzalez", :given "Barbara"},
+   :sex :female,
+   :dob "1935-02-21",
+   :age 89,
+   :address
+   {:street "22 Chestnut Ct",
+    :city "Providence",
+    :state "RI",
+    :zip "02903"},
+   :phone "607-335-0157",
+   :ssn "900-89-4064",
+   :payer {:id "medicare-65", :name "Medicare", :type :medicare}},
+  :participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :active-mrn "MRN000001",
+  :attending "0384055899",
+  :warm-up false,
+  :reason nil,
+  :event :admission,
+  :t 0,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :forced false}
+ {:participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :active-mrn "MRN000001",
+  :attending "0384055899",
+  :warm-up false,
+  :event :order-placed,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 0,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :profile :cbc}
+ {:event :discharge,
+  :t 0,
+  :active-mrn "MRN000001",
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :attending "0384055899",
+  :participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :warm-up false}
+ {:event :registered,
+  :t 3480,
+  :active-mrn "MRN000002",
+  :persona
+  {:name {:family "Smith", :given "Olivia"},
+   :sex :female,
+   :dob "2021-10-17",
+   :age 3,
+   :address
+   {:street "17 Elm Ct", :city "Columbus", :state "OH", :zip "43215"},
+   :phone "944-598-4479",
+   :ssn "900-46-3298",
+   :payer
+   {:id "commercial-ppo", :name "Commercial PPO", :type :commercial}},
+  :participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :active-mrn "MRN000002",
+  :attending "3903633105",
+  :warm-up false,
+  :reason nil,
+  :event :admission,
+  :t 3480,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :forced false}
+ {:participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :active-mrn "MRN000002",
+  :attending "3903633105",
+  :warm-up false,
+  :event :order-placed,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 3480,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :profile :cbc}
+ {:event :discharge,
+  :t 3480,
+  :active-mrn "MRN000002",
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :attending "3903633105",
+  :participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :warm-up false}
+ {:event :registered,
+  :t 4680,
+  :active-mrn "MRN000003",
+  :persona
+  {:name {:family "Williams", :given "Dorothy"},
+   :sex :female,
+   :dob "1945-07-13",
+   :age 79,
+   :address
+   {:street "9 Willow Ct",
+    :city "Richmond",
+    :state "VA",
+    :zip "23219"},
+   :phone "633-802-2352",
+   :ssn "900-99-1868",
+   :payer {:id "self-pay", :name "Self-Pay", :type :self-pay}},
+  :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :active-mrn "MRN000003",
+  :attending "3903633105",
+  :warm-up false,
+  :reason nil,
+  :event :admission,
+  :t 4680,
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :forced false}
+ {:participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :active-mrn "MRN000003",
+  :attending "3903633105",
+  :warm-up false,
+  :event :order-placed,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 4680,
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :profile :cbc}
+ {:event :discharge,
+  :t 4680,
+  :active-mrn "MRN000003",
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :attending "3903633105",
+  :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :warm-up false}
+ {:participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :active-mrn "MRN000001",
+  :attending "0384055899",
+  :warm-up false,
+  :order-event-id 2,
+  :event :result-available,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 4860,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :profile :cbc,
+  :results
+  [{:concept
+    {:system :loinc,
+     :code "6690-2",
+     :display "Leukocytes [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 21.0,
+    :reference-range {:low 4.5, :high 11.0},
+    :abnormal-flag :high}
+   {:concept
+    {:system :loinc,
+     :code "789-8",
+     :display "Erythrocytes [#/volume] in Blood by Automated count"},
+    :units "M/uL",
+    :value 4.7,
+    :reference-range {:low 4.2, :high 5.9},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "718-7",
+     :display "Hemoglobin [Mass/volume] in Blood"},
+    :units "g/dL",
+    :value 19.6,
+    :reference-range {:low 12.0, :high 17.5},
+    :abnormal-flag :high}
+   {:concept
+    {:system :loinc,
+     :code "4544-3",
+     :display
+     "Hematocrit [Volume Fraction] of Blood by Automated count"},
+    :units "%",
+    :value 41.2,
+    :reference-range {:low 36.0, :high 50.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "777-3",
+     :display "Platelets [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 280.0,
+    :reference-range {:low 150, :high 450},
+    :abnormal-flag :normal}]}
+ {:participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :active-mrn "MRN000002",
+  :attending "3903633105",
+  :warm-up false,
+  :order-event-id 6,
+  :event :result-available,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 7020,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :profile :cbc,
+  :results
+  [{:concept
+    {:system :loinc,
+     :code "6690-2",
+     :display "Leukocytes [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 8.1,
+    :reference-range {:low 4.5, :high 11.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "789-8",
+     :display "Erythrocytes [#/volume] in Blood by Automated count"},
+    :units "M/uL",
+    :value 5.49,
+    :reference-range {:low 4.2, :high 5.9},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "718-7",
+     :display "Hemoglobin [Mass/volume] in Blood"},
+    :units "g/dL",
+    :value 12.4,
+    :reference-range {:low 12.0, :high 17.5},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "4544-3",
+     :display
+     "Hematocrit [Volume Fraction] of Blood by Automated count"},
+    :units "%",
+    :value 40.1,
+    :reference-range {:low 36.0, :high 50.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "777-3",
+     :display "Platelets [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 226.0,
+    :reference-range {:low 150, :high 450},
+    :abnormal-flag :normal}]}
+ {:participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}],
+  :active-mrn "MRN000003",
+  :attending "3903633105",
+  :warm-up false,
+  :order-event-id 10,
+  :event :result-available,
+  :concept
+  {:system :loinc,
+   :code "58410-2",
+   :display "CBC panel - Blood by Automated count"},
+  :t 9600,
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :profile :cbc,
+  :results
+  [{:concept
+    {:system :loinc,
+     :code "6690-2",
+     :display "Leukocytes [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 7.7,
+    :reference-range {:low 4.5, :high 11.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "789-8",
+     :display "Erythrocytes [#/volume] in Blood by Automated count"},
+    :units "M/uL",
+    :value 4.26,
+    :reference-range {:low 4.2, :high 5.9},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "718-7",
+     :display "Hemoglobin [Mass/volume] in Blood"},
+    :units "g/dL",
+    :value 15.6,
+    :reference-range {:low 12.0, :high 17.5},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "4544-3",
+     :display
+     "Hematocrit [Volume Fraction] of Blood by Automated count"},
+    :units "%",
+    :value 49.2,
+    :reference-range {:low 36.0, :high 50.0},
+    :abnormal-flag :normal}
+   {:concept
+    {:system :loinc,
+     :code "777-3",
+     :display "Platelets [#/volume] in Blood by Automated count"},
+    :units "K/uL",
+    :value 344.0,
+    :reference-range {:low 150, :high 450},
+    :abnormal-flag :normal}]}]
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/order-result/messages.txt ==========
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ADT^A01|MRN000001-A01-0|P|2.3EVN|A01|20240101000000+0000PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^AmaraIN1|1||medicare-65|Medicare
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ORM^O01|MRN000001-O01-0|P|2.3PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^AmaraORC|NW|MRN000001-O01-0OBR|1|||58410-2^CBC panel - Blood by Automated count^LN
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ADT^A03|MRN000001-A03-0|P|2.3EVN|A03|20240101000000+0000PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^Amara
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101005800+0000||ADT^A01|MRN000002-A01-3480|P|2.3EVN|A01|20240101005800+0000PID|1||MRN000002||Smith^Olivia||20211017|F|||17 Elm Ct^^Columbus^OH^43215||944-598-4479PV1|1|I|Renal^^RENAL-01^general-hospital||||3903633105^Reyes^PriyaIN1|1||commercial-ppo|Commercial PPO
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101005800+0000||ORM^O01|MRN000002-O01-3480|P|2.3PID|1||MRN000002||Smith^Olivia||20211017|F|||17 Elm Ct^^Columbus^OH^43215||944-598-4479PV1|1|I|Renal^^RENAL-01^general-hospital||||3903633105^Reyes^PriyaORC|NW|MRN000002-O01-3480OBR|1|||58410-2^CBC panel - Blood by Automated count^LN
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101005800+0000||ADT^A03|MRN000002-A03-3480|P|2.3EVN|A03|20240101005800+0000PID|1||MRN000002||Smith^Olivia||20211017|F|||17 Elm Ct^^Columbus^OH^43215||944-598-4479PV1|1|I|Renal^^RENAL-01^general-hospital||||3903633105^Reyes^Priya
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101011800+0000||ADT^A01|MRN000003-A01-4680|P|2.3EVN|A01|20240101011800+0000PID|1||MRN000003||Williams^Dorothy||19450713|F|||9 Willow Ct^^Richmond^VA^23219||633-802-2352PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^PriyaIN1|1||self-pay|Self-Pay
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101011800+0000||ORM^O01|MRN000003-O01-4680|P|2.3PID|1||MRN000003||Williams^Dorothy||19450713|F|||9 Willow Ct^^Richmond^VA^23219||633-802-2352PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^PriyaORC|NW|MRN000003-O01-4680OBR|1|||58410-2^CBC panel - Blood by Automated count^LN
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101011800+0000||ADT^A03|MRN000003-A03-4680|P|2.3EVN|A03|20240101011800+0000PID|1||MRN000003||Williams^Dorothy||19450713|F|||9 Willow Ct^^Richmond^VA^23219||633-802-2352PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101012100+0000||ORU^R01|MRN000001-R01-4860|P|2.3PID|1||MRN000001||Gonzalez^Barbara||19350221|F|||22 Chestnut Ct^^Providence^RI^02903||607-335-0157PV1|1|I|Renal^^RENAL-01^general-hospital||||0384055899^Chen^AmaraORC|NW|MRN000001-R01-4860OBR|1|||58410-2^CBC panel - Blood by Automated count^LNOBX|1|NM|6690-2^Leukocytes [#/volume] in Blood by Automated count^LN||21.0|K/uL|4.5-11.0|HOBX|2|NM|789-8^Erythrocytes [#/volume] in Blood by Automated count^LN||4.7|M/uL|4.2-5.9|NOBX|3|NM|718-7^Hemoglobin [Mass/volume] in Blood^LN||19.6|g/dL|12.0-17.5|HOBX|4|NM|4544-3^Hematocrit [Volume Fraction] of Blood by Automated count^LN||41.2|%|36.0-50.0|NOBX|5|NM|777-3^Platelets [#/volume] in Blood by Automated count^LN||280.0|K/uL|150-450|N
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101015700+0000||ORU^R01|MRN000002-R01-7020|P|2.3PID|1||MRN000002||Smith^Olivia||20211017|F|||17 Elm Ct^^Columbus^OH^43215||944-598-4479PV1|1|I|Renal^^RENAL-01^general-hospital||||3903633105^Reyes^PriyaORC|NW|MRN000002-R01-7020OBR|1|||58410-2^CBC panel - Blood by Automated count^LNOBX|1|NM|6690-2^Leukocytes [#/volume] in Blood by Automated count^LN||8.1|K/uL|4.5-11.0|NOBX|2|NM|789-8^Erythrocytes [#/volume] in Blood by Automated count^LN||5.49|M/uL|4.2-5.9|NOBX|3|NM|718-7^Hemoglobin [Mass/volume] in Blood^LN||12.4|g/dL|12.0-17.5|NOBX|4|NM|4544-3^Hematocrit [Volume Fraction] of Blood by Automated count^LN||40.1|%|36.0-50.0|NOBX|5|NM|777-3^Platelets [#/volume] in Blood by Automated count^LN||226.0|K/uL|150-450|N
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101024000+0000||ORU^R01|MRN000003-R01-9600|P|2.3PID|1||MRN000003||Williams^Dorothy||19450713|F|||9 Willow Ct^^Richmond^VA^23219||633-802-2352PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^PriyaORC|NW|MRN000003-R01-9600OBR|1|||58410-2^CBC panel - Blood by Automated count^LNOBX|1|NM|6690-2^Leukocytes [#/volume] in Blood by Automated count^LN||7.7|K/uL|4.5-11.0|NOBX|2|NM|789-8^Erythrocytes [#/volume] in Blood by Automated count^LN||4.26|M/uL|4.2-5.9|NOBX|3|NM|718-7^Hemoglobin [Mass/volume] in Blood^LN||15.6|g/dL|12.0-17.5|NOBX|4|NM|4544-3^Hematocrit [Volume Fraction] of Blood by Automated count^LN||49.2|%|36.0-50.0|NOBX|5|NM|777-3^Platelets [#/volume] in Blood by Automated count^LN||344.0|K/uL|150-450|N
+========== END FILE ==========
+
+========== FILE: ./docs/demos/persona-enriched/README.md ==========
+# Demo: Persona-enriched PID + IN1 (Milestone M4)
+
+A plain default run — no `--config` needed, since every patient is
+now unconditionally prepended with a `:registered` step
+(`ehr-testing-sim.engine/run`'s own docstring) that samples a persona
+(name, DOB, sex, address, phone, SSN-shaped id, payer). Seed 41 was
+picked because it happens to produce a patient named `O'Brien`, giving
+this demo a real, naturally-occurring apostrophe to show alongside
+Task 4's escaping property (which is about literal ER7 delimiter
+characters — `|^~\&` — not ordinary punctuation; an apostrophe needs
+no escaping at all, and this excerpt shows exactly that: it round-trips
+untouched).
+
+## Command
+
+```bash
+clojure -M:cli run --seed 41 --patients 5 --emit hl7
+```
+
+## What to look for
+
+- [`ground-truth.edn`](ground-truth.edn): every patient's log opens
+  with `:registered`, carrying the full `ehr-testing-sim.persona/Persona`
+  map — patient 4 (`PID-000003-...`) is `O'Brien, Jessica`.
+- [`messages.txt`](messages.txt): PID is enriched on every message type
+  (both ADT^A01 and ADT^A03 below), not admission-only; IN1 rides ONLY
+  the admission message, the real HL7v2 convention.
+
+## Excerpt: patient 4 (MRN000004), admission — PID + IN1, verbatim from `messages.txt`
+
+```
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101015700+0000||ADT^A01|MRN000004-A01-7020|P|2.3
+EVN|A01|20240101015700+0000
+PID|1||MRN000004||O'Brien^Jessica||19811009|F|||56 Harborview Rd^^Boston^MA^02108||832-794-8280
+PV1|1|I|Renal^^RENAL-01^general-hospital||||7769592800^Chen^Amara
+IN1|1||medicaid|Medicaid
+```
+
+(Segments shown one per line for readability; the real wire format in
+`messages.txt` uses `\r`, HL7v2's actual segment delimiter.)
+
+**PID-5** (`O'Brien^Jessica`) — the apostrophe passes through byte-
+faithfully; `ehr-testing-sim.emit-hl7/escape-er7` is the identity
+function on any string containing none of ER7's five reserved
+characters (`|^~\&`), which an apostrophe isn't one of
+(`escape-er7-is-identity-for-strings-with-no-delimiter-characters`,
+`test/ehr_testing_sim/emit_hl7_test.clj`). **PID-7** (`19811009`) is
+the sampled DOB, HL7 date format. **PID-8** (`F`) is sex, Table 0001.
+**PID-11** (`56 Harborview Rd^^Boston^MA^02108`) is the XAD address.
+**PID-13** (`832-794-8280`) is the sampled phone. **IN1-3/IN1-4**
+(`medicaid` / `Medicaid`) are the sampled payer pool entry's id/name —
+SimHospital issue #3's own request
+(`docs/research/SimHospital-Synthea-limitations-considered.md` §5.3),
+answered.
+
+Patient 4's own discharge (`ADT^A03`, later in `messages.txt`) carries
+the identical enriched PID and no IN1 — proof PID enrichment is
+uniform across message types while IN1 stays admission-only.
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/persona-enriched/ground-truth.edn ==========
+[{:event :registered,
+  :t 0,
+  :active-mrn "MRN000001",
+  :persona
+  {:name {:family "Thomas", :given "Sophia"},
+   :sex :female,
+   :dob "2018-07-03",
+   :age 6,
+   :address
+   {:street "150 Overlook Dr",
+    :city "Boise",
+    :state "ID",
+    :zip "83702"},
+   :phone "741-902-2110",
+   :ssn "900-73-5546",
+   :payer
+   {:id "commercial-ppo", :name "Commercial PPO", :type :commercial}},
+  :participants [{:patient-id "PID-000000-a792922a", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000000-a792922a", :role :subject}],
+  :active-mrn "MRN000001",
+  :attending "7769592800",
+  :warm-up false,
+  :reason "Kidney problems",
+  :event :admission,
+  :t 0,
+  :location {:ward "Renal", :bed "RENAL-02", :placement :licensed},
+  :forced false}
+ {:event :registered,
+  :t 2340,
+  :active-mrn "MRN000002",
+  :persona
+  {:name {:family "Lee", :given "Michael"},
+   :sex :male,
+   :dob "2003-12-02",
+   :age 21,
+   :address
+   {:street "441 Hilltop Ave",
+    :city "Phoenix",
+    :state "AZ",
+    :zip "85004"},
+   :phone "371-558-9934",
+   :ssn "900-07-0533",
+   :payer {:id "medicaid", :name "Medicaid", :type :medicaid}},
+  :participants [{:patient-id "PID-000001-607e2c86", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000001-607e2c86", :role :subject}],
+  :active-mrn "MRN000002",
+  :attending "9818880558",
+  :warm-up false,
+  :reason "Kidney problems",
+  :event :admission,
+  :t 2340,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :forced false}
+ {:event :registered,
+  :t 4440,
+  :active-mrn "MRN000003",
+  :persona
+  {:name {:family "Nguyen", :given "David"},
+   :sex :male,
+   :dob "1970-10-21",
+   :age 54,
+   :address
+   {:street "702 Crestwood Ave",
+    :city "Tucson",
+    :state "AZ",
+    :zip "85701"},
+   :phone "546-698-1880",
+   :ssn "900-90-9905",
+   :payer
+   {:id "commercial-hmo", :name "Commercial HMO", :type :commercial}},
+  :participants [{:patient-id "PID-000002-c315d7be", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000002-c315d7be", :role :subject}],
+  :active-mrn "MRN000003",
+  :attending "9818880558",
+  :warm-up false,
+  :reason "Kidney problems",
+  :event :admission,
+  :t 4440,
+  :location {:ward "Renal", :bed "RENAL-03", :placement :licensed},
+  :forced false}
+ {:event :discharge,
+  :t 6660,
+  :active-mrn "MRN000002",
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :attending "9818880558",
+  :participants [{:patient-id "PID-000001-607e2c86", :role :subject}],
+  :warm-up false}
+ {:event :registered,
+  :t 7020,
+  :active-mrn "MRN000004",
+  :persona
+  {:name {:family "O'Brien", :given "Jessica"},
+   :sex :female,
+   :dob "1981-10-09",
+   :age 43,
+   :address
+   {:street "56 Harborview Rd",
+    :city "Boston",
+    :state "MA",
+    :zip "02108"},
+   :phone "832-794-8280",
+   :ssn "900-24-7619",
+   :payer {:id "medicaid", :name "Medicaid", :type :medicaid}},
+  :participants [{:patient-id "PID-000003-60b365e3", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000003-60b365e3", :role :subject}],
+  :active-mrn "MRN000004",
+  :attending "7769592800",
+  :warm-up false,
+  :reason "Kidney problems",
+  :event :admission,
+  :t 7020,
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :forced false}
+ {:event :discharge,
+  :t 8820,
+  :active-mrn "MRN000001",
+  :location {:ward "Renal", :bed "RENAL-02", :placement :licensed},
+  :attending "7769592800",
+  :participants [{:patient-id "PID-000000-a792922a", :role :subject}],
+  :warm-up false}
+ {:event :registered,
+  :t 9120,
+  :active-mrn "MRN000005",
+  :persona
+  {:name {:family "Taylor", :given "Lisa"},
+   :sex :female,
+   :dob "1962-08-14",
+   :age 62,
+   :address
+   {:street "78 Magnolia St",
+    :city "Atlanta",
+    :state "GA",
+    :zip "30303"},
+   :phone "987-630-6408",
+   :ssn "900-24-6105",
+   :payer
+   {:id "commercial-ppo", :name "Commercial PPO", :type :commercial}},
+  :participants [{:patient-id "PID-000004-a1f34eed", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000004-a1f34eed", :role :subject}],
+  :active-mrn "MRN000005",
+  :attending "9818880558",
+  :warm-up false,
+  :reason "Kidney problems",
+  :event :admission,
+  :t 9120,
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :forced false}
+ {:event :discharge,
+  :t 11460,
+  :active-mrn "MRN000004",
+  :location {:ward "Renal", :bed "RENAL-01", :placement :licensed},
+  :attending "7769592800",
+  :participants [{:patient-id "PID-000003-60b365e3", :role :subject}],
+  :warm-up false}
+ {:event :discharge,
+  :t 17220,
+  :active-mrn "MRN000003",
+  :location {:ward "Renal", :bed "RENAL-03", :placement :licensed},
+  :attending "9818880558",
+  :participants [{:patient-id "PID-000002-c315d7be", :role :subject}],
+  :warm-up false}
+ {:event :discharge,
+  :t 20700,
+  :active-mrn "MRN000005",
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :attending "9818880558",
+  :participants [{:patient-id "PID-000004-a1f34eed", :role :subject}],
+  :warm-up false}]
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/persona-enriched/messages.txt ==========
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ADT^A01|MRN000001-A01-0|P|2.3EVN|A01|20240101000000+0000PID|1||MRN000001||Thomas^Sophia||20180703|F|||150 Overlook Dr^^Boise^ID^83702||741-902-2110PV1|1|I|Renal^^RENAL-02^general-hospital||||7769592800^Chen^AmaraIN1|1||commercial-ppo|Commercial PPO
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101003900+0000||ADT^A01|MRN000002-A01-2340|P|2.3EVN|A01|20240101003900+0000PID|1||MRN000002||Lee^Michael||20031202|M|||441 Hilltop Ave^^Phoenix^AZ^85004||371-558-9934PV1|1|I|Renal^^RENAL-01^general-hospital||||9818880558^Reyes^PriyaIN1|1||medicaid|Medicaid
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101011400+0000||ADT^A01|MRN000003-A01-4440|P|2.3EVN|A01|20240101011400+0000PID|1||MRN000003||Nguyen^David||19701021|M|||702 Crestwood Ave^^Tucson^AZ^85701||546-698-1880PV1|1|I|Renal^^RENAL-03^general-hospital||||9818880558^Reyes^PriyaIN1|1||commercial-hmo|Commercial HMO
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101015100+0000||ADT^A03|MRN000002-A03-6660|P|2.3EVN|A03|20240101015100+0000PID|1||MRN000002||Lee^Michael||20031202|M|||441 Hilltop Ave^^Phoenix^AZ^85004||371-558-9934PV1|1|I|Renal^^RENAL-01^general-hospital||||9818880558^Reyes^Priya
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101015700+0000||ADT^A01|MRN000004-A01-7020|P|2.3EVN|A01|20240101015700+0000PID|1||MRN000004||O'Brien^Jessica||19811009|F|||56 Harborview Rd^^Boston^MA^02108||832-794-8280PV1|1|I|Renal^^RENAL-01^general-hospital||||7769592800^Chen^AmaraIN1|1||medicaid|Medicaid
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101022700+0000||ADT^A03|MRN000001-A03-8820|P|2.3EVN|A03|20240101022700+0000PID|1||MRN000001||Thomas^Sophia||20180703|F|||150 Overlook Dr^^Boise^ID^83702||741-902-2110PV1|1|I|Renal^^RENAL-02^general-hospital||||7769592800^Chen^Amara
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101023200+0000||ADT^A01|MRN000005-A01-9120|P|2.3EVN|A01|20240101023200+0000PID|1||MRN000005||Taylor^Lisa||19620814|F|||78 Magnolia St^^Atlanta^GA^30303||987-630-6408PV1|1|I|Renal^^RENAL-04^general-hospital||||9818880558^Reyes^PriyaIN1|1||commercial-ppo|Commercial PPO
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101031100+0000||ADT^A03|MRN000004-A03-11460|P|2.3EVN|A03|20240101031100+0000PID|1||MRN000004||O'Brien^Jessica||19811009|F|||56 Harborview Rd^^Boston^MA^02108||832-794-8280PV1|1|I|Renal^^RENAL-01^general-hospital||||7769592800^Chen^Amara
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101044700+0000||ADT^A03|MRN000003-A03-17220|P|2.3EVN|A03|20240101044700+0000PID|1||MRN000003||Nguyen^David||19701021|M|||702 Crestwood Ave^^Tucson^AZ^85701||546-698-1880PV1|1|I|Renal^^RENAL-03^general-hospital||||9818880558^Reyes^Priya
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101054500+0000||ADT^A03|MRN000005-A03-20700|P|2.3EVN|A03|20240101054500+0000PID|1||MRN000005||Taylor^Lisa||19620814|F|||78 Magnolia St^^Atlanta^GA^30303||987-630-6408PV1|1|I|Renal^^RENAL-04^general-hospital||||9818880558^Reyes^Priya
 ========== END FILE ==========
 
 ========== FILE: ./docs/event-sourcing.md ==========
@@ -1942,12 +2809,15 @@ tier-1 implementation source per
 does not claim to reproduce Synthea's exact tables, only the shape of
 the age-correlation.
 
-**Whose job this is.** Once `Persona` ([`sim-theory.edn`](sim-theory.edn))
-lands, payer sampling is Persona's — it belongs with the rest of
-per-patient attribute sampling (demographics, etc.), not with
-facility allocation. Until Persona exists, this model runs at engine
-patient-init time, as a stand-in that Persona subsumes rather than
-replaces.
+**Whose job this is. Landed, Milestone M4.** `Persona`
+([`sim-theory.edn`](sim-theory.edn)) now samples payer alongside every
+other per-patient attribute (demographics, etc.) — `ehr-testing-sim.persona/persona`,
+folded into patient state by the engine-internal `:registered` event.
+There was never an actual engine-patient-init stand-in coded (the
+`:payer` field this section originally described stayed nil
+throughout M1-M3); Persona landing simply makes the sampling this
+section always specified real, in the place it was always meant to
+live.
 
 **Carried, rendered, never tracked.** The sampled payer rides on
 patient state like any other attribute and renders in the IN1 segment
@@ -2118,7 +2988,7 @@ than each growing their own shadow state.
 | `:home-ward` | `:string`, ward id, nil until admission | The ward the pathway named — clinical intent (`docs/operational-models.md`'s own term for the rung-1/2 target). Diverges from `:location`'s ward exactly on rungs 3 (outlier) and 4 (boarding) of the allocation ladder. |
 | `:location` | `[:map [:ward :string] [:bed :string] [:placement [:enum :licensed :surge]]]`, nil until admission | The patient's actual **physical** location, always concrete — never nil-bed, even while boarding (see worked example below). `:placement` is exactly the two values `docs/operational-models.md` specifies; ladder rungs 3 and 4 are distinguished from 1 and 2 not by a third placement value but by `:location`'s ward differing from `:home-ward` (see the table below). |
 | `:attending` | `:string`, provider id, nil until admission | References `docs/operational-models.md`'s provider pool by id; rendered PV1-7 as `id^family^given` at emit time, not stored denormalized. |
-| `:payer` | `:string`, payer id, nil until sampled | References the payer pool by id (Persona's job once it lands; engine patient-init until then, per `docs/operational-models.md`). Never re-sampled — the attribute-pool contract. |
+| `:persona` | `ehr-testing-sim.persona/Persona`, nil until the `:registered` event folds | **Landed, M4.** Name, DOB, sex, address, phone, an SSN-shaped id, and payer — ALL of it, sampled together by `ehr-testing-sim.persona/persona` and folded in by the engine-internal `:registered` event every patient's step queue is now prepended with (never authorable IR, the same treatment `:result-followup` already gets). This RETIRES the standalone `:payer` field this table used to carry: there was no code actually populating it (always nil, an aspiration this document itself named as an engine-patient-init stand-in), so retiring it is a schema simplification, not a behavior removal — payer now lives at `(:payer (:persona patient))`. Never re-sampled after — the attribute-pool contract (ADR-0007) extended to every persona field, not just payer. |
 | `:admitted-at` | `:int`, simulated **seconds** (was minutes pre-M2a — ADR-0011), nil until admission | The moment this patient was admitted. Landed with Milestone M1 for exactly one purpose: breaking ties among multiple patients boarding for the same ward — the bed-ready transfer relieves the longest-waiting one first (earliest `:admitted-at`, `:patient-id` as a further tiebreak — `:patient-id`'s zero-padded ordinal prefix keeps this tiebreak's lexical-order property `:mrn` used to give it for free). Not a SimHospital-style shadow field — set once, never rewritten. |
 | `:attributes` | `[:map-of :keyword :any]`, default `{}` | **Reserved, unused until M5.** The open blackboard Synthea's modules coordinate through (mined above) — named now so nothing else claims the key before the GMF interpreter lands. |
 
@@ -2900,12 +3770,24 @@ provenance that these milestones answer real requests.
      (itself hand-derived from docs/sim-theory.edn -- see that file's own
      header for why no Clojure translator does this mechanically here, unlike
      ehr-testing-tools' `make pipeline`). Do not hand-edit the mermaid block
-     below. Regenerate with:
+     below except as noted here. Regenerate with:
 
        python ../ehr-testing-tools/palgebra/tools/resource_equations_to_mermaid.py \
          docs/sim-theory-equations.txt -o docs/sim-theory-diagram.mermaid
 
-     then paste the output back in below. -->
+     then paste the output back in below.
+
+     MILESTONE M4 NOTE: this session's environment had no Python
+     interpreter available, so the mermaid block's `payer-pool` wire
+     (Persona's equation gained `payer-pool` as a real catalytic input,
+     docs/sim-theory-equations.txt) was applied BY HAND, following the
+     converter's own established conventions exactly (source-type node
+     declaration, `.-> ` dashed catalytic wire syntax, light-rounded
+     source styling) rather than mechanically regenerated. A future
+     session with Python available should re-run the converter and
+     diff against this block to confirm the hand-applied change matches
+     what the tool itself would have produced -- recorded here so this
+     isn't silently assumed identical. -->
 
 # The simulator's resource theory — diagram
 
@@ -2930,6 +3812,7 @@ flowchart LR
     invariant_catalog(["invariant-catalog"])
     message_type_registry(["message-type-registry"])
     order_profiles(["order-profiles"])
+    payer_pool(["payer-pool"])
     provider_pool(["provider-pool"])
     sim_config(["sim-config"])
     snomed_icd10_map(["snomed-icd10-map"])
@@ -2953,6 +3836,7 @@ flowchart LR
     %% Arrow 20: Persona
     sim_config -- sim-config --> Persona
     demographics_tables -. demographics-tables .-> Persona
+    payer_pool -. payer-pool .-> Persona
 
     %% Arrow 23: RunModules
     Persona -- persona --> RunModules
@@ -3031,6 +3915,7 @@ flowchart LR
     style invariant_catalog fill:#f5f5f5,stroke:#999,color:#333
     style message_type_registry fill:#f5f5f5,stroke:#999,color:#333
     style order_profiles fill:#f5f5f5,stroke:#999,color:#333
+    style payer_pool fill:#f5f5f5,stroke:#999,color:#333
     style provider_pool fill:#f5f5f5,stroke:#999,color:#333
     style sim_config fill:#f5f5f5,stroke:#999,color:#333
     style snomed_icd10_map fill:#f5f5f5,stroke:#999,color:#333
@@ -3177,8 +4062,7 @@ flowchart LR
 # documentary only, not a distinct diagram visual (see
 # docs/sim-theory-diagram.md's own note on this gap).
 
-# planned: Persona
-sim-config × demographics-tables → persona  [Persona]  {catalytic: demographics-tables}
+sim-config × demographics-tables × payer-pool → persona  [Persona]  {catalytic: demographics-tables, payer-pool}
 
 # planned: RunModules
 persona × gmf-module-set × gmf-interpreter → clinical-trajectory  [RunModules]  {catalytic: gmf-module-set, gmf-interpreter}
@@ -3229,30 +4113,26 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
 ;; prose, keeping the file loadable by tools' Pipeline Malli as-is.
 {:schema-version 1
  :stages
- [;; NEXT -- Milestone M4 (.agents/plans/roadmap.md): Persona for real --
-  ;; demographics sampling from vendored, hashed tables, plus the
-  ;; payer-pool catalytic this comment names below turning into a real
-  ;; wire once this stage flips to :built. M3's own NEXT (Execute's
-  ;; order/result step family) landed this session -- see :execute's own
-  ;; :contract for the landing record. The author may re-aim NEXT; this
-  ;; is the default per the roadmap.
-  ;;
-  ;; payer-pool (target 3, hashed config, docs/operational-models.md)
-  ;; binds here for payer sampling once Persona lands -- not added to
-  ;; :catalytic below because Persona itself is still :planned and the
-  ;; wire would be premature until the stage is real; until then,
-  ;; payer sampling runs at engine patient-init time, temporarily
-  ;; inside Execute's scope (see provider-pool's real binding there).
+ [;; Milestone M4 (.agents/plans/roadmap.md): Persona landed for real --
+  ;; demographics sampling from vendored, hashed tables, plus payer-pool
+  ;; (the catalytic this comment used to name as a forward reference) now
+  ;; a real wire. M3's own NEXT (Execute's order/result step family)
+  ;; landed the session before -- see :execute's own :contract for that
+  ;; record.
   {:id :persona
    :label "Persona"
    :kind :transform
-   :status :planned
+   :status :built
    :inputs ["sim-config"]
    :outputs ["persona"]
-   :catalytic ["demographics-tables"]
-   :laws ["samples only from the run's single seeded RNG, in fixed order (global determinism law, docs/sim-theory.md)"
-          "US-centric by data, not by code: nationality lives entirely in demographics-tables (catalytic target 3), never in stage logic"]}
+   :catalytic ["demographics-tables" "payer-pool"]
+   :laws ["samples only from the run's single seeded RNG, in fixed order (global determinism law, docs/sim-theory.md) -- property-tested (persona-test/persona-consumes-a-fixed-number-of-rng-draws-regardless-of-content, 100 trials green 2026-07-26): 13 draws, always, regardless of which pool/decade-bucket any weighted pick lands in"
+          "US-centric by data, not by code: nationality lives entirely in demographics-tables (catalytic target 3), never in stage logic"]
+   :contract "v1 scope (M4, ehr-testing-sim.persona): name, DOB (age from a configured uniform distribution), sex, address, US-format phone, an SSN-shaped identifier (fixed 900 area-number prefix, SSA's own permanently-never-issued block -- notes/facts-register.md F8, the same obviously-synthetic-by-construction design move ADR-0007 already made for provider NPIs), and payer (age-linked, Medicare dominant 65+, docs/operational-models.md) -- ALL sampled together, once, at patient creation. IMPLEMENTATION NOTE, kept here so the diagram stays truthful about topology while being honest about code shape: this stage's equation (sim-config -> persona) is satisfied by an engine-internal `:registered` event ehr-testing-sim.engine/run prepends to EVERY patient's step queue (never authorable pathway IR, the same treatment :result-followup already gets) -- persona is folded into Execute's own step-queue mechanism rather than a structurally separate pipeline pass, because a patient's persona is consumed at the same init moment Execute already owns (arrival scheduling), not by a downstream stage that exists yet (RunModules, :planned, is the eventual real consumer of `persona` as a wire resource). This stage remains its own equation entry -- not folded into :execute's own contract -- because it has its own laws (fixed-draw-count, US-centric-by-data) worth stating independently of Execute's. Vendored tables (resources/demographics/) are SMALL and HAND-CURATED, not extracted from Synthea -- resources/demographics/NOTICE records why (no ../ checkout was available this session), in the same schema shape a real extraction would use."}
 
+  ;; NEXT -- Milestone M5 (.agents/plans/roadmap.md): RunModules + the
+  ;; GMF module-vendoring decision + CompileTrajectory. The author may
+  ;; re-aim NEXT; this is the ratified numbered order's default.
   {:id :trajectory
    :label "RunModules"
    :kind :transform
@@ -3392,19 +4272,17 @@ One file describes three systems:
   current guess at the envisioned system; it will change, and changes
   land as edits to the EDN with ADRs where they're structural.
 - **now** — the `:status :built` subset: **Execute**, **Check**,
-  **EmitHL7**, and, as of Milestone M2b, **InjectChurn** (each
-  walking-skeleton, v1-slice, or v0-slice scope, per their `:contract`
-  notes), plus the manifest component inside Package that shipped
-  ahead of its stage. As of Milestone M3, Execute's own step vocabulary
-  further grows (`:order`/`:result-followup`, the `order-profiles`
-  catalytic now real) and EmitHL7 gains ORM^O01/ORU^R01. Everything the
-  *now* claims is property-tested and green (181 tests / 503 assertions,
-  2026-07-26).
-- **next** — the single stage marked `;; NEXT` in the EDN: **Persona**,
-  Milestone M4 — demographics sampling from vendored, hashed tables,
-  plus the `payer-pool` catalytic this theory currently only records as
-  a comment at Persona (below), turning into a real wire once this
-  stage flips to `:built`.
+  **EmitHL7**, **InjectChurn** (M2b), and, as of Milestone M4,
+  **Persona** (each walking-skeleton, v1-slice, or v0-slice scope, per
+  their `:contract` notes), plus the manifest component inside Package
+  that shipped ahead of its stage. As of Milestone M3, Execute's own
+  step vocabulary further grows (`:order`/`:result-followup`, the
+  `order-profiles` catalytic now real) and EmitHL7 gains
+  ORM^O01/ORU^R01. Everything the *now* claims is property-tested and
+  green (207 tests / 582 assertions, 2026-07-26).
+- **next** — the single stage marked `;; NEXT` in the EDN: **RunModules**,
+  Milestone M5 — the GMF interpreter port, the `gmf-module-set`
+  vendoring-vs-lockfile decision, and `CompileTrajectory`.
 
 No schema keys were invented for this convention — it lives in
 comments and here, keeping the EDN loadable by tools' Pipeline Malli
@@ -3415,7 +4293,7 @@ in one file by construction instead of drifting across three.
 ## The composite, read left to right
 
 ```
-sim-config → persona                                  [Persona]      {catalytic: demographics-tables}
+sim-config → persona                                  [Persona]      {catalytic: demographics-tables, payer-pool}
 persona → clinical-trajectory                         [RunModules]   {catalytic: gmf-module-set, gmf-interpreter}
 clinical-trajectory → compiled-pathway                [CompileTrajectory]
 pathway-ir = compiled-pathway ∪ authored-pathway      (union)
@@ -3459,9 +4337,9 @@ US-units config each — order/result step types and attending
 assignment both land under Execute's existing `:built` contract as
 the engine's step vocabulary grows, the same co-landing path
 `InjectChurn`'s churn family and `EmitHL7`'s message types already
-follow), and `payer-pool`, recorded as a comment at `Persona` rather
-than a real wire, since Persona itself is still `:planned` and payer
-sampling runs at engine patient-init time until it lands. Adding
+follow), and `payer-pool`, recorded at the time as a comment at
+`Persona` rather than a real wire (Persona itself was still `:planned`)
+-- since landed for real, Milestone M4, see that section below. Adding
 `order-profiles` repairs the plan's biggest capture gap to date:
 Simulated Hospital's order profiles and the ORM/ORU result cycle were
 discussed from this project's first session but, until this pass,
@@ -3514,6 +4392,36 @@ also landed this milestone) renders in **neither** diagram nor
 message-type-registry, by design: it is truth about the run, not wire
 traffic a real ADT/ORM/ORU feed would ever carry.
 
+## M4 lands Persona -- its own :built stage, folded into Execute's step queue
+
+Unlike M2a/M3 above (additions under an ALREADY-`:built` Execute),
+Persona genuinely flips from `:planned` to `:built` this milestone --
+a new stage, not an addition to one already landed. Its equation
+(`sim-config -> persona`) is satisfied by an engine-internal
+`:registered` event `ehr-testing-sim.engine/run` prepends to every
+patient's step queue (never authorable IR, the same treatment
+`:result-followup` already gets) -- persona is folded into Execute's
+own step-queue mechanism because a patient's persona is needed at the
+same init moment Execute already owns (arrival scheduling), not by a
+downstream consumer that exists yet (`RunModules`, still `:planned`,
+is the eventual real consumer of `persona` as a wire resource). The
+diagram stays topologically truthful (`sim-config` still flows to
+`persona` as its own box) while `:persona`'s own `:contract` string
+records the implementation shape honestly, the same "document the
+gap between diagram and code" discipline the M2a/M3 sections above
+already establish for their own implementation notes. `payer-pool`
+(`docs/operational-models.md`'s payers model) is a real `:catalytic`
+wire on `Persona` now, not a comment-only forward reference -- this
+also RETIRES the engine-patient-init payer stand-in
+`docs/operational-models.md` described (there was no code actually
+setting it; payer now lives at `(:payer (:persona patient))`, sampled
+with the rest of a patient's demographics). `demographics-tables`
+(vendored, `resources/demographics/`) are SMALL and hand-curated, not
+extracted from Synthea -- no `../` checkout was available this
+session; `resources/demographics/NOTICE` records that decision so a
+future session with a checkout can extract for real without any
+reader-side schema change.
+
 ## IR transforms as the composition layer
 
 Synthea's own composition pain — cross-cutting augmentation requiring
@@ -3548,7 +4456,7 @@ whose name binds to nothing is malformed. Bindings, with build status:
 | Resource | Binding | Status |
 |---|---|---|
 | `sim-config` | Malli, `ehr-testing-sim.config` (black-box Inputs, problem statement) | partial |
-| `persona` | Malli, planned | planned |
+| `persona` | Malli, `ehr-testing-sim.persona/Persona` | v1 built |
 | `clinical-trajectory` | Malli, planned — dated clinical events, each citing `{module, state}`, codes as `{:system :code :display}` | planned |
 | `compiled-pathway`, `authored-pathway`, `pathway-ir`, `operational-pathway` | Malli, `ehr-testing-sim.pathway` — the union binds to `[:or …]` of its members per the notation; `operational-pathway`'s type IS the IR type (the endomorphism law) | v0 built |
 | `ground-truth-log` | Malli, planned as data; shape established by `engine/run` and consumed by `check` | de-facto built |
@@ -3568,7 +4476,7 @@ targets; unresolved is a gap, not an oversight:
 
 | Catalytic | Target | Note |
 |---|---|---|
-| `demographics-tables` | 3 — hashed repo-authored config | vendored US tables (Synthea-derived, Apache-2.0), referenced by path + content hash |
+| `demographics-tables` | 3 — hashed repo-authored config | vendored US tables, `resources/demographics/` -- SMALL and hand-curated this milestone (no Synthea checkout available; NOTICE records why), same schema shape a real extraction would use |
 | `gmf-module-set` | **1 or 3 — OPEN** | vendor-vs-lockfile is the decision ADR-0003 defers to when modules land; the equation names the resource without prejudging |
 | `gmf-interpreter` | 4 — in-repo code registry | the GMF interpreter, versioned like data |
 | `invariant-catalog` | 4 — in-repo code registry | `ehr-testing-sim.check/catalog`, versioned; the co-landing law couples it to Execute's step set |
@@ -3577,7 +4485,7 @@ targets; unresolved is a gap, not an oversight:
 | `snomed-icd10-map` | 1 — artifacts.lock | the pinned NLM map; the one sanctioned code translation in the theory |
 | `order-profiles` | 3 — hashed repo-authored config | US-units order/result profiles, binds at `Execute` (`docs/operational-models.md`) |
 | `provider-pool` | 3 — hashed repo-authored config | synthetic provider identities, binds at `Execute` (`docs/operational-models.md`) |
-| `payer-pool` | 3 — hashed repo-authored config | synthetic payer pool; binds at `Persona` once it lands — comment only today, no wire yet (`docs/operational-models.md`) |
+| `payer-pool` | 3 — hashed repo-authored config | synthetic payer pool, `ehr-testing-sim.persona/under-65-payers`/`sixty-five-plus-payers` — a real wire on `Persona`, Milestone M4 (`docs/operational-models.md`) |
 
 ## Global laws
 
@@ -3838,7 +4746,7 @@ Synthea's peer-reviewed pedigree (Walonoski et al., JAMIA 2018) is what validati
 
 ### `org.clojars.cmiles74/clojure-hl7-parser` 3.5.1
 
-[`notes/facts-register.md` F1](facts-register.md). **The only runtime code dependency of the three** — everything above is design or data; this is a library this repo actually calls. `ehr-testing-sim.emit-hl7` builds ADT^A01/A03 messages directly on its `create-message`/`create-segment`/`create-field` structures and parses them back with its `parser`/`message` namespaces (round-trip law, `docs/sim-theory.edn`'s `:emit-hl7` laws) — the ER7 structures this stage's ADT^A01/A03 v0 slice is built on ([`sim-theory-diagram.md`](sim-theory-diagram.md)'s `EmitHL7` box, now `:built`).
+[`notes/facts-register.md` F1](facts-register.md). **The only runtime code dependency of the three** — everything above is design or data; this is a library this repo actually calls. `ehr-testing-sim.emit-hl7` builds ADT^A01/A03 messages directly on its `create-message`/`create-segment`/`create-field` structures and parses them back with its `parser`/`message` namespaces (round-trip law, `docs/sim-theory.edn`'s `:emit-hl7` laws) — the ER7 structures this stage's ADT^A01/A03 v0 slice is built on ([`sim-theory-diagram.md`](sim-theory-diagram.md)'s `EmitHL7` box, now `:built`). **A verified limitation** ([`notes/facts-register.md` F9](facts-register.md)): this library implements no ER7 escape-sequence handling in either direction — `ehr-testing-sim.emit-hl7/escape-er7`/`unescape-er7` (Milestone M4) are this repo's own documented workaround, needed once free-text persona content (names, addresses) could contain a literal delimiter character.
 
 ### NLM SNOMED→ICD-10-CM map
 
@@ -4875,10 +5783,166 @@ one.
 | F5 | The SNOMED CT to ICD-10-CM map is published by NLM as part of UMLS — the official U.S. mapping (the current map ships in the US Edition of SNOMED CT), built by dual independent mapping with third-expert adjudication of discordant mappings. Access requires a UMLS/UTS license (free for SNOMED CT in the US and free for ICD-10-CM in the US) — this is the pinned data artifact `docs/sim-theory.edn` names as `snomed-icd10-map`, the one sanctioned code translation (DG1). | `docs/third-party-sources.md` (Tier 1), `docs/sim-theory.edn` (`:emit-hl7` catalytic, `snomed-icd10-map`) | `nlm.nih.gov/research/umls/mapping_projects/snomedct_to_icd10cm.html`, fetched directly this session | 2026-07-26 | verified this session |
 | F6 | Two independent-of-this-repo validation tool families exist for HL7v2 conformance, matching problem-statement.md claim #1's proof strategy: (a) NIST's HL7 v2 Conformance Testing portfolio (General Validation Tool, IGAMT, TCAMT) at `hl7v2tools.nist.gov`, offered as public-domain resources; (b) HAPI HL7v2 (`hapifhir/hapi-hl7v2` on GitHub), an open-source Java library for HL7v2 parsing. Neither is wired into this repo yet — both are named as Tier 2 validation/calibration anchors, future CI integration. | `docs/third-party-sources.md` (Tier 2), `docs/problem-statement.md` (Validation claim #1) | `nist.gov/itl/health-it-testing-infrastructure/testing-tools/hl7-v2-conformance-testing-tools`, `hl7v2tools.nist.gov`; `github.com/hapifhir/hapi-hl7v2` — fetched directly this session (HAPI's specific license terms were not confirmed by the fetch and are not asserted here) | 2026-07-26 | verified this session (HAPI license unconfirmed) |
 | F7 | `resources/order-profiles.edn`'s CBC and BMP panel LOINC codes are real, active LOINC codes with the exact component structure encoded: CBC panel `58410-2` (component analytes used here: `6690-2` Leukocytes, `789-8` Erythrocytes, `718-7` Hemoglobin, `4544-3` Hematocrit, `777-3` Platelets — all `R`/required in the panel); BMP panel `51990-0` (component analytes used here: `2339-0` Glucose, `6299-2` Urea nitrogen, `38483-4` Creatinine, `49765-1` Calcium, `2947-0` Sodium, `6298-4` Potassium, `2069-3` Chloride, `20565-8` Carbon dioxide total — all `R`/required). LOINC is free to use (per F4); no CPT codes appear anywhere in the profile. | `resources/order-profiles.edn`, `docs/sim-theory.edn` (`order-profiles` catalytic) | `loinc.org/58410-2` and `loinc.org/51990-0` — each panel's own "Details for each LOINC in Panel" table, fetched directly this session via browser | 2026-07-26 | verified this session |
+| F8 | The US Social Security Administration never assigns SSNs with area number (first three digits) `000`, `666`, or in the range `900`–`999` — these are permanently excluded from issuance (the `900`–`999` block being reserved for ITIN, not SSN, use). `ehr-testing-sim.persona/persona`'s synthetic SSN-shaped identifier uses a fixed area number of `900` for exactly this reason — obviously-synthetic by construction, the same design move ADR-0007 already made for provider NPIs (a real, documented never-issued range, not an arbitrary sentinel format), and stated as `persona.clj`'s own design-choice docstring. | `src/ehr_testing_sim/persona.clj` (`ssn-area-prefix` docstring) | `en.wikipedia.org/wiki/Social_Security_number` ("Numbers with 666 or 900–999 ... are never allocated"; "excluding area numbers 000, 666, and 900–999" from the 2011 randomization change) — fetched via browser this session; SSA's own `ssa.gov` pages returned HTTP 403 to this session's fetch tool and could not be checked directly, so this claim rests on a secondary source, not SSA's own site | 2026-07-26 | verified this session (secondary source only — SSA.gov itself unreachable this session) |
+| F9 | `org.clojars.cmiles74/clojure-hl7-parser` 3.5.1 implements NO ER7 escape-sequence handling in either direction. WRITE side: `parser/pr-field`/`pr-content` concatenate field content into the wire string with no encoding step at all — a literal `\|^~&` character embedded in content is emitted raw. READ side: `parser/read-text`'s and `read-subcomponents`' escape-handling branches (which would call the library's own `read-escaped-text` function) are commented-out dead code in the library's own source, and `parser/delimiter?` doesn't even exempt the escape character (`\`) from ending a token early — so a literal delimiter character embedded in unescaped content corrupts field/component boundaries on parse, and even a value this repo escapes on write comes back from `message/get-field-first-value` STILL escaped (undecoded), never as the original. `ehr-testing-sim.emit-hl7/escape-er7`/`unescape-er7` are this repo's own documented workaround (encode on write, decode on read) — a Milestone M4 property test caught a related self-inflicted bug in the workaround's OWN first `unescape-er7` implementation (naive five-pass sequential replace let two adjacent encoded tokens spuriously spell a THIRD token at their boundary; fixed to a single regex pass). | `src/ehr_testing_sim/emit_hl7.clj` (the Task 4 escaping section, `escape-er7`/`unescape-er7` docstrings) | Read directly from the unpacked jar, `org/clojars/cmiles74/clojure-hl7-parser/3.5.1/clojure-hl7-parser-3.5.1.jar`'s own `com/nervestaple/hl7_parser/parser.clj` — `read-text` (comment block above its `delimiter?` cond-branch), `read-subcomponents` (same pattern), and `delimiter?` itself (the commented-out `:escape` check) — this session, not a secondary source | 2026-07-26 | verified this session (primary source: the dependency's own shipped .clj source) |
 
 ========== END FILE ==========
 
 ========== FILE: ./resources/.gitkeep ==========
+
+========== END FILE ==========
+
+========== FILE: ./resources/demographics/NOTICE ==========
+ehr-testing-sim -- resources/demographics/ provenance notice
+==============================================================
+
+docs/third-party-sources.md names Synthea (Apache-2.0, MITRE) as the
+mined source for this project's US demographics tables
+(demographics-tables, docs/sim-theory.edn's Persona catalytic), on the
+strength of Synthea's own vendored name/geography data. Milestone M4's
+authoring session checked for a `../` sibling Synthea checkout to
+extract that data from, per this session's own instructions, and found
+none present (only ehr-testing-tools' `config/synthea/synthea.properties`
+-- a runner config file, not vendored demographic data). AGENTS.md's
+standing rule ("do not invent facts about upstream sources") applies
+here as much as anywhere else in this repo: absent an actual checkout
+to extract from, the tables in this directory
+(given-names.edn, surnames.edn, places.edn) are HAND-CURATED originals
+authored by this session, not copied, adapted, or algorithmically
+derived from any Synthea file.
+
+What IS carried from Synthea, honestly: the SCHEMA SHAPE these tables
+use (given names bucketed by sex and birth decade, a flat weighted
+surname pool, sampled geography rows) mirrors the general design of
+Synthea's own demographic sampling approach, as already described in
+docs/operational-models.md's payers-model section and
+docs/third-party-sources.md's Synthea entry -- mining for *design*, not
+data, the same distinction ADR-0002 already draws for Google Simulated
+Hospital. A future session WITH a Synthea checkout available can
+replace the content of these three files wholesale with a real
+extraction, keeping ehr-testing-sim.persona's readers unchanged, since
+the schema is already shaped to match.
+
+This file exists so a reader of this directory never has to guess
+whether "vendored from Synthea" means "copied from Synthea" here -- it
+doesn't, and this notice is the record of that distinction, dated to
+the session that made the call.
+
+Recorded: 2026-07-26. All content is synthetic; no PHI, no real-person
+data, by construction (this repo's standing constraint,
+docs/problem-statement.md / AGENTS.md).
+
+========== END FILE ==========
+
+========== FILE: ./resources/demographics/given-names.edn ==========
+;; Hand-curated given names by sex and birth decade -- NOT extracted from
+;; Synthea (see resources/demographics/NOTICE for why: no ../ Synthea
+;; checkout was present in the session that authored this file). Schema
+;; shape only -- {:name .. :weight ..} per decade bucket, so a future
+;; session that DOES have a Synthea checkout can drop in real tables
+;; without changing ehr-testing-sim.persona's reader.
+;;
+;; Weights are relative popularity WITHIN a decade+sex bucket (not
+;; normalized to 1.0 -- ehr-testing-sim.persona's weighted-pick divides
+;; by the bucket's own total). Names are broadly representative of US
+;; naming trends per decade (public-knowledge popular-names lists, not
+;; sourced from any one dataset); synthetic by construction, no PHI.
+{:female
+ {1940 [{:name "Mary" :weight 5} {:name "Linda" :weight 4} {:name "Patricia" :weight 3}
+        {:name "Barbara" :weight 3} {:name "Dorothy" :weight 2}]
+  1950 [{:name "Linda" :weight 5} {:name "Mary" :weight 4} {:name "Susan" :weight 3}
+        {:name "Deborah" :weight 3} {:name "Sandra" :weight 2}]
+  1960 [{:name "Lisa" :weight 5} {:name "Karen" :weight 4} {:name "Susan" :weight 3}
+        {:name "Deborah" :weight 3} {:name "Cynthia" :weight 2}]
+  1970 [{:name "Jennifer" :weight 5} {:name "Lisa" :weight 4} {:name "Kimberly" :weight 3}
+        {:name "Michelle" :weight 3} {:name "Amy" :weight 2}]
+  1980 [{:name "Jessica" :weight 5} {:name "Jennifer" :weight 4} {:name "Amanda" :weight 3}
+        {:name "Ashley" :weight 3} {:name "Sarah" :weight 2}]
+  1990 [{:name "Jessica" :weight 5} {:name "Ashley" :weight 4} {:name "Emily" :weight 3}
+        {:name "Samantha" :weight 3} {:name "Amanda" :weight 2}]
+  2000 [{:name "Emily" :weight 5} {:name "Madison" :weight 4} {:name "Emma" :weight 3}
+        {:name "Olivia" :weight 3} {:name "Hannah" :weight 2}]
+  2010 [{:name "Sophia" :weight 5} {:name "Emma" :weight 4} {:name "Olivia" :weight 3}
+        {:name "Isabella" :weight 3} {:name "Ava" :weight 2}]}
+ :male
+ {1940 [{:name "James" :weight 5} {:name "Robert" :weight 4} {:name "John" :weight 3}
+        {:name "William" :weight 3} {:name "Richard" :weight 2}]
+  1950 [{:name "James" :weight 5} {:name "Michael" :weight 4} {:name "Robert" :weight 3}
+        {:name "David" :weight 3} {:name "William" :weight 2}]
+  1960 [{:name "David" :weight 5} {:name "Michael" :weight 4} {:name "James" :weight 3}
+        {:name "John" :weight 3} {:name "Robert" :weight 2}]
+  1970 [{:name "Michael" :weight 5} {:name "James" :weight 4} {:name "David" :weight 3}
+        {:name "John" :weight 3} {:name "Christopher" :weight 2}]
+  1980 [{:name "Michael" :weight 5} {:name "Christopher" :weight 4} {:name "Matthew" :weight 3}
+        {:name "Joshua" :weight 3} {:name "David" :weight 2}]
+  1990 [{:name "Michael" :weight 5} {:name "Christopher" :weight 4} {:name "Matthew" :weight 3}
+        {:name "Joshua" :weight 3} {:name "Daniel" :weight 2}]
+  2000 [{:name "Jacob" :weight 5} {:name "Michael" :weight 4} {:name "Ethan" :weight 3}
+        {:name "Joshua" :weight 3} {:name "Daniel" :weight 2}]
+  2010 [{:name "Noah" :weight 5} {:name "Liam" :weight 4} {:name "Jacob" :weight 3}
+        {:name "Mason" :weight 3} {:name "William" :weight 2}]}}
+
+========== END FILE ==========
+
+========== FILE: ./resources/demographics/places.edn ==========
+;; Hand-curated sample US addresses (street+city+state+zip together, as
+;; one weighted row) -- SMALL, synthetic by construction. See
+;; resources/demographics/NOTICE for provenance. Street numbers/names
+;; are invented, not real residences; city/state/zip combinations are
+;; real US postal geography (so a ZIP-aware downstream validator sees
+;; plausible data) with an invented house number and street name
+;; composed on top -- no PHI, no real-person association possible.
+[{:street "482 Ridgeway Ln" :city "Springfield" :state "IL" :zip "62704" :weight 3}
+ {:street "17 Elm Ct" :city "Columbus" :state "OH" :zip "43215" :weight 3}
+ {:street "930 Birchwood Dr" :city "Austin" :state "TX" :zip "78701" :weight 3}
+ {:street "204 Maple Ave" :city "Portland" :state "OR" :zip "97201" :weight 3}
+ {:street "56 Harborview Rd" :city "Boston" :state "MA" :zip "02108" :weight 3}
+ {:street "1180 Sunset Blvd" :city "Denver" :state "CO" :zip "80202" :weight 3}
+ {:street "78 Magnolia St" :city "Atlanta" :state "GA" :zip "30303" :weight 3}
+ {:street "605 Lakeview Way" :city "Minneapolis" :state "MN" :zip "55401" :weight 3}
+ {:street "312 Cedar Ln" :city "Nashville" :state "TN" :zip "37203" :weight 3}
+ {:street "89 Riverside Dr" :city "Sacramento" :state "CA" :zip "95814" :weight 3}
+ {:street "441 Hilltop Ave" :city "Phoenix" :state "AZ" :zip "85004" :weight 3}
+ {:street "22 Chestnut Ct" :city "Providence" :state "RI" :zip "02903" :weight 2}
+ {:street "1520 Meadowbrook Rd" :city "Kansas City" :state "MO" :zip "64105" :weight 2}
+ {:street "63 Pinehurst St" :city "Charlotte" :state "NC" :zip "28202" :weight 2}
+ {:street "914 Fairview Blvd" :city "Salt Lake City" :state "UT" :zip "84101" :weight 2}
+ {:street "35 Aspen Way" :city "Albuquerque" :state "NM" :zip "87102" :weight 2}
+ {:street "271 Brookside Ave" :city "Milwaukee" :state "WI" :zip "53202" :weight 2}
+ {:street "816 Foxglove Ln" :city "Louisville" :state "KY" :zip "40202" :weight 2}
+ {:street "9 Willow Ct" :city "Richmond" :state "VA" :zip "23219" :weight 2}
+ {:street "150 Overlook Dr" :city "Boise" :state "ID" :zip "83702" :weight 2}
+ {:street "48 Sycamore St" :city "Buffalo" :state "NY" :zip "14202" :weight 2}
+ {:street "702 Crestwood Ave" :city "Tucson" :state "AZ" :zip "85701" :weight 2}
+ {:street "1204 Bayview Rd" :city "New Orleans" :state "LA" :zip "70112" :weight 2}
+ {:street "77 Northgate Ln" :city "Omaha" :state "NE" :zip "68102" :weight 2}]
+
+========== END FILE ==========
+
+========== FILE: ./resources/demographics/surnames.edn ==========
+;; Hand-curated surnames, flat weighted pool (not decade/sex-linked --
+;; surname frequency doesn't correlate with either the way given names
+;; do). See resources/demographics/NOTICE for provenance.
+;;
+;; DELIBERATELY includes apostrophe and hyphen cases (O'Brien,
+;; D'Angelo, O'Malley, O'Connell, Smith-Jones, Anderson-Lee,
+;; Taylor-Wright, Garcia-Lopez) -- Milestone M4 Task 4's escaping
+;; property test needs real, naturally-occurring non-alphanumeric
+;; characters in sampled personas, not only in a scripted fixture.
+[{:name "Smith" :weight 24} {:name "Johnson" :weight 19} {:name "Williams" :weight 16}
+ {:name "Brown" :weight 14} {:name "Jones" :weight 14} {:name "Garcia" :weight 13}
+ {:name "Miller" :weight 12} {:name "Davis" :weight 12} {:name "Rodriguez" :weight 11}
+ {:name "Martinez" :weight 11} {:name "Hernandez" :weight 10} {:name "Lopez" :weight 10}
+ {:name "Gonzalez" :weight 9} {:name "Wilson" :weight 9} {:name "Anderson" :weight 9}
+ {:name "Taylor" :weight 8} {:name "Thomas" :weight 8} {:name "Moore" :weight 8}
+ {:name "Jackson" :weight 7} {:name "Martin" :weight 7} {:name "Lee" :weight 7}
+ {:name "Walker" :weight 6} {:name "Chen" :weight 6} {:name "Nguyen" :weight 6}
+ {:name "Patel" :weight 5} {:name "Kim" :weight 5} {:name "Okafor" :weight 4}
+ {:name "Reyes" :weight 4} {:name "Kowalski" :weight 3} {:name "Nowak" :weight 3}
+ ;; apostrophe/hyphen cases -- weighted modestly, real, not exotic
+ {:name "O'Brien" :weight 3} {:name "O'Malley" :weight 2} {:name "O'Connell" :weight 2}
+ {:name "D'Angelo" :weight 2} {:name "Smith-Jones" :weight 2} {:name "Anderson-Lee" :weight 2}
+ {:name "Taylor-Wright" :weight 2} {:name "Garcia-Lopez" :weight 2}]
 
 ========== END FILE ==========
 
@@ -5034,6 +6098,7 @@ one.
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.facility :as facility]
             [ehr-testing-sim.order-profiles :as order-profiles]
+            [ehr-testing-sim.persona :as persona]
             [ehr-testing-sim.result :as result]))
 
 (defn- events-by-patient
@@ -5373,6 +6438,30 @@ one.
         :when (not= abnormal-flag (order-profiles/abnormal-flag value reference-range))]
     {:invariant :abnormal-flags-consistent-with-value-vs-range :profile (:profile event) :at (:t event)}))
 
+;; --- M4: Persona (docs/sim-theory.edn's :persona stage) -------------------
+
+(defn registered-is-every-patients-first-event
+  "docs/sim-theory.edn's :persona stage lands as the engine-internal
+  :registered event, prepended to every patient's step queue
+  (ehr-testing-sim.engine/run) -- structurally, that means it must be
+  the FIRST event naming any given patient-id, every time, or
+  ehr-testing-sim.engine/replay's own bootstrap (which seeds a
+  never-yet-seen participant's initial state off the first event
+  naming them, ADR-0010) would silently seed from the wrong event."
+  [ground-truth]
+  (for [[patient-id events] (events-by-patient ground-truth)
+        :when (not= :registered (:event (first events)))]
+    {:invariant :registered-is-every-patients-first-event :patient-id patient-id :at (:t (first events))}))
+
+(defn registered-persona-is-schema-valid
+  "Every :registered event's :persona validates against
+  ehr-testing-sim.persona/Persona -- the schema round-trip co-landing
+  invariant for M4's new persona resource type."
+  [ground-truth]
+  (for [event ground-truth
+        :when (and (= :registered (:event event)) (not (persona/valid-persona? (:persona event))))]
+    {:invariant :registered-persona-is-schema-valid :at (:t event)}))
+
 (def catalog
   "The full invariant catalog needing only a ground-truth log, in
   reporting order."
@@ -5392,7 +6481,9 @@ one.
    #'step-rejected-reason-is-documented
    #'order-only-when-admitted
    #'result-references-existing-order-and-follows-it-in-time
-   #'abnormal-flags-consistent-with-value-vs-range])
+   #'abnormal-flags-consistent-with-value-vs-range
+   #'registered-is-every-patients-first-event
+   #'registered-persona-is-schema-valid])
 
 (def facility-catalog
   "Invariants that need the facility config, not just the log (checked
@@ -5680,6 +6771,7 @@ one.
    :utc-offset {:coerce :string}
    :warm-up-seconds {:coerce :long}
    :churn {:coerce :boolean}
+   :config {:coerce :string}
    :json {:coerce :boolean}
    :help {:coerce :boolean}})
 
@@ -5699,7 +6791,8 @@ one.
              {:flag "--reference-date" :doc "ISO date anchoring HL7 timestamps (pinned input)" :default "2024-01-01"}
              {:flag "--utc-offset" :doc "fixed ISO offset suffixed onto HL7 timestamps (pinned input, no DST)" :default "+00:00"}
              {:flag "--warm-up-seconds" :doc "events before this mark :warm-up true (log stays complete)" :default "0"}
-             {:flag "--churn" :doc "activate InjectChurn with a modest sample profile (cancel-*/transfer-in-error/bed-swap/merge)"}]}
+             {:flag "--churn" :doc "activate InjectChurn with a modest sample profile (cancel-*/transfer-in-error/bed-swap/merge)"}
+             {:flag "--config" :doc "path to an EDN file supplying data-heavy engine keys with no flag of their own (:pathway/:pathways/:order-profiles/:churn-profile); merged UNDER explicit flags"}]}
     {:verb "check"
      :doc "Run the invariant catalog over a ground-truth log (EDN on stdin)."
      :flags []}]})
@@ -6054,13 +7147,139 @@ one.
    (parser/create-field [trigger])
    (parser/create-field [ts])))
 
+;; --- M4 Task 4: ER7 escaping (notes/facts-register.md F9) -----------------
+;; org.clojars.cmiles74/clojure-hl7-parser implements NO escape-sequence
+;; handling in either direction, verified directly against its own source:
+;; pr-field/pr-content (the write path) concatenate field content into the
+;; wire string with no encoding step at all; read-text's and read-
+;; subcomponents' escape-handling branches (the read path) are commented-out
+;; dead code, and `delimiter?` doesn't even exempt the escape character from
+;; ending a token early. A literal |^~& character embedded in free text
+;; therefore corrupts the message's own field/component boundaries on parse
+;; unless something upstream escapes it, and even a properly-escaped value
+;; comes back from `get-field-first-value` STILL escaped, never decoded.
+;; escape-er7/unescape-er7 are this repo's own documented workaround:
+;; encode on write (below, at every persona-derived free-text field), decode
+;; on read (a consumer's own job, exactly like this repo's test suite does).
+
+(def ^:private er7-escape-table
+  "Order matters on ENCODE: the escape character itself is escaped
+  FIRST, or the backslashes this table's own replacements introduce
+  for |^~& would themselves get escaped a second time on a later pass."
+  [[\\ "\\E\\"] [\| "\\F\\"] [\^ "\\S\\"] [\~ "\\R\\"] [\& "\\T\\"]])
+
+(defn escape-er7
+  "Encodes ER7's five reserved delimiter characters per the standard
+  escape-sequence convention. Identity for any string containing none
+  of the five -- the overwhelmingly common case (ordinary names,
+  apostrophes, and hyphens need no escaping at all, ER7 or otherwise).
+  Safe as five sequential single-CHARACTER replacements (unlike decode,
+  below): each pass targets one literal input character never produced
+  by an earlier pass's own replacement text (F/S/R/T/E are never
+  themselves |^~&), so passes cannot collide."
+  [s]
+  (reduce (fn [acc [ch replacement]] (str/replace acc (str ch) replacement))
+          s er7-escape-table))
+
+(def ^:private er7-decode-map
+  {\E \\ \F \| \S \^ \R \~ \T \&})
+
+(defn unescape-er7
+  "Decodes ER7 escape sequences back to literal characters -- the
+  consumer-side half of this namespace's own documented workaround for
+  the parser's read-side gap (see this section's header comment).
+
+  MUST be a single regex pass, not five sequential string replacements
+  the way `escape-er7` is -- a property-test failure caught exactly
+  this during Milestone M4's own authoring: encoding \"|E|\" produces
+  \"\\F\\E\\F\\\" (backslash F backslash E backslash F backslash), and
+  five SEPARATE global replaces are each blind to what the others
+  already consumed, so the first pass (decoding \\E\\ back to a literal
+  backslash) spuriously matches the backslash-E-backslash formed by the
+  BOUNDARY between the two adjacent, unrelated \\F\\ tokens -- decoding
+  it wrong. A single regex scan matches real three-character tokens
+  left to right, consuming each match's characters before continuing,
+  so two adjacent tokens can never accidentally spell a third."
+  [s]
+  (str/replace s #"\\[EFRST]\\" (fn [^String match] (str (er7-decode-map (.charAt match 1))))))
+
+(defn- xpn-field
+  "XPN (Extended Person Name), PID-5: family^given. Free text from
+  ehr-testing-sim.persona -- escaped per ER7 (see this file's Task 4
+  section) before it ever reaches a field, since the library itself
+  never will."
+  [{:keys [family given]}]
+  (parser/create-field [(escape-er7 family) (escape-er7 given)]))
+
+(defn- xad-field
+  "XAD (Extended Address), PID-11: street^other-designation^city^state^zip.
+  Other-designation (apt/suite) is always empty -- resources/demographics'
+  vendored places carry no such field, same simplification the address
+  table's own header notes. Free text escaped per ER7, same reasoning
+  as `xpn-field`."
+  [{:keys [street city state zip]}]
+  (parser/create-field [(escape-er7 street) "" (escape-er7 city) (escape-er7 state) (escape-er7 zip)]))
+
 (defn- pid-segment
-  [active-mrn]
+  "PID-1/2/3 unconditionally (Set ID, blank, the active MRN); PID-4/6/9/10/12
+  stay blank placeholders so positional fields (5/7/8/11/13) land correctly.
+  M4: when `persona` is present (every real ehr-testing-sim.engine/run output,
+  post the :registered event -- ehr-testing-sim.persona/Persona), PID gains
+  demographic enrichment: PID-5 (XPN name), PID-7 (DOB, HL7 date), PID-8 (sex,
+  Table 0001 F/M), PID-11 (XAD address), PID-13 (phone). nil persona (hand-
+  built test worlds that never processed a :registered step) falls back to
+  the pre-M4 3-field segment exactly -- no positional padding, no crash."
+  [active-mrn persona]
+  (if (nil? persona)
+    (parser/create-segment
+     "PID"
+     (parser/create-field ["1"])
+     (parser/create-field [])
+     (parser/create-field [active-mrn]))
+    (parser/create-segment
+     "PID"
+     (parser/create-field ["1"])
+     (parser/create-field [])
+     (parser/create-field [active-mrn])
+     (parser/create-field [])
+     (xpn-field (:name persona))
+     (parser/create-field [])
+     (parser/create-field [(str/replace (:dob persona) "-" "")])
+     (parser/create-field [(case (:sex persona) :female "F" :male "M")])
+     (parser/create-field [])
+     (parser/create-field [])
+     (xad-field (:address persona))
+     (parser/create-field [])
+     (parser/create-field [(:phone persona)]))))
+
+(defn- in1-segment
+  "IN1 (insurance): IN1-1 set id, IN1-3/IN1-4 the sampled payer pool
+  entry's id/name (docs/operational-models.md's payers model, Milestone
+  M4 -- SimHospital issue #3's own request, docs/research/SimHospital-
+  Synthea-limitations-considered.md §5.3). Rides ONLY the admission
+  message (single-subject-message's own call site) -- the real HL7v2
+  convention: insurance coverage is registered once, at admission, not
+  restated on every subsequent ADT event."
+  [{payer-id :id payer-name :name}]
   (parser/create-segment
-   "PID"
+   "IN1"
    (parser/create-field ["1"])
    (parser/create-field [])
-   (parser/create-field [active-mrn])))
+   (parser/create-field [payer-id])
+   (parser/create-field [(escape-er7 payer-name)])))
+
+(defn- personas-by-patient-id
+  "patient-id -> persona, derived directly from the log's own
+  :registered events (ADR-0012's own precedent: a stage's own state is
+  recoverable by scanning the log, no second input needed). Computed
+  once per `emit` call and threaded down to every segment builder that
+  needs it -- pid-segment enrichment applies uniformly across every
+  message type, not just admission."
+  [ground-truth]
+  (into {}
+        (comp (filter #(= :registered (:event %)))
+              (map (fn [ev] [(:patient-id (first (:participants ev))) (:persona ev)])))
+        ground-truth))
 
 (defn- location-field
   "Renders a location map as ward^^bed^facility (PV1-3/PV1-6's shared
@@ -6116,28 +7335,32 @@ one.
   family) carries its own :active-mrn/:location/:from/:attending
   directly -- cancel events reinstate these AT DECIDE-TIME by querying
   the log (docs/patient-state-model.md), so this renderer needs no
-  event-type-specific branching to show the reinstated facts."
-  [reference-date utc-offset facility providers
-   {:keys [event t active-mrn location from attending]}]
+  event-type-specific branching to show the reinstated facts. M4: IN1
+  rides ONLY :admission (`in1-segment`'s own docstring); every type
+  here gets PID enrichment uniformly via `personas`."
+  [reference-date utc-offset facility providers personas
+   {:keys [event t active-mrn location from attending participants]}]
   (when-let [type+trigger (message-type-registry event)]
     (let [ts (hl7-timestamp reference-date t utc-offset)
           control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
           facility-name (name (:id facility))
-          provider (provider-by-id providers attending)]
+          provider (provider-by-id providers attending)
+          persona (get personas (:patient-id (first participants)))]
       (parser/str-message
-       (parser/create-message
+       (apply parser/create-message
         parser/DEFAULT-DELIMITERS
         (msh-segment type+trigger control-id ts)
         (evn-segment (:trigger type+trigger) ts)
-        (pid-segment active-mrn)
-        (pv1-segment facility-name location from provider))))))
+        (pid-segment active-mrn persona)
+        (pv1-segment facility-name location from provider)
+        (when (and (= :admission event) persona) [(in1-segment (:payer persona))]))))))
 
 (defn- bed-swap-message
   "A17 (swap patients): ONE message per ground-truth event, carrying
   BOTH patients' PID/PV1 pairs -- the real HL7v2 A17 shape, and why the
   emitter-derivability law now keys on the event's own log position
   rather than a single :active-mrn (a bed-swap message has two)."
-  [reference-date utc-offset facility providers {:keys [t participants swap]}]
+  [reference-date utc-offset facility providers personas {:keys [t participants swap]}]
   (let [type+trigger (message-type-registry :bed-swap)
         ts (hl7-timestamp reference-date t utc-offset)
         facility-name (name (:id facility))
@@ -6150,26 +7373,28 @@ one.
       parser/DEFAULT-DELIMITERS
       (msh-segment type+trigger control-id ts)
       (evn-segment (:trigger type+trigger) ts)
-      (pid-segment mrn1)
+      (pid-segment mrn1 (get personas p1))
       (pv1-segment facility-name to1 from1 (provider-by-id providers att1))
-      (pid-segment mrn2)
+      (pid-segment mrn2 (get personas p2))
       (pv1-segment facility-name to2 from2 (provider-by-id providers att2))))))
 
 (defn- merge-message
   "A40 (merge patient): PID carries the SURVIVING mrn, MRG-1 carries the
   prior (merged-away) one (docs/patient-state-model.md's identity
   payoff) -- ONE message per merge event."
-  [reference-date utc-offset facility _providers {:keys [t surviving-mrn merged-mrn]}]
+  [reference-date utc-offset facility _providers personas
+   {:keys [t surviving-mrn merged-mrn participants]}]
   (let [type+trigger (message-type-registry :merge)
         ts (hl7-timestamp reference-date t utc-offset)
         facility-name (name (:id facility))
-        control-id (str surviving-mrn "-" (:trigger type+trigger) "-" t)]
+        control-id (str surviving-mrn "-" (:trigger type+trigger) "-" t)
+        survivor-id (:patient-id (first (filter #(= :survivor (:role %)) participants)))]
     (parser/str-message
      (parser/create-message
       parser/DEFAULT-DELIMITERS
       (msh-segment type+trigger control-id ts)
       (evn-segment (:trigger type+trigger) ts)
-      (pid-segment surviving-mrn)
+      (pid-segment surviving-mrn (get personas survivor-id))
       (pv1-segment facility-name nil nil nil)
       (mrg-segment merged-mrn)))))
 
@@ -6229,8 +7454,8 @@ one.
 (defn- orm-message
   "ORM^O01: order placed. No EVN segment -- EVN is an ADT-specific
   segment (HL7v2 convention), not part of the order-message family."
-  [reference-date utc-offset facility providers
-   {:keys [t active-mrn location attending concept]}]
+  [reference-date utc-offset facility providers personas
+   {:keys [t active-mrn location attending concept participants]}]
   (let [type+trigger (message-type-registry :order-placed)
         ts (hl7-timestamp reference-date t utc-offset)
         control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
@@ -6240,7 +7465,7 @@ one.
      (parser/create-message
       parser/DEFAULT-DELIMITERS
       (msh-segment type+trigger control-id ts)
-      (pid-segment active-mrn)
+      (pid-segment active-mrn (get personas (:patient-id (first participants))))
       (pv1-segment facility-name location nil provider)
       (orc-segment control-id)
       (obr-segment 1 concept)))))
@@ -6250,8 +7475,8 @@ one.
   analyte, in the same order the profile's own :results carries them
   (derived straight from the log, ehr-testing-sim.order-profiles'
   sampling order -- no re-sorting here)."
-  [reference-date utc-offset facility providers
-   {:keys [t active-mrn location attending concept results]}]
+  [reference-date utc-offset facility providers personas
+   {:keys [t active-mrn location attending concept results participants]}]
   (let [type+trigger (message-type-registry :result-available)
         ts (hl7-timestamp reference-date t utc-offset)
         control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
@@ -6262,7 +7487,7 @@ one.
      (apply parser/create-message
       parser/DEFAULT-DELIMITERS
       (msh-segment type+trigger control-id ts)
-      (pid-segment active-mrn)
+      (pid-segment active-mrn (get personas (:patient-id (first participants))))
       (pv1-segment facility-name location nil provider)
       (orc-segment control-id)
       (obr-segment 1 concept)
@@ -6277,14 +7502,16 @@ one.
   single nilable message) since a future many-messages-per-event type
   is now a shape this stage already accommodates. Events outside
   `message-type-registry` render an empty vector, not an error."
-  [reference-date utc-offset facility providers {:keys [event] :as ev}]
-  (cond
-    (not (message-type-registry event)) []
-    (= :bed-swap event) [(bed-swap-message reference-date utc-offset facility providers ev)]
-    (= :merge event) [(merge-message reference-date utc-offset facility providers ev)]
-    (= :order-placed event) [(orm-message reference-date utc-offset facility providers ev)]
-    (= :result-available event) [(oru-message reference-date utc-offset facility providers ev)]
-    :else [(single-subject-message reference-date utc-offset facility providers ev)]))
+  ([reference-date utc-offset facility providers ev]
+   (event->messages reference-date utc-offset facility providers {} ev))
+  ([reference-date utc-offset facility providers personas {:keys [event] :as ev}]
+   (cond
+     (not (message-type-registry event)) []
+     (= :bed-swap event) [(bed-swap-message reference-date utc-offset facility providers personas ev)]
+     (= :merge event) [(merge-message reference-date utc-offset facility providers personas ev)]
+     (= :order-placed event) [(orm-message reference-date utc-offset facility providers personas ev)]
+     (= :result-available event) [(oru-message reference-date utc-offset facility providers personas ev)]
+     :else [(single-subject-message reference-date utc-offset facility providers personas ev)])))
 
 (def ^:private default-providers
   "A fixed, arbitrary reference-seed provider pool -- purely a fallback
@@ -6309,7 +7536,8 @@ one.
   ([ground-truth reference-date utc-offset]
    (emit ground-truth reference-date utc-offset config/default-facility default-providers))
   ([ground-truth reference-date utc-offset facility providers]
-   (into [] (mapcat (partial event->messages reference-date utc-offset facility providers)) ground-truth)))
+   (let [personas (personas-by-patient-id ground-truth)]
+     (into [] (mapcat (partial event->messages reference-date utc-offset facility providers personas)) ground-truth))))
 
 ========== END FILE ==========
 
@@ -6380,6 +7608,7 @@ one.
             [ehr-testing-sim.churn :as churn]
             [ehr-testing-sim.facility :as facility]
             [ehr-testing-sim.order-profiles :as order-profiles]
+            [ehr-testing-sim.persona :as persona]
             [malli.core :as m])
   (:import [java.util Random]))
 
@@ -6391,9 +7620,22 @@ one.
   moved into state -- a singleton set until M2b's merge exists to grow
   it. As of Milestone M1: :location is the {:ward :bed :placement} map
   (upgraded from v0's bare ward-name string, alongside the allocation
-  ladder that populates it for real); :class/:attending/:payer/
+  ladder that populates it for real); :class/:attending/
   :admitted-at are populated at admission; :attributes remains
-  reserved, unused until M5."
+  reserved, unused until M5.
+
+  Milestone M4: `:persona` (ehr-testing-sim.persona/Persona -- name,
+  DOB, sex, address, phone, SSN-shaped id, and payer, ALL of it,
+  including payer) is populated once, by the `:registered` event every
+  patient's step queue is now prepended with (`run`'s own docstring),
+  never resampled after (the attribute-pool contract). This RETIRES the
+  standalone `:payer` field docs/operational-models.md described as an
+  engine-patient-init stand-in: there was no code actually setting it
+  (always nil), so retiring it means removing the now-redundant field
+  from this schema, not deleting behavior -- payer now lives at
+  `(:payer (:persona patient))`, sampled by Persona alongside every
+  other demographic fact, per that document's own 'Persona subsumes it'
+  note."
   [:map
    [:patient-id :string]
    [:mrns [:set :string]]
@@ -6407,7 +7649,7 @@ one.
                                          [:bed :string]
                                          [:placement [:enum :licensed :surge]]]]]
    [:attending {:optional true} [:maybe :string]]
-   [:payer {:optional true} [:maybe :string]]
+   [:persona {:optional true} [:maybe persona/Persona]]
    [:admitted-at {:optional true} [:maybe :int]]
    [:attributes {:optional true} [:map-of :keyword :any]]])
 
@@ -6490,6 +7732,34 @@ one.
   {:events [] :advance 0
    :exhausted {:patient-id patient-id :ward home-ward-name
                :census (facility/ward-census facility board)}})
+
+;; --- M4: Persona (docs/sim-theory.edn's :persona stage) -------------------
+;; :registered is engine-internal, never authorable pathway IR -- the same
+;; treatment :result-followup already gets (pathway.clj's own docstring):
+;; `run` prepends it to every patient's step queue itself, so no
+;; ehr-testing-sim.pathway/Step schema entry exists for it and it never
+;; passes through pathway/valid?. Its decide call is the ACTUAL Persona
+;; stage boundary; folding it into Execute's own step-queue mechanism
+;; rather than a separate pipeline stage is this milestone's own documented
+;; theory-flip note (docs/sim-theory.edn, docs/sim-theory.md) -- the
+;; stage's contract ("samples once, from the run's single seeded RNG, in
+;; fixed order") is satisfied by this event exactly, not merely gestured at.
+
+(defmethod decide :registered
+  [rng t world patient-id _step]
+  ;; :active-mrn is REQUIRED here, not merely conventional: :registered
+  ;; is now every patient's FIRST event, and `replay` (below) bootstraps
+  ;; a never-yet-seen participant's initial state via `(initial-patient
+  ;; pid (:active-mrn event))` off the FIRST event naming them -- every
+  ;; other event type already carries :active-mrn for exactly this
+  ;; reason (a convention this event must honor, not just a rendering
+  ;; nicety), or `replay`'s own bootstrap (and every check.clj invariant
+  ;; built on it) silently seeds `:mrns #{nil}`.
+  {:events [{:event :registered :t t
+             :active-mrn (get-in world [:patients patient-id :active-mrn])
+             :persona (persona/persona rng (:persona-config world))
+             :participants [{:patient-id patient-id :role :subject}]}]
+   :advance 0})
 
 (defmethod decide :admission
   [rng t world patient-id {:keys [location reason force-placement]}]
@@ -6783,6 +8053,10 @@ one.
   once per participant."
   (fn [_patient event] (:event event)))
 
+(defmethod evolve :registered
+  [patient {:keys [persona]}]
+  (assoc patient :persona persona))
+
 (defmethod evolve :admission
   [patient {:keys [location home-ward attending t]}]
   (assoc patient
@@ -6982,6 +8256,20 @@ one.
   (let [[k v] (first queue)]
     [k v (dissoc queue k)]))
 
+(def config-keys
+  "The canonical, documented list of every key `run`'s config map
+  accepts (this def IS the documentation the M4 Task 0 plumbing-
+  completeness test checks against -- a new key earns an entry here in
+  the SAME change that teaches `run` to read it, never after).
+  `ehr-testing-sim.run/run-command` must forward every one of these
+  from its own opts through to `run` -- its own completeness test
+  asserts the full set, not just today's known gaps, so a future key
+  added here without a matching `run-command` forwarding update fails
+  loudly instead of shipping CLI-invisible the way M3's `:pathways` did
+  (caught only by the tools consumer loop, after the fact)."
+  [:seed :patients :pathway :pathways :arrival-gap :warm-up-seconds
+   :facility :providers :churn-profile :order-profiles :persona-config])
+
 (defn run
   "Runs the simulation. config:
     :seed             long (required)
@@ -7041,6 +8329,21 @@ one.
                        pinned fixture; churn is opt-in, ADR-0009's
                        accept-and-record policy doesn't even apply here
                        since nothing about this path changed).
+    :persona-config   M4: ehr-testing-sim.persona/persona's own config
+                      map ({:age-min :age-max :payers-under-65
+                      :payers-65-plus}, all optional -- see that
+                      function's docstring for defaults). EVERY
+                      patient's step queue is prepended with an
+                      engine-internal `:registered` step (never
+                      authorable IR, the same treatment
+                      :result-followup already gets) that samples
+                      exactly one persona per patient, always -- this is
+                      NOT opt-in the way :churn-profile/:pathways are:
+                      Persona is a landed part of Execute's own step
+                      vocabulary now (docs/sim-theory.edn), so this
+                      milestone's own fixture regeneration is expected
+                      and documented (ADR-0009 policy), not guarded
+                      against the way M2b/M3's opt-in additions were.
 
   Returns {:ground-truth [event ...] :state-history {patient-id [state
   ...]} :facility .. :providers [materialized-provider ...]}. The
@@ -7058,14 +8361,15 @@ one.
   rather than assumed; the engine computes it as a byproduct of the
   loop below because decide needs live world state to make its next
   decision, not because it's a second source of truth."
-  [{:keys [seed patients pathway pathways arrival-gap warm-up-seconds facility providers churn-profile order-profiles]
+  [{:keys [seed patients pathway pathways arrival-gap warm-up-seconds facility providers churn-profile order-profiles persona-config]
     :or {patients 1
          pathway pathway/sample-admission-discharge
          arrival-gap 60
          warm-up-seconds 0
          facility config/default-facility
          providers config/default-provider-templates
-         order-profiles order-profiles/default-profiles}}]
+         order-profiles order-profiles/default-profiles
+         persona-config {}}}]
   {:pre [(some? seed) (pathway/valid? pathway)
          (or (nil? pathways) (pathway/valid-pathways-config? pathways))]}
   (let [rng (Random. ^long seed)
@@ -7094,17 +8398,24 @@ one.
         steps-for (if churn-profile
                     (fn [i] (:steps (churn/inject (pathway-for i) churn-profile rng)))
                     (fn [i] (:steps (pathway-for i))))
+        ;; M4: :registered is prepended to EVERY patient's step queue,
+        ;; ahead of whatever InjectChurn produced -- engine-internal,
+        ;; never seen by InjectChurn's own applicability oracle (it
+        ;; operates on `pathway-for`'s output, before this prepend), the
+        ;; same "not authorable IR" treatment :result-followup gets.
+        registered-steps-for (fn [i] (into [{:type :registered}] (steps-for i)))
         init-queue (into (sorted-map)
                          (map-indexed
                           (fn [i arrival-t]
                             [[arrival-t i]
-                             {:patient-id (pid-for i) :steps (steps-for i)}])
+                             {:patient-id (pid-for i) :steps (registered-steps-for i)}])
                           arrivals))
         init-world {:patients (into {} (map-indexed (fn [i _] [(pid-for i) (initial-patient (pid-for i) (mrn-for i))]))
                                     arrivals)
                     :facility facility
                     :providers materialized-providers
                     :order-profiles order-profiles
+                    :persona-config persona-config
                     ;; Task 1 (M2b): cancel-family/transfer-in-error decide
                     ;; methods query the log directly for the event they
                     ;; reinstate from (docs/patient-state-model.md's
@@ -7686,6 +8997,224 @@ one.
 
 ========== END FILE ==========
 
+========== FILE: ./src/ehr_testing_sim/persona.clj ==========
+(ns ehr-testing-sim.persona
+  "Persona (docs/sim-theory.edn's `:persona` stage): seeded, pure
+  sampling of a patient's demographic identity plus payer -- name, DOB
+  (age from a configured distribution), sex, address, a US-format
+  phone number, an obviously-synthetic SSN-shaped identifier, and a
+  payer drawn from the `:payers` pool with docs/operational-models.md's
+  age-linkage (Medicare dominant 65+).
+
+  This is the real `payer-pool` catalytic wire `docs/sim-theory.edn`'s
+  `:persona` comment always named as a forward reference -- it RETIRES
+  the engine-patient-init payer stand-in docs/operational-models.md
+  itself named ('until Persona exists, this model runs at engine
+  patient-init time, as a stand-in that Persona subsumes rather than
+  replaces'): payer sampling now happens HERE, once, at patient
+  creation, never resampled (the attribute-pool contract, ADR-0007).
+  There was no actual stand-in CODE to remove -- `:payer` has been a
+  reserved, always-nil PatientState field since M1 -- so 'retiring' the
+  stand-in means wiring the real sampler in its place, not deleting
+  anything.
+
+  Vendored tables: resources/demographics/{given-names,surnames,
+  places}.edn -- SMALL and HAND-CURATED. resources/demographics/NOTICE
+  records exactly why: this session found no `../` Synthea checkout to
+  extract from (AGENTS.md's 'do not invent facts about upstream
+  sources' rule applies to what this repo claims to have vendored, not
+  only to prose claims), so the tables are original content in the
+  SAME schema shape a real Synthea extraction would use -- a future
+  session with a checkout available can replace their content wholesale
+  with no reader-side change.
+
+  RNG consumption is FIXED per persona (13 draws, always, regardless of
+  which branch any weighted pick lands in) -- the same fixed-consumption
+  law `ehr-testing-sim.engine/assign-pathway` and `ehr-testing-sim.churn`
+  already establish for this project's other probabilistic choices (see
+  `persona`'s own docstring for the exact sequence)."
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [malli.core :as m])
+  (:import [java.util Random]))
+
+;; --- Vendored tables (resources/demographics/) ----------------------------
+
+(def given-names-by-sex-and-decade
+  "Loaded once at namespace load: resources/demographics/given-names.edn
+  -- {sex -> {decade -> [{:name :weight} ...]}}."
+  (edn/read-string (slurp (io/resource "demographics/given-names.edn"))))
+
+(def surnames
+  "Loaded once: resources/demographics/surnames.edn -- a flat weighted
+  pool, [{:name :weight} ...]."
+  (edn/read-string (slurp (io/resource "demographics/surnames.edn"))))
+
+(def places
+  "Loaded once: resources/demographics/places.edn -- a flat weighted
+  pool of full address rows, [{:street :city :state :zip :weight} ...]."
+  (edn/read-string (slurp (io/resource "demographics/places.edn"))))
+
+;; --- Payer pool (docs/operational-models.md's payers model; this
+;; namespace is its real binding, per ADR-0007 decision 4) -----------------
+
+(def Payer
+  [:map
+   [:id :string]
+   [:name :string]
+   [:type [:enum :medicare :medicaid :commercial :self-pay]]])
+
+(def under-65-payers
+  "The weighted pool sampled for patients younger than 65 -- Medicare
+  present but minor (disability/ESRD-eligible non-elderly enrollees are
+  real but a small minority), commercial dominant, per
+  docs/operational-models.md's 'general shape of US payer-mix data'."
+  [{:id "commercial-ppo" :name "Commercial PPO" :type :commercial :weight 45.0}
+   {:id "commercial-hmo" :name "Commercial HMO" :type :commercial :weight 20.0}
+   {:id "medicaid" :name "Medicaid" :type :medicaid :weight 22.0}
+   {:id "self-pay" :name "Self-Pay" :type :self-pay :weight 8.0}
+   {:id "medicare-disability" :name "Medicare (Disability/ESRD)" :type :medicare :weight 5.0}])
+
+(def sixty-five-plus-payers
+  "The weighted pool sampled for patients 65+ -- Medicare dominant
+  (eligibility itself starts at 65, docs/operational-models.md), the
+  age-linkage this namespace's own co-landing invariant checks."
+  [{:id "medicare-65" :name "Medicare" :type :medicare :weight 70.0}
+   {:id "medicare-advantage" :name "Medicare Advantage" :type :medicare :weight 15.0}
+   {:id "commercial-ppo" :name "Commercial PPO" :type :commercial :weight 8.0}
+   {:id "medicaid" :name "Medicaid" :type :medicaid :weight 5.0}
+   {:id "self-pay" :name "Self-Pay" :type :self-pay :weight 2.0}])
+
+;; --- Persona shape ---------------------------------------------------------
+
+(def Persona
+  [:map
+   [:name [:map [:family :string] [:given :string]]]
+   [:sex [:enum :female :male]]
+   [:dob [:re #"^\d{4}-\d{2}-\d{2}$"]]
+   [:age :int]
+   [:address [:map [:street :string] [:city :string] [:state :string] [:zip :string]]]
+   [:phone [:re #"^\d{3}-\d{3}-\d{4}$"]]
+   [:ssn [:re #"^\d{3}-\d{2}-\d{4}$"]]
+   [:payer Payer]])
+
+(defn valid-persona? [p] (m/validate Persona p))
+(defn explain-persona [p] (m/explain Persona p))
+
+;; --- Sampling primitives ---------------------------------------------------
+
+(defn- rand-int-in
+  [^Random rng lo hi]
+  (+ lo (.nextInt rng (inc (- hi lo)))))
+
+(defn- weighted-pick
+  "Which member of `pool` (a seq of maps carrying :weight) `draw` (a
+  uniform double in [0,1), already consumed) falls into -- cumulative-
+  weight bucketing, the same shape ehr-testing-sim.engine's own private
+  weighted-pick uses, kept as an independent small copy here rather
+  than a shared dependency (persona.clj must stay engine-independent --
+  the engine calls INTO persona at patient-init, so the reverse
+  dependency would be circular)."
+  [pool draw]
+  (let [total (reduce + (map :weight pool))
+        target (* draw total)]
+    (loop [members pool acc 0.0]
+      (let [m (first members) more (rest members) acc' (+ acc (double (:weight m)))]
+        (if (or (empty? more) (< target acc')) m (recur more acc'))))))
+
+(def ^:private reference-birth-year
+  "The fixed, documented anchor 'today' is relative to when computing a
+  birth year from a sampled age -- deliberately NOT wall-clock (the
+  determinism law: no unseeded entropy anywhere in the output path).
+  2024 matches ehr-testing-sim.emit-hl7/default-reference-date's own
+  year, so DOB and rendered message timestamps stay mutually plausible
+  for a run using the default reference date; a caller who overrides
+  :reference-date and needs exact DOB-vs-encounter-date coherence is
+  out of this milestone's scope (recorded here, not silently assumed)."
+  2024)
+
+(def ^:private decades
+  "The birth decades resources/demographics/given-names.edn actually
+  covers, ascending -- used to clamp a sampled birth year to the
+  nearest bucket the vendored table has data for."
+  (vec (sort (keys (:female given-names-by-sex-and-decade)))))
+
+(defn- nearest-decade
+  [year]
+  (let [decade (* 10 (quot year 10))]
+    (apply min-key #(Math/abs (long (- % decade))) decades)))
+
+(def ^:private ssn-area-prefix
+  "Fixed area-number prefix for the synthetic SSN-shaped identifier:
+  '900' is inside the block SSA has never issued and states it will
+  never issue (area numbers 000, 666, and 900-999 are permanently
+  excluded from assignment -- notes/facts-register.md F8) -- an
+  obviously-synthetic-by-construction choice, the same design move
+  ADR-0007 already made for provider NPIs (a real, documented
+  never-issued range rather than an arbitrary sentinel format)."
+  "900")
+
+(defn persona
+  "Samples one persona from `rng` (the run's own seeded java.util.Random
+  -- never a derived/isolated stream, ADR-0009's own reasoning extended
+  here) and `config` ({:age-min :age-max :payers-under-65 :payers-65-plus},
+  all optional). Fixed RNG consumption, in this exact order, always:
+
+    1. sex (1 draw)
+    2. age, uniform in [age-min, age-max] (1 draw)
+    3. birth month, 1-12 (1 draw)
+    4. birth day, 1-28 -- deliberately NOT month-length-aware, a
+       documented simplification for non-PHI synthetic data (1 draw)
+    5. given name, weighted within the sampled sex+birth-decade bucket
+       (1 draw)
+    6. surname, weighted over the flat pool (1 draw)
+    7. address, weighted over the flat places pool (1 draw)
+    8. phone area code, 200-999 (1 draw)
+    9. phone exchange, 200-999 (1 draw)
+    10. phone subscriber, 0-9999 (1 draw)
+    11. SSN group number, 1-99 (1 draw)
+    12. SSN serial number, 1-9999 (1 draw)
+    13. payer, weighted over whichever pool the sampled age selects
+        (:payers-65-plus at 65+, :payers-under-65 otherwise -- pool
+        SELECTION is derived from age, not itself a draw) (1 draw)
+
+  13 draws total, always -- fixed regardless of which pool/bucket any
+  weighted pick lands in (the same ADR-0009-derived law
+  ehr-testing-sim.engine/assign-pathway and ehr-testing-sim.churn/
+  roll-gap already state for this project's other probabilistic
+  choices)."
+  [^Random rng {:keys [age-min age-max payers-under-65 payers-65-plus]
+                :or {age-min 0 age-max 90
+                     payers-under-65 under-65-payers
+                     payers-65-plus sixty-five-plus-payers}}]
+  (let [sex (if (< (.nextDouble rng) 0.5) :female :male)
+        age (rand-int-in rng age-min age-max)
+        birth-year (- reference-birth-year age)
+        birth-month (rand-int-in rng 1 12)
+        birth-day (rand-int-in rng 1 28)
+        decade (nearest-decade birth-year)
+        given-name-pool (get-in given-names-by-sex-and-decade [sex decade])
+        given-name (:name (weighted-pick given-name-pool (.nextDouble rng)))
+        surname (:name (weighted-pick surnames (.nextDouble rng)))
+        place (weighted-pick places (.nextDouble rng))
+        area-code (rand-int-in rng 200 999)
+        exchange (rand-int-in rng 200 999)
+        subscriber (rand-int-in rng 0 9999)
+        ssn-group (rand-int-in rng 1 99)
+        ssn-serial (rand-int-in rng 1 9999)
+        payer-pool (if (>= age 65) payers-65-plus payers-under-65)
+        payer (dissoc (weighted-pick payer-pool (.nextDouble rng)) :weight)]
+    {:name {:family surname :given given-name}
+     :sex sex
+     :dob (format "%04d-%02d-%02d" birth-year birth-month birth-day)
+     :age age
+     :address (select-keys place [:street :city :state :zip])
+     :phone (format "%03d-%03d-%04d" area-code exchange subscriber)
+     :ssn (format "%s-%02d-%04d" ssn-area-prefix ssn-group ssn-serial)
+     :payer payer}))
+
+========== END FILE ==========
+
 ========== FILE: ./src/ehr_testing_sim/result.clj ==========
 (ns ehr-testing-sim.result
   "The result-not-throw doctrine, copied (not depended upon) from
@@ -7759,12 +9288,26 @@ one.
   threads into engine/run AND into check/check-all's warm-up-mark
   invariant, so a run always self-checks against the SAME window it
   was actually generated with."
-  (:require [ehr-testing-sim.engine :as engine]
+  (:require [clojure.edn :as edn]
+            [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.check :as check]
             [ehr-testing-sim.churn :as churn]
             [ehr-testing-sim.emit-hl7 :as emit-hl7]
             [ehr-testing-sim.manifest :as manifest]
             [ehr-testing-sim.result :as result]))
+
+(defn- merge-config-file
+  "M4 Task 0: `:config` (a path to an EDN file) supplies the data-heavy
+  engine keys that have no CLI flag of their own (`:pathway`/
+  `:pathways`/`:order-profiles`, a full `:churn-profile` map) -- read
+  once, merged UNDER the caller's own opts (an explicit opt wins over
+  anything the file also names; the file exists to supply what flags
+  can't express, not to override them). Absent `:config` -- the
+  default -- this is the identity function on opts, byte for byte."
+  [opts]
+  (if-let [path (:config opts)]
+    (merge (edn/read-string (slurp path)) (dissoc opts :config))
+    opts))
 
 (defn run-command
   "opts: :seed (required, long), :patients (long), :reference-date
@@ -7787,39 +9330,61 @@ one.
   (ehr-testing-sim.engine/run's own :churn-profile wiring). Neither
   key present -- the default -- means no :churn-profile reaches
   engine/run at all, the opt-in path Task 0's pinned-fixture
-  expectation depends on."
-  [{:keys [seed patients emit reference-date utc-offset warm-up-seconds churn churn-profile] :as opts}]
-  (if (nil? seed)
-    (result/error :missing-required-opt
-                  {:message "--seed is required (determinism is a feature, not a default)"
-                   :opt :seed})
-    (let [reference-date (or reference-date emit-hl7/default-reference-date)
-          utc-offset (or utc-offset emit-hl7/default-utc-offset)
-          warm-up-seconds (or warm-up-seconds 0)
-          effective-churn-profile (cond
-                                    churn-profile (merge churn/default-churn-profile churn-profile)
-                                    churn churn/sample-profile
-                                    :else nil)
-          engine-params (-> (select-keys opts [:patients :arrival-gap :warm-up-seconds])
-                             (assoc :reference-date reference-date :utc-offset utc-offset))
-          {:keys [ground-truth facility providers exhausted]}
-          (engine/run (merge {:seed seed :churn-profile effective-churn-profile}
-                             (select-keys opts [:patients :arrival-gap :facility :providers :warm-up-seconds])))
-          checked (when-not exhausted (check/check-all ground-truth facility warm-up-seconds))]
-      (cond
-        exhausted (result/error :capacity-exhausted exhausted)
-        (not (result/ok? checked)) (result/error :self-check-failed (:payload checked))
-        :else
-        (result/ok
-         (cond-> {:ground-truth ground-truth
-                  :manifest (manifest/build {:seed seed
-                                             :engine-params engine-params
-                                             :config {:path "(inline)"
-                                                      :sha256 (apply str (repeat 64 "0"))}
-                                             :invocation {:verb "run" :opts opts}})
-                  :summary {:patients (or patients 1)
-                            :events (count ground-truth)}}
-           (= "hl7" emit) (assoc :messages (emit-hl7/emit ground-truth reference-date utc-offset facility providers))))))))
+  expectation depends on.
+
+  M4 Task 0: `:config` (a path to an EDN file) is a passthrough vehicle
+  for the data-heavy engine keys that have no CLI flag of their own
+  (`:pathway`/`:pathways`/`:order-profiles`, and `:churn-profile` when a
+  caller wants the full map rather than the bare `--churn` toggle) --
+  read once, merged UNDER the rest of opts (explicit flag-driven keys
+  win on any overlap; the file supplies what flags can't express) --
+  see `merge-config-file`. Every key in `ehr-testing-sim.engine/config-
+  keys` reaches `engine/run` unconditionally, whether it arrived via a
+  flag or via `:config` -- that completeness is this function's own
+  plumbing-completeness test's whole point (M3's `:pathways` shipped
+  CLI-invisible despite reaching `engine/run` from a direct API caller;
+  never again silently, per that test).
+
+  `opts`'s second, injectable arity follows the SAME -fn convention
+  `ehr-testing-sim.cli/dispatch-action` already uses (`:engine-run-fn`,
+  defaulting to the real `ehr-testing-sim.engine/run`) -- the seam the
+  plumbing-completeness test uses to capture exactly what reaches the
+  engine without running a real simulation against sentinel data."
+  ([opts] (run-command opts {}))
+  ([raw-opts {:keys [engine-run-fn] :or {engine-run-fn engine/run}}]
+   (let [opts (merge-config-file raw-opts)
+         {:keys [seed patients emit reference-date utc-offset warm-up-seconds churn churn-profile]} opts]
+     (if (nil? seed)
+       (result/error :missing-required-opt
+                     {:message "--seed is required (determinism is a feature, not a default)"
+                      :opt :seed})
+       (let [reference-date (or reference-date emit-hl7/default-reference-date)
+             utc-offset (or utc-offset emit-hl7/default-utc-offset)
+             warm-up-seconds (or warm-up-seconds 0)
+             effective-churn-profile (cond
+                                       churn-profile (merge churn/default-churn-profile churn-profile)
+                                       churn churn/sample-profile
+                                       :else nil)
+             engine-params (-> (select-keys opts [:patients :arrival-gap :warm-up-seconds])
+                                (assoc :reference-date reference-date :utc-offset utc-offset))
+             {:keys [ground-truth facility providers exhausted]}
+             (engine-run-fn (merge (select-keys opts engine/config-keys)
+                                   {:seed seed :churn-profile effective-churn-profile}))
+             checked (when-not exhausted (check/check-all ground-truth facility warm-up-seconds))]
+         (cond
+           exhausted (result/error :capacity-exhausted exhausted)
+           (not (result/ok? checked)) (result/error :self-check-failed (:payload checked))
+           :else
+           (result/ok
+            (cond-> {:ground-truth ground-truth
+                     :manifest (manifest/build {:seed seed
+                                                :engine-params engine-params
+                                                :config {:path "(inline)"
+                                                         :sha256 (apply str (repeat 64 "0"))}
+                                                :invocation {:verb "run" :opts opts}})
+                     :summary {:patients (or patients 1)
+                               :events (count ground-truth)}}
+              (= "hl7" emit) (assoc :messages (emit-hl7/emit ground-truth reference-date utc-offset facility providers))))))))))
 
 ========== END FILE ==========
 
@@ -7845,6 +9410,7 @@ one.
             [ehr-testing-sim.config :as config]
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.order-profiles :as order-profiles]
+            [ehr-testing-sim.persona :as persona]
             [ehr-testing-sim.result :as result]))
 
 (def test-facility
@@ -8150,6 +9716,34 @@ one.
           {:keys [ground-truth]} (engine/run {:seed seed :patients patients :facility facility})]
       (result/ok? (check/check-all ground-truth facility)))))
 
+;; --- M4: Persona ------------------------------------------------------
+
+(def ^:private a-persona
+  (persona/persona (java.util.Random. 1) {}))
+
+(deftest registered-is-every-patients-first-event-holds-for-legit-log
+  (is (empty? (check/registered-is-every-patients-first-event
+               [{:event :registered :t 0 :active-mrn "MRN000001" :persona a-persona :participants (subject "P1")}
+                {:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+                 :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}]))))
+
+(deftest registered-is-every-patients-first-event-detects-a-missing-registration
+  (is (seq (check/registered-is-every-patients-first-event
+            [{:event :admission :t 0 :home-ward "Renal" :participants (subject "P1")
+              :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}}]))))
+
+(deftest registered-persona-is-schema-valid-holds-for-a-real-persona
+  (is (empty? (check/registered-persona-is-schema-valid
+               [{:event :registered :t 0 :active-mrn "MRN000001" :persona a-persona :participants (subject "P1")}]))))
+
+(deftest registered-persona-is-schema-valid-detects-a-malformed-persona
+  (is (seq (check/registered-persona-is-schema-valid
+            [{:event :registered :t 0 :active-mrn "MRN000001" :persona {:name "not a map"} :participants (subject "P1")}]))))
+
+(deftest engine-run-satisfies-check-all-with-persona
+  (let [{:keys [ground-truth]} (engine/run {:seed 5 :patients 4})]
+    (is (result/ok? (check/check-all ground-truth)))))
+
 ========== END FILE ==========
 
 ========== FILE: ./test/ehr_testing_sim/churn_scenarios_test.clj ==========
@@ -8206,6 +9800,18 @@ one.
   [{:name {:family "Chen" :given "A"} :role :attending
     :specialty "Nephrology" :wards [:renal :ed]}])
 
+(defn- clinical-events
+  "M4: strips :registered events -- every patient's now-automatic first
+  event (Persona, engine.clj's own docstring) -- before asserting an
+  EXACT ground-truth sequence, so these scenarios keep asserting the
+  churn-relevant shape they were written for rather than every
+  positional index shifting by one per patient. :registered never
+  renders a message (no message-type-registry entry, same treatment
+  :step-rejected gets), so the `triggers` sequence below is already
+  unaffected and needs no equivalent filter."
+  [ground-truth]
+  (vec (remove #(= :registered (:event %)) ground-truth)))
+
 (defn- triggers
   "The ordered A-trigger sequence a ground-truth log renders to, for
   compact exact-sequence assertions."
@@ -8256,7 +9862,7 @@ one.
       (is (= "Renal" (get-in p3-before-merge [:home-ward])))
       (is (= "ED" (get-in p3-before-merge [:location :ward]))))
     (testing "exact ground-truth event sequence"
-      (is (= [:admission :admission :admission :merge] (mapv :event ground-truth))))
+      (is (= [:admission :admission :admission :merge] (mapv :event (clinical-events ground-truth)))))
     (testing "the merge names P3 as :merged, P1 as :survivor"
       (is (= #{[:survivor (engine/patient-id-for seed 0)] [:merged p3-id]}
              (set (map (juxt :role :patient-id) (:participants survivor))))))
@@ -8281,14 +9887,15 @@ one.
                                                        {:type :transfer-in-error :location "ED"}
                                                        ;; a genuine, INTENDED transfer to ED
                                                        ;; follows -- the "retransfer"
-                                                       {:type :transfer :location "ED"}]}])]
+                                                       {:type :transfer :location "ED"}]}])
+        events (clinical-events ground-truth)]
     (testing "exact ground-truth event sequence: admission, transfer(err), cancel-transfer(err), transfer(real)"
-      (is (= [:admission :transfer :cancel-transfer :transfer] (mapv :event ground-truth)))
-      (is (= [nil true nil] (mapv :in-error (rest ground-truth)))))
+      (is (= [:admission :transfer :cancel-transfer :transfer] (mapv :event events)))
+      (is (= [nil true nil] (mapv :in-error (rest events)))))
     (testing "the in-error correction left the patient exactly where they started, and the retransfer is a real move"
-      (is (= "Renal" (get-in (nth ground-truth 2) [:home-ward])))
-      (is (= "Renal" (get-in (nth ground-truth 2) [:location :ward])))
-      (is (= "ED" (get-in (nth ground-truth 3) [:location :ward]))))
+      (is (= "Renal" (get-in (nth events 2) [:home-ward])))
+      (is (= "Renal" (get-in (nth events 2) [:location :ward])))
+      (is (= "ED" (get-in (nth events 3) [:location :ward]))))
     (testing "exact rendered message sequence: A01 A02 A12 A02"
       (is (= ["A01" "A02" "A12" "A02"]
              (triggers ground-truth one-bed-one-surge-facility provider-templates))))))
@@ -8303,12 +9910,12 @@ one.
                                  [{:name "p1" :steps [{:type :admission :location "Renal"}
                                                        {:type :bed-swap :with p2-id}]}
                                   {:name "p2" :steps [{:type :admission :location "Renal"}]}])
-        [p1-admit p2-admit bed-swap] ground-truth]
+        [p1-admit p2-admit bed-swap] (clinical-events ground-truth)]
     (testing "sanity: one licensed, one surge, same ward"
       (is (= :licensed (get-in p1-admit [:location :placement])))
       (is (= :surge (get-in p2-admit [:location :placement]))))
     (testing "exact ground-truth event sequence"
-      (is (= [:admission :admission :bed-swap] (mapv :event ground-truth))))
+      (is (= [:admission :admission :bed-swap] (mapv :event (clinical-events ground-truth)))))
     (testing "placements are exchanged"
       (is (= (:location p2-admit) (get-in bed-swap [:swap (engine/patient-id-for seed 0) :to])))
       (is (= (:location p1-admit) (get-in bed-swap [:swap p2-id :to]))))
@@ -8535,6 +10142,24 @@ one.
     ;; canonical output is readable EDN
     (is (map? (read-string (first @printed))))))
 
+;; --- M4 Task 0: the wiring fix, proven at the CLI-embedding level ---------
+
+(deftest dispatch-action-run-with-pathways-reaches-the-engine-and-emits-orm-oru
+  (testing "M3's :pathways (and, through it, an authored :order step)
+            reaches the engine THROUGH dispatch-action -- the same
+            entrypoint the standalone shell and a mounting host both
+            go through -- proving the completeness fix, not just
+            run-command's own unit test"
+    (let [pathway {:name "cbc-order" :steps [{:type :admission :location "Renal"}
+                                             {:type :order :profile :cbc}
+                                             {:type :discharge}]}
+          r (cli/dispatch-action "run" {:seed 7 :patients 1 :emit "hl7"
+                                        :pathways [{:pathway pathway :weight 1}]})]
+      (is (result/ok? r))
+      (let [messages (:messages (:payload r))]
+        (is (some #(string/includes? % "^O01") messages) "ORM^O01 (order-placed) present")
+        (is (some #(string/includes? % "^R01") messages) "ORU^R01 (result-available) present")))))
+
 (deftest check-catches-planted-violation
   (let [bad [{:event :discharge :t 0 :participants [{:patient-id "P1" :role :subject}]}
              {:event :admission :t 5 :participants [{:patient-id "P1" :role :subject}] :location "Renal"}]
@@ -8629,13 +10254,15 @@ one.
   and every rendered timestamp carries the pinned :utc-offset's HL7-
   style zone suffix. M2a (ADR-0010): PID-3 renders the event's own
   :active-mrn, not a bare :mrn."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [ehr-testing-sim.config :as config]
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.emit-hl7 :as emit-hl7]
+            [ehr-testing-sim.persona :as persona]
             [com.nervestaple.hl7-parser.parser :as parser]
             [com.nervestaple.hl7-parser.message :as message])
   (:import [java.time LocalDate LocalDateTime]
@@ -8987,6 +10614,151 @@ one.
           order-result-messages (filter #(or (re-find #"\^O01" %) (re-find #"\^R01" %)) messages)]
       (= 2 (count order-result-events) (count order-result-messages)))))
 
+;; --- M4: PID demographic enrichment + IN1 (payer) -------------------------
+
+(defn- find-registered
+  [ground-truth patient-id]
+  (first (filter #(and (= :registered (:event %))
+                       (some (fn [p] (= patient-id (:patient-id p))) (:participants %)))
+                 ground-truth)))
+
+(deftest admission-pid-carries-demographic-fields
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        admission (first (filter #(= :admission (:event %)) ground-truth))
+        patient-id (:patient-id (first (:participants admission)))
+        {:keys [persona]} (find-registered ground-truth patient-id)
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+        parsed (parser/parse (first messages))]
+    (testing "PID-5: XPN family^given"
+      (is (= (str (get-in persona [:name :family]) "^" (get-in persona [:name :given]))
+             (message/get-field-first-value parsed "PID" 5))))
+    (testing "PID-7: DOB, HL7 date (YYYYMMDD, dashes stripped)"
+      (is (= (clojure.string/replace (:dob persona) "-" "")
+             (message/get-field-first-value parsed "PID" 7))))
+    (testing "PID-8: sex, HL7 Table 0001 (F/M)"
+      (is (= (case (:sex persona) :female "F" :male "M")
+             (message/get-field-first-value parsed "PID" 8))))
+    (testing "PID-11: XAD street^^city^state^zip"
+      (let [{:keys [street city state zip]} (:address persona)]
+        (is (= (str street "^^" city "^" state "^" zip)
+               (message/get-field-first-value parsed "PID" 11)))))
+    (testing "PID-13: phone"
+      (is (= (:phone persona) (message/get-field-first-value parsed "PID" 13))))))
+
+(deftest admission-carries-in1-with-the-sampled-payer
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        admission (first (filter #(= :admission (:event %)) ground-truth))
+        patient-id (:patient-id (first (:participants admission)))
+        {:keys [persona]} (find-registered ground-truth patient-id)
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+        parsed (parser/parse (first messages))]
+    (testing "IN1-1: set id"
+      (is (= "1" (message/get-field-first-value parsed "IN1" 1))))
+    (testing "IN1-3/IN1-4: insurance company id/name, from the sampled payer pool entry"
+      (is (= (get-in persona [:payer :id]) (message/get-field-first-value parsed "IN1" 3)))
+      (is (= (get-in persona [:payer :name]) (message/get-field-first-value parsed "IN1" 4))))))
+
+(deftest non-admission-messages-carry-enriched-pid-but-no-in1
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 5})
+        discharge (first (filter #(= :discharge (:event %)) ground-truth))
+        patient-id (:patient-id (first (:participants discharge)))
+        {:keys [persona]} (find-registered ground-truth patient-id)
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+        discharge-msg (first (filter #(re-find #"\^A03" %) messages))
+        parsed (parser/parse discharge-msg)]
+    (testing "PID is enriched the same way on every message type, not admission-only"
+      (is (= (str (get-in persona [:name :family]) "^" (get-in persona [:name :given]))
+             (message/get-field-first-value parsed "PID" 5))))
+    (testing "IN1 rides ONLY the admission message -- the real HL7 convention this milestone follows"
+      (is (empty? (message/get-segments parsed "IN1"))))))
+
+(deftest hand-built-worlds-without-a-registered-event-fall-back-to-legacy-pid
+  (testing "old test worlds that never processed a :registered step (e.g. churn-scenarios-style
+            hand-driven decide/evolve) still emit the pre-M4 3-field PID -- no persona, no crash"
+    (let [world0 {:patients {"P1" (engine/initial-patient "P1" "MRN000001")}
+                  :facility config/default-facility :providers config/default-provider-templates
+                  :ground-truth []}
+          {:keys [events]} (engine/decide (Random. 1) 0 world0 "P1" {:type :admission :location "Renal"})
+          messages (emit-hl7/emit events ref-date utc-offset config/default-facility config/default-provider-templates)
+          parsed (parser/parse (first messages))]
+      (is (= "MRN000001" (message/get-field-first-value parsed "PID" 3)))
+      (is (= "" (message/get-field-first-value parsed "PID" 5)))
+      (is (empty? (message/get-segments parsed "IN1"))))))
+
+;; --- M4 Task 4: the ER7 escaping property ----------------------------------
+;; org.clojars.cmiles74/clojure-hl7-parser implements NO escape-sequence
+;; handling in EITHER direction -- verified directly against its own source
+;; (notes/facts-register.md F9): pr-field/pr-content concatenate field
+;; content with no encoding step on write, and read-text's escape-handling
+;; branch (and read-subcomponents') is commented-out dead code on read, so
+;; a literal delimiter character corrupts field boundaries unless something
+;; upstream escapes it, and get-field-first-value returns an escape sequence
+;; LITERALLY rather than decoding it. This repo's own escape-er7/unescape-er7
+;; are the documented workaround: encode on write (this repo's job, since
+;; the library doesn't), decode on read (a small helper this repo provides
+;; since the library's own decoder is dead code).
+
+(defn- persona-with-family-name
+  [family-name]
+  (assoc (persona/persona (Random. 1) {}) :name {:family family-name :given "Pat"}))
+
+(defn- pid5-round-trip
+  "Builds a minimal admission-shaped world with `persona`, emits it, parses
+  the message back, and returns the raw PID-5 family name substring (before
+  the ^ component separator)."
+  [persona]
+  (let [world0 {:patients {"P1" (assoc (engine/initial-patient "P1" "MRN000001") :persona persona)}
+                :facility config/default-facility :providers config/default-provider-templates
+                :ground-truth []}
+        registered-event {:event :registered :t 0 :active-mrn "MRN000001" :persona persona
+                          :participants [{:patient-id "P1" :role :subject}]}
+        world1 (update-in world0 [:patients "P1"] engine/evolve registered-event)
+        {:keys [events]} (engine/decide (Random. 1) 0 world1 "P1" {:type :admission :location "Renal"})
+        ground-truth (into [registered-event] events)
+        messages (emit-hl7/emit ground-truth ref-date utc-offset config/default-facility config/default-provider-templates)
+        parsed (parser/parse (first messages))
+        pid5 (message/get-field-first-value parsed "PID" 5)]
+    (first (str/split pid5 #"\^"))))
+
+(deftest scripted-apostrophe-name-round-trips-byte-faithfully
+  (testing "O'Brien needs NO escaping at all -- apostrophe isn't an ER7
+            delimiter character, so the raw parsed value already IS the
+            original, no workaround needed"
+    (is (= "O'Brien" (pid5-round-trip (persona-with-family-name "O'Brien"))))))
+
+(deftest scripted-adversarial-delimiter-name-is-a-documented-parser-finding
+  (testing "Sm|th (a literal ER7 field-delimiter character embedded in a
+            name) is the adversarial case: the RAW parsed value is the
+            ESCAPED form, not the original -- proof the parser decodes
+            NOTHING (F9) -- and this repo's own unescape-er7 is required
+            to recover the original byte-faithfully"
+    (let [raw (pid5-round-trip (persona-with-family-name "Sm|th"))]
+      (is (not= "Sm|th" raw) "the library does not decode escape sequences -- this is the finding")
+      (is (= "Sm\\F\\th" raw) "our own encoder escaped the embedded delimiter, per standard ER7")
+      (is (= "Sm|th" (emit-hl7/unescape-er7 raw)) "our own decoder recovers the original exactly"))))
+
+(deftest escape-er7-is-identity-for-strings-with-no-delimiter-characters
+  (doseq [s ["O'Brien" "Smith-Jones" "D'Angelo" "Anderson-Lee" "Plain Name"]]
+    (is (= s (emit-hl7/escape-er7 s)))))
+
+(deftest escape-then-unescape-round-trips-every-reserved-character
+  (doseq [ch [\| \^ \~ \& \\]]
+    (let [s (str "a" ch "b")]
+      (is (= s (emit-hl7/unescape-er7 (emit-hl7/escape-er7 s)))))))
+
+(defspec every-generated-persona-name-round-trips-through-unescape-er7 200
+  (testing "the general property: ANY family name -- letters, apostrophes,
+            hyphens, spaces, or literal ER7 delimiter characters, in any
+            combination -- round-trips byte-faithfully through emit + parse
+            + unescape-er7, even when the raw parsed value (pre-unescape)
+            is not the original"
+    (prop/for-all [family-name (gen/not-empty
+                                (gen/vector (gen/elements (concat "ABCDEFGabcdefg '-" "|^~&\\"))
+                                            1 12))]
+      (let [family-name (apply str family-name)
+            raw (pid5-round-trip (persona-with-family-name family-name))]
+        (= family-name (emit-hl7/unescape-er7 raw))))))
+
 (defspec timestamp-anchoring-property 100
   (prop/for-all [seconds (gen/choose 0 6000000)]
     (let [ts (emit-hl7/hl7-timestamp ref-date seconds utc-offset)
@@ -9145,8 +10917,10 @@ one.
 
 (deftest walking-skeleton-shape
   (let [{:keys [ground-truth]} (engine/run {:seed 7 :patients 3})]
-    (testing "each patient admits then discharges, in time order"
-      (is (= 6 (count ground-truth)))
+    (testing "each patient registers, admits, then discharges, in time
+              order (M4: :registered is now every patient's first
+              event, Persona's own stage boundary)"
+      (is (= 9 (count ground-truth)))
       (is (= #{"MRN000001" "MRN000002" "MRN000003"}
              (set (map :active-mrn ground-truth))))
       (is (apply <= (map :t ground-truth))))
@@ -9681,8 +11455,8 @@ one.
           {:keys [ground-truth]} (engine/run {:seed 1 :patients 2 :pathways config})
           id0 (engine/patient-id-for 1 0)
           id1 (engine/patient-id-for 1 1)]
-      (is (= [:admission :discharge] (mapv :event (engine/events-for-patient ground-truth id0))))
-      (is (= [:admission] (mapv :event (engine/events-for-patient ground-truth id1)))))))
+      (is (= [:registered :admission :discharge] (mapv :event (engine/events-for-patient ground-truth id0))))
+      (is (= [:registered :admission] (mapv :event (engine/events-for-patient ground-truth id1)))))))
 
 (deftest absent-pathways-key-is-unperturbed-by-this-milestone
   (testing "the degenerate case (roadmap.md's M3 entry): a run with NO
@@ -9755,10 +11529,10 @@ one.
           {:keys [ground-truth]} (engine/run {:seed 7 :patients 1 :pathways [{:pathway pathway :weight 1}]})
           kinds (mapv :event ground-truth)]
       (testing "order-placed and result-available both appear, result strictly after order, before discharge"
-        (is (= [:admission :order-placed :result-available :discharge] kinds))
-        (let [[_ order result _] ground-truth]
+        (is (= [:registered :admission :order-placed :result-available :discharge] kinds))
+        (let [[_ _ order result _] ground-truth]
           (is (< (:t order) (:t result) (:t (last ground-truth))))
-          (is (= 1 (:order-event-id result))))))))
+          (is (= 2 (:order-event-id result))))))))
 
 (defspec order-and-result-round-trip-through-run-for-any-seed 100
   (prop/for-all [seed gen/large-integer]
@@ -9769,10 +11543,10 @@ one.
       (result/ok? (check/check-all ground-truth)))))
 
 (deftest pinned-seed-survives-decide-evolve-refactor
-  (testing "the fixture pins the POST-M2a baseline (ADR-0009/ADR-0010/
-            ADR-0011 -- identity/participants and the seconds clock
-            both perturbed the pre-M2a baseline this test used to pin,
-            regenerated ONCE per the M2a session plan, not a bug).
+  (testing "the fixture pins the POST-M4 baseline (ADR-0009 -- Persona's
+            :registered event, prepended to every patient's step queue,
+            perturbed the post-M2a baseline this test used to pin,
+            regenerated ONCE per the M4 session plan, not a bug).
             This test now guards against FUTURE undocumented drift."
     (let [baseline (edn/read-string
                     (slurp (io/resource "ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn")))
@@ -9906,49 +11680,43 @@ one.
 
 ========== FILE: ./test/ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn ==========
 ;; Captured from ehr-testing-sim.engine/run {:seed 42 :patients 5}
-;; POST-M2a (2026-07-26) -- see notes/ADRs.md ADR-0009, ADR-0010,
-;; ADR-0011. This file previously pinned the POST-Milestone-M1 baseline
-;; (bed choice / attending sampling RNG draws). M2a's ONE deliberate
-;; regeneration (per this session's own seed-perturbation plan --
-;; regenerate once, not once per task) folds in TWO changes at once:
+;; POST-M4 (2026-07-26) -- see notes/ADRs.md ADR-0009 (seed-stability
+;; policy) and .agents/plans/roadmap.md's M4 entry (Persona). This file
+;; previously pinned the POST-M2a baseline (identity/:participants,
+;; seconds clock). M4's regeneration (the SECOND deliberate
+;; regeneration this fixture has had, per ADR-0009's own expectation
+;; that this happens again whenever a milestone's new step types add
+;; stochastic behavior existing pathways now exercise) folds in ONE
+;; change:
 ;;
-;; 1. Identity (ADR-0010): every event now carries :active-mrn (was
-;;    :mrn) and :participants (a vector of {:patient-id :role}, new).
-;;    The `:mrn` key is gone from every event map.
-;; 2. Time (ADR-0011): every :t is now SECONDS from run start (was
-;;    minutes); every event carries :warm-up (this run used
-;;    :warm-up-seconds 0, its default, so every mark is false). Note
-;;    also: :arrival-gap stays authored in MINUTES (same carve-out as
-;;    :delay's IR, and for the same calibration reason -- see
-;;    engine.clj's `run` docstring) and is converted to seconds
-;;    internally, so admission timestamps below land on round-minute
-;;    second values (0, 3480=58min, 78min, ...) rather than arbitrary
-;;    seconds -- expected, not a bug.
+;; 1. Persona (docs/sim-theory.edn's :persona stage, landed for real):
+;;    EVERY patient's step queue is now prepended with an engine-
+;;    internal `:registered` event (never authorable IR, the same
+;;    treatment :result-followup already gets) carrying a freshly
+;;    sampled `:persona` (name/DOB/sex/address/phone/SSN-shaped
+;;    id/payer, ehr-testing-sim.persona/Persona) -- 13 new RNG draws
+;;    PER PATIENT, consumed before that patient's own :admission decide
+;;    call. This shifts the entire downstream RNG stream (bed choice,
+;;    attending sampling, delay durations) relative to the pre-M4
+;;    baseline, even though no clinical step type or pathway changed --
+;;    exactly the "generator's stochastic surface grew" case ADR-0009
+;;    already names and accepts, not a bug. Compare: patient 5's bed
+;;    below is now RENAL-H02 where the pre-M4 baseline had RENAL-H01,
+;;    and every discharge timestamp shifted -- the RELATIVE admission
+;;    order and pathway shape are unchanged, only the specific draws.
 ;;
-;; BEFORE (pre-M2a, :mrn/minutes -- see git history for the full body):
-;;   {:event :admission, :t 0,   :mrn "MRN000001", ...}
-;;   {:event :admission, :t 58,  :mrn "MRN000002", ...}
-;;   {:event :admission, :t 78,  :mrn "MRN000003", ...}
-;;   {:event :admission, :t 93,  :mrn "MRN000004", ...}
-;;   {:event :admission, :t 143, :mrn "MRN000005", ...}
-;;   {:event :discharge, :t 179, :mrn "MRN000004", ...}
-;;   {:event :discharge, :t 202, :mrn "MRN000002", ...}
-;;   {:event :discharge, :t 222, :mrn "MRN000001", ...}
-;;   {:event :discharge, :t 248, :mrn "MRN000003", ...}
-;;   {:event :discharge, :t 304, :mrn "MRN000005", ...}
-;; AFTER (post-M2a, :active-mrn+:participants/seconds+:warm-up): this
-;; file's body, below. The RNG's own draw sequence and values are
-;; IDENTICAL to pre-M2a (same bed choices, same attendings, same
-;; relative admission order, each :t exactly 60x its pre-M2a minute
-;; value) -- only the identity/time SHAPE and the seconds SCALING
-;; changed, not the underlying stochastic choices.
+;; BEFORE (pre-M4, no :registered/:persona -- see git history for the
+;; full body): five :admission events (t 0/3480/4680/5580/8580) each
+;; followed eventually by a :discharge, ten events total.
+;; AFTER (post-M4): fifteen events -- a :registered immediately
+;; precedes each patient's own :admission, this file's body below.
 ;;
 ;; Regenerate again -- deliberately, not casually -- the next time a
 ;; milestone's new step types or config surface add stochastic
 ;; behavior existing pathways now exercise (ADR-0009's own expectation,
 ;; not a bug to chase). See
 ;; ehr_testing_sim.engine_test/pinned-seed-survives-decide-evolve-refactor.
-{:ground-truth [{:event :admission, :t 0, :active-mrn "MRN000001", :reason "Kidney problems", :attending "0384055899", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-02", :placement :licensed}, :forced false, :participants [{:patient-id "PID-000000-918175ce", :role :subject}], :warm-up false} {:event :admission, :t 3480, :active-mrn "MRN000002", :reason "Kidney problems", :attending "0384055899", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-04", :placement :licensed}, :forced false, :participants [{:patient-id "PID-000001-881e2907", :role :subject}], :warm-up false} {:event :admission, :t 4680, :active-mrn "MRN000003", :reason "Kidney problems", :attending "3903633105", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-01", :placement :licensed}, :forced false, :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}], :warm-up false} {:event :admission, :t 5580, :active-mrn "MRN000004", :reason "Kidney problems", :attending "3903633105", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-03", :placement :licensed}, :forced false, :participants [{:patient-id "PID-000003-75598130", :role :subject}], :warm-up false} {:event :admission, :t 8580, :active-mrn "MRN000005", :reason "Kidney problems", :attending "3903633105", :home-ward "Renal", :location {:ward "Renal", :bed "RENAL-H01", :placement :surge}, :forced false, :participants [{:patient-id "PID-000004-2467dffa", :role :subject}], :warm-up false} {:event :discharge, :t 10740, :active-mrn "MRN000004", :location {:ward "Renal", :bed "RENAL-03", :placement :licensed}, :attending "3903633105", :participants [{:patient-id "PID-000003-75598130", :role :subject}], :warm-up false} {:event :discharge, :t 12120, :active-mrn "MRN000002", :location {:ward "Renal", :bed "RENAL-04", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000001-881e2907", :role :subject}], :warm-up false} {:event :discharge, :t 13320, :active-mrn "MRN000001", :location {:ward "Renal", :bed "RENAL-02", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000000-918175ce", :role :subject}], :warm-up false} {:event :discharge, :t 14880, :active-mrn "MRN000003", :location {:ward "Renal", :bed "RENAL-01", :placement :licensed}, :attending "3903633105", :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}], :warm-up false} {:event :discharge, :t 18240, :active-mrn "MRN000005", :location {:ward "Renal", :bed "RENAL-H01", :placement :surge}, :attending "3903633105", :participants [{:patient-id "PID-000004-2467dffa", :role :subject}], :warm-up false}]}
+{:ground-truth [{:event :registered, :t 0, :active-mrn "MRN000001", :persona {:name {:family "Gonzalez", :given "Lisa"}, :sex :female, :dob "1965-06-12", :age 59, :address {:street "271 Brookside Ave", :city "Milwaukee", :state "WI", :zip "53202"}, :phone "823-937-3975", :ssn "900-07-4424", :payer {:id "medicaid", :name "Medicaid", :type :medicaid}}, :participants [{:patient-id "PID-000000-918175ce", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000000-918175ce", :role :subject}], :active-mrn "MRN000001", :attending "0384055899", :warm-up false, :reason "Kidney problems", :event :admission, :t 0, :location {:ward "Renal", :bed "RENAL-02", :placement :licensed}, :forced false} {:event :registered, :t 3480, :active-mrn "MRN000002", :persona {:name {:family "Lopez", :given "James"}, :sex :male, :dob "1945-11-22", :age 79, :address {:street "48 Sycamore St", :city "Buffalo", :state "NY", :zip "14202"}, :phone "401-494-0794", :ssn "900-06-0257", :payer {:id "medicare-65", :name "Medicare", :type :medicare}}, :participants [{:patient-id "PID-000001-881e2907", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000001-881e2907", :role :subject}], :active-mrn "MRN000002", :attending "0384055899", :warm-up false, :reason "Kidney problems", :event :admission, :t 3480, :location {:ward "Renal", :bed "RENAL-03", :placement :licensed}, :forced false} {:event :registered, :t 4680, :active-mrn "MRN000003", :persona {:name {:family "Martinez", :given "Ashley"}, :sex :female, :dob "1991-03-01", :age 33, :address {:street "9 Willow Ct", :city "Richmond", :state "VA", :zip "23219"}, :phone "407-793-4109", :ssn "900-76-9258", :payer {:id "medicaid", :name "Medicaid", :type :medicaid}}, :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}], :active-mrn "MRN000003", :attending "0384055899", :warm-up false, :reason "Kidney problems", :event :admission, :t 4680, :location {:ward "Renal", :bed "RENAL-04", :placement :licensed}, :forced false} {:event :registered, :t 5580, :active-mrn "MRN000004", :persona {:name {:family "Smith", :given "Amanda"}, :sex :female, :dob "1986-01-09", :age 38, :address {:street "271 Brookside Ave", :city "Milwaukee", :state "WI", :zip "53202"}, :phone "511-509-3246", :ssn "900-23-6285", :payer {:id "commercial-ppo", :name "Commercial PPO", :type :commercial}}, :participants [{:patient-id "PID-000003-75598130", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000003-75598130", :role :subject}], :active-mrn "MRN000004", :attending "0384055899", :warm-up false, :reason "Kidney problems", :event :admission, :t 5580, :location {:ward "Renal", :bed "RENAL-01", :placement :licensed}, :forced false} {:event :registered, :t 8580, :active-mrn "MRN000005", :persona {:name {:family "Okafor", :given "Susan"}, :sex :female, :dob "1963-03-24", :age 61, :address {:street "204 Maple Ave", :city "Portland", :state "OR", :zip "97201"}, :phone "922-523-6433", :ssn "900-65-1877", :payer {:id "medicaid", :name "Medicaid", :type :medicaid}}, :participants [{:patient-id "PID-000004-2467dffa", :role :subject}], :warm-up false} {:home-ward "Renal", :participants [{:patient-id "PID-000004-2467dffa", :role :subject}], :active-mrn "MRN000005", :attending "3903633105", :warm-up false, :reason "Kidney problems", :event :admission, :t 8580, :location {:ward "Renal", :bed "RENAL-H02", :placement :surge}, :forced false} {:event :discharge, :t 8820, :active-mrn "MRN000001", :location {:ward "Renal", :bed "RENAL-02", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000000-918175ce", :role :subject}], :warm-up false} {:event :discharge, :t 8940, :active-mrn "MRN000002", :location {:ward "Renal", :bed "RENAL-03", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000001-881e2907", :role :subject}], :warm-up false} {:event :discharge, :t 14940, :active-mrn "MRN000004", :location {:ward "Renal", :bed "RENAL-01", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000003-75598130", :role :subject}], :warm-up false} {:event :discharge, :t 15600, :active-mrn "MRN000003", :location {:ward "Renal", :bed "RENAL-04", :placement :licensed}, :attending "0384055899", :participants [{:patient-id "PID-000002-8c2f7e6a", :role :subject}], :warm-up false} {:event :discharge, :t 20760, :active-mrn "MRN000005", :location {:ward "Renal", :bed "RENAL-H02", :placement :surge}, :attending "3903633105", :participants [{:patient-id "PID-000004-2467dffa", :role :subject}], :warm-up false}]}
 
 ========== END FILE ==========
 
@@ -10144,6 +11912,93 @@ one.
 
 ========== END FILE ==========
 
+========== FILE: ./test/ehr_testing_sim/persona_test.clj ==========
+(ns ehr-testing-sim.persona-test
+  "Persona (docs/sim-theory.edn's `:persona` stage, Milestone M4):
+  seeded/pure sampling, the fixed-RNG-consumption law, and the
+  age-linked payer co-landing invariant (docs/operational-models.md --
+  Medicare dominant at 65+, only checkable once age is a real field)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.persona :as persona])
+  (:import [java.util Random]))
+
+(deftest persona-is-deterministic-for-a-fixed-seed
+  (is (= (persona/persona (Random. 42) {})
+         (persona/persona (Random. 42) {}))))
+
+(defspec different-seeds-usually-differ 50
+  (prop/for-all [seed gen/large-integer]
+    (not= (persona/persona (Random. seed) {})
+          (persona/persona (Random. (inc seed)) {}))))
+
+(defspec every-sampled-persona-is-schema-valid 200
+  (prop/for-all [seed gen/large-integer]
+    (persona/valid-persona? (persona/persona (Random. seed) {}))))
+
+(deftest ssn-uses-the-obviously-synthetic-never-issued-area-prefix
+  (dotimes [seed 20]
+    (is (clojure.string/starts-with? (:ssn (persona/persona (Random. seed) {})) "900-"))))
+
+(deftest phone-and-ssn-match-their-formats
+  (let [p (persona/persona (Random. 7) {})]
+    (is (re-matches #"\d{3}-\d{3}-\d{4}" (:phone p)))
+    (is (re-matches #"\d{3}-\d{2}-\d{4}" (:ssn p)))
+    (is (re-matches #"\d{4}-\d{2}-\d{2}" (:dob p)))))
+
+(defn- counting-random
+  "A java.util.Random that counts every nextDouble/nextInt call made on
+  it -- the direct way to test 'fixed consumption regardless of
+  content' (counting actual method calls), rather than replaying a
+  synthetic skip sequence that would have to independently guess
+  persona's own mix of nextInt vs nextDouble calls to mean anything."
+  [seed]
+  (let [calls (atom 0)]
+    {:calls calls
+     :rng (proxy [Random] [(long seed)]
+            (nextDouble []
+              (swap! calls inc)
+              (proxy-super nextDouble))
+            (nextInt
+              ([] (swap! calls inc) (proxy-super nextInt))
+              ([n] (swap! calls inc) (proxy-super nextInt n))))}))
+
+(defspec persona-consumes-a-fixed-number-of-rng-draws-regardless-of-content 100
+  (testing "ADR-0009's own fixed-consumption law, extended to Persona:
+            13 draws, always, regardless of which age range (and
+            therefore which decade bucket and payer pool) is
+            configured -- content never changes draw COUNT"
+    (prop/for-all [seed gen/large-integer
+                   age-a (gen/choose 0 90)
+                   age-b (gen/choose 0 90)]
+      (let [[age-min age-max] (sort [age-a age-b])
+            {:keys [rng calls]} (counting-random seed)]
+        (persona/persona rng {:age-min age-min :age-max age-max})
+        (= 13 @calls)))))
+
+(deftest sixty-five-plus-personas-are-mostly-medicare
+  (testing "docs/operational-models.md's age-linkage co-landing
+            invariant: Medicare dominance at 65+, checkable now that
+            age is a real sampled field"
+    (let [payers (for [seed (range 300)]
+                  (:type (:payer (persona/persona (Random. seed) {:age-min 65 :age-max 65}))))
+          medicare-share (/ (count (filter #(= :medicare %) payers)) (double (count payers)))]
+      (is (> medicare-share 0.7) (str "expected Medicare dominance at 65+, got " medicare-share)))))
+
+(deftest under-65-personas-are-rarely-medicare
+  (let [payers (for [seed (range 300)]
+                (:type (:payer (persona/persona (Random. seed) {:age-min 20 :age-max 40}))))
+        medicare-share (/ (count (filter #(= :medicare %) payers)) (double (count payers)))]
+    (is (< medicare-share 0.15) (str "expected Medicare to be a small minority under 65, got " medicare-share))))
+
+(deftest payer-never-carries-its-own-pool-weight
+  (testing "the sampled payer is carried, rendered, never re-tracked -- no :weight leaking into patient/message-facing data"
+    (is (not (contains? (:payer (persona/persona (Random. 1) {})) :weight)))))
+
+========== END FILE ==========
+
 ========== FILE: ./test/ehr_testing_sim/run_test.clj ==========
 (ns ehr-testing-sim.run-test
   "The `sim run` capability's result-not-throw contract. Milestone M2b,
@@ -10153,8 +12008,21 @@ one.
   halts the loop and echoes it back, and run-command surfaces it as
   :error :capacity-exhausted with the patient, ward, and census in the
   payload (docs/clinical-realities.md's ED-diversion stub names the
-  modeling gap this leaves for M3+: a real waiting/diversion state)."
+  modeling gap this leaves for M3+: a real waiting/diversion state).
+
+  Milestone M4, Task 0: the plumbing-completeness test below is the red
+  test that reproduces the tools consumer-loop's own finding -- M3's
+  `:pathways` reached `ehr-testing-sim.engine/run` from a direct API
+  caller (engine-test exercises it directly) but never from
+  `run-command`, so it was invisible to every CLI invocation despite
+  181 green tests and a demo. `ehr-testing-sim.engine/config-keys` is
+  now the canonical, documented list of every key `engine/run` accepts;
+  this test asserts `run-command` forwards ALL of them, not just the
+  ones already known to work, using the injectable `:engine-run-fn`
+  seam (same -fn convention as `ehr-testing-sim.cli/dispatch-action`)
+  so no real simulation ever has to run against sentinel data."
   (:require [clojure.test :refer [deftest is testing]]
+            [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.run :as run]
             [ehr-testing-sim.result :as result]))
 
@@ -10176,6 +12044,64 @@ one.
         (is (string? patient-id))
         (is (= "Renal" ward))
         (is (= {"Renal" {:occupied 1 :capacity 1}} census))))))
+
+;; --- M4 Task 0: plumbing completeness -------------------------------------
+
+(def ^:private sentinel-opts
+  "One sentinel value per ehr-testing-sim.engine/config-keys entry --
+  distinguishable from any real default so a dropped key reads as a
+  clear mismatch, not a coincidental match. :churn-profile is a MAP
+  sentinel, not a bare keyword: run-command's own effective-churn-
+  profile logic merges a caller-supplied :churn-profile over
+  churn/default-churn-profile before forwarding it, so its sentinel
+  must survive being merge'd, not compared for raw equality (see the
+  test below)."
+  {:seed 42
+   :patients ::patients-sentinel
+   :pathway ::pathway-sentinel
+   :pathways ::pathways-sentinel
+   :arrival-gap ::arrival-gap-sentinel
+   :warm-up-seconds ::warm-up-seconds-sentinel
+   :facility ::facility-sentinel
+   :providers ::providers-sentinel
+   :churn-profile {::churn-profile-sentinel true}
+   :order-profiles ::order-profiles-sentinel})
+
+(deftest run-command-forwards-every-engine-config-key
+  (testing "the FULL ehr-testing-sim.engine/config-keys set reaches
+            engine/run, not just the keys already known to work -- red
+            today on :pathway/:pathways/:order-profiles (M3's
+            :pathways was the tools consumer-loop's own finding; this
+            test audits for every other straggler at once, per its own
+            documented purpose)"
+    (let [captured (atom nil)
+          stub-engine-run (fn [engine-opts]
+                            (reset! captured engine-opts)
+                            {:ground-truth [] :facility nil :providers nil})]
+      (run/run-command sentinel-opts {:engine-run-fn stub-engine-run})
+      (doseq [k engine/config-keys]
+        (if (= :churn-profile k)
+          (is (true? (::churn-profile-sentinel (:churn-profile @captured)))
+              "the :churn-profile sentinel must survive run-command's own default-merge")
+          (is (= (get sentinel-opts k) (get @captured k))
+              (str k " was not forwarded from run-command to engine/run")))))))
+
+(deftest run-command-config-file-passthrough
+  (testing "M4 Task 0: :config (a path to an EDN file) supplies the
+            data-heavy keys that have no CLI flag of their own -- read
+            once, merged UNDER explicit opts"
+    (let [tmp (java.io.File/createTempFile "sim-config" ".edn")
+          _ (spit tmp (pr-str {:pathways ::from-file-pathways :patients ::from-file-patients}))
+          captured (atom nil)
+          stub-engine-run (fn [engine-opts] (reset! captured engine-opts) {:ground-truth [] :facility nil :providers nil})]
+      (try
+        (run/run-command {:seed 1 :config (.getPath tmp) :patients ::from-opts-patients}
+                          {:engine-run-fn stub-engine-run})
+        (is (= ::from-file-pathways (:pathways @captured))
+            "a key the file names but opts doesn't should reach the engine")
+        (is (= ::from-opts-patients (:patients @captured))
+            "an explicit opt wins over the same key in the config file")
+        (finally (.delete tmp))))))
 
 ========== END FILE ==========
 
