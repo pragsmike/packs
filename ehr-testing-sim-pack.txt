@@ -1,7 +1,7 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-27T15:00:09Z
-HEAD: 706f8059186ce22cee06ca242f9614d5c76c716a
+generated (UTC): 2026-07-27T15:33:20Z
+HEAD: 03e9178b90a8d7e2cd4cd04c74b540a48afe97ec
 git status --porcelain:
 working tree clean
 elides: .agents/skills, .agents/prompts/archive
@@ -869,14 +869,17 @@ own `:cancel-discharge` method now restores `:class` as part of its
 reinstatement — the fix closes the gap in ground truth; the projection
 was never loosened to tolerate it.
 
-**Task 3: the ecological loop.** `test/ehr_testing_sim/blaze_integration_test.clj`
-(skip-when-absent, the same pattern `ehr-testing-tools`' own
-`sim-harness/available?` establishes) POSTs a run's own end-of-run
-Bundle(s) to a locally reachable `samply/blaze` and round-trips Patient
-fields when one is present; unreachable, a clean skip with a
-docker-run one-liner. Uses `java.net.HttpURLConnection` (JDK 1.1+), not
-`java.net.http.HttpClient` (JDK 11+) — this session's own JDK 8 runtime
-doesn't carry the latter (`notes/facts-register.md` F13).
+**Task 3: the ecological loop — landed, then removed (ADR-0014).**
+`test/ehr_testing_sim/blaze_integration_test.clj` originally POSTed a
+run's own end-of-run Bundle(s) to a locally reachable `samply/blaze`
+and round-tripped Patient fields when one was present (skip-when-absent
+otherwise). A post-M6 session deleted it: sim runs no external
+acceptance instruments, the same never-graded-on-its-own-homework
+symmetry v2 conformance already follows (NIST/HAPI round-tripping
+belongs to `ehr-testing-tools`, never to this repo) — see ADR-0014.
+`notes/facts-register.md` F13 (the JDK-8/HttpURLConnection finding this
+test motivated) is annotated superseded, not deleted, per this
+project's append-only discipline.
 
 **Note for the author: the tools-side gate-loop baseline review needs
 NO new delta from this session** — EmitState adds no `hl7v2-stream`
@@ -939,15 +942,17 @@ it, named here so they aren't lost between repos.
   classpath). **Noted here, built there** — this roadmap does not
   schedule tools' own work, only records the dependency so a future
   session in either repo knows the item exists.
-- **Blaze as M6's ecological target.** `samply/blaze` (a Clojure FHIR
-  server) is named as the natural first real-world consumer for M6's
-  **EmitState** output (`docs/sim-theory.edn`) — a same-language FHIR
-  server this project's state-documents can be loaded into and queried
-  against, giving the emitter-coherence property test a genuine
-  external system to check against rather than only this repo's own
-  parsing round-trip. This is a target for M6's own validation work,
-  not a dependency this repo takes on; recorded here so M6 doesn't have
-  to rediscover the natural fit from scratch.
+- **External FHIR acceptance belongs to tools, not sim (ADR-0014).**
+  `samply/blaze` was briefly named as M6's own ecological target and a
+  round-trip test landed against it; a post-M6 session reversed that —
+  sim proves its own internal laws (the emitter-coherence property,
+  cross-emitter ids, shape validation) and stops there, exactly as
+  claim #1's v2 conformance work already does (NIST/HAPI round-tripping
+  lives in `ehr-testing-tools`, never here). The family's sole
+  POSTing component is tools' own managed `fhir-sink`, which starts
+  what it talks to; no component anywhere in this family accepts an
+  arbitrary external server URL. Noted here so a future session doesn't
+  rediscover the reversal from scratch.
 
 ## The adversarial-traffic exclusion
 
@@ -1664,13 +1669,15 @@ clojure -M:cli help
 Worked examples with real output: [docs/demos/](docs/demos/), including
 a same-seed HL7v2/FHIR pair (`docs/demos/emit-state/`) — one patient's
 final v2 message next to their FHIR `Patient`/`Observation` resources
-from the same instant, ids resolving across both. To check FHIR output
-against a real FHIR server (`samply/blaze`, a same-language Clojure
-implementation — `test/ehr_testing_sim/blaze_integration_test.clj`):
-
-```bash
-docker run -p 8080:8080 samply/blaze:latest
-```
+from the same instant, ids resolving across both. This project proves
+its own internal laws (the emitter-coherence property, cross-emitter
+ids, shape validation) and stops there, by design (ADR-0014): sim never
+POSTs to any external server, so checking FHIR output against a real
+FHIR server is the consumer's job — the same division of labor
+v2 conformance already follows (NIST/HAPI round-tripping belongs to
+`ehr-testing-tools`, never to this repo) — see the
+[ehr-testing-tools](https://github.com/pragsmike/ehr-testing-tools)
+sibling's managed `fhir-sink`.
 
 Unfamiliar term (ours or the domain's):
 [docs/GLOSSARY.md](docs/GLOSSARY.md). Which document to read for your
@@ -2168,8 +2175,13 @@ REST/JSON standard. State-based: Resources describe current state.
 Emitter landed at M6 (`ehr-testing-sim.emit-state`, R4 JSON) — a Bundle
 of Patient/Encounter/Condition/Observation/MedicationRequest/Coverage
 per patient snapshot; CDA is the format dispatch's other, still-deferred
-arm. The Blaze server is the ecological test target
-(`test/ehr_testing_sim/blaze_integration_test.clj`, skip-when-absent).
+arm. Every resource carries the standard HTEST security label and a
+run-tag (`meta.tag`) identifying its generator/seed. This project's own
+in-repo FHIR evidence stops at the serverless set — the emitter-
+coherence property, cross-emitter ids, shape validation
+(ADR-0014); checking output against a real FHIR server is the
+consumer's job, the same division of labor v2 conformance already
+follows.
 
 **HL7 (organization) / HL7v2.** Health Level Seven International, the
 standards body; and its version-2 messaging standard (1980s-vintage,
@@ -2306,10 +2318,6 @@ exactly what came from where.
 **clojure-hl7-parser** (cmiles74). The one runtime HL7 dependency:
 ER7 parse/emit structures. Known limitation (no escape handling)
 receipted in the facts register with this repo's workaround.
-**Blaze** (samply). An open-source FHIR server, written in Clojure —
-M6's ecological target for the FHIR emitter
-(`test/ehr_testing_sim/blaze_integration_test.clj`; unreachable ->
-clean skip, no dependency on it being present).
 **Mirth Connect.** A widely-deployed open-source interface engine; a
 representative real-world consumer.
 **ehr-testing-guide / ehr-testing-tools.** The sibling repositories:
@@ -2820,7 +2828,13 @@ clojure -M:cli run --seed 42 --patients 3 \
   `Patient`, `Encounter`, five `Observation`s (the CBC panel), and
   `Coverage` — no `Condition`/`MedicationRequest` here, since this
   patient's pathway is a plain admission + order + discharge (no module,
-  no medication).
+  no medication). Post-M6 (ADR-0014): every resource here also carries
+  `meta.security` (the standard HTEST "test health data" label) and
+  `meta.tag` (`{"system": "urn:ehr-testing-sim", "code": "42"}`, this
+  run's own seed) — regenerated to show the labels, no other content
+  changed. The v2 side (`ground-truth.edn`, `messages.txt`) is
+  byte-identical to before: the labels are a FHIR-rendering-only
+  addition, never a ground-truth fact.
 
 ## The ids resolving across both — patient 1 (MRN000001)
 
@@ -2891,19 +2905,26 @@ Resolving across both:
  "type":"collection",
  "entry":
  [{"resource":
-   {"resourceType":"Patient",
-    "id":"PID-000000-918175ce",
-    "identifier":
-    [{"system":"urn:ehr-testing-sim:mrn", "value":"MRN000001"}],
-    "name":[{"family":"Gonzalez", "given":["Barbara"]}],
-    "gender":"female",
-    "birthDate":"1935-02-21",
-    "address":
+   {"address":
     [{"line":["22 Chestnut Ct"],
       "city":"Providence",
       "state":"RI",
       "postalCode":"02903"}],
-    "telecom":[{"system":"phone", "value":"607-335-0157"}]}},
+    "meta":
+    {"security":
+     [{"system":
+       "http:\/\/terminology.hl7.org\/CodeSystem\/v3-ActReason",
+       "code":"HTEST",
+       "display":"test health data"}],
+     "tag":[{"system":"urn:ehr-testing-sim", "code":"42"}]},
+    "name":[{"family":"Gonzalez", "given":["Barbara"]}],
+    "birthDate":"1935-02-21",
+    "resourceType":"Patient",
+    "id":"PID-000000-918175ce",
+    "identifier":
+    [{"system":"urn:ehr-testing-sim:mrn", "value":"MRN000001"}],
+    "telecom":[{"system":"phone", "value":"607-335-0157"}],
+    "gender":"female"}},
   {"resource":
    {"resourceType":"Encounter",
     "id":"PID-000000-918175ce-encounter",
@@ -2912,9 +2933,23 @@ Resolving across both:
     "subject":{"reference":"Patient\/PID-000000-918175ce"},
     "period":
     {"start":"2024-01-01T00:00:00+00:00",
-     "end":"2024-01-01T00:00:00+00:00"}}},
+     "end":"2024-01-01T00:00:00+00:00"},
+    "meta":
+    {"security":
+     [{"system":
+       "http:\/\/terminology.hl7.org\/CodeSystem\/v3-ActReason",
+       "code":"HTEST",
+       "display":"test health data"}],
+     "tag":[{"system":"urn:ehr-testing-sim", "code":"42"}]}}},
   {"resource":
    {"referenceRange":[{"low":{"value":4.5}, "high":{"value":11.0}}],
+    "meta":
+    {"security":
+     [{"system":
+       "http:\/\/terminology.hl7.org\/CodeSystem\/v3-ActReason",
+       "code":"HTEST",
+       "display":"test health data"}],
+     "tag":[{"system":"urn:ehr-testing-sim", "code":"42"}]},
     "interpretation":[{"coding":[{"code":"H"}]}],
     "encounter":
     {"reference":"Encounter\/PID-000000-918175ce-encounter"},
@@ -2932,6 +2967,13 @@ Resolving across both:
     "subject":{"reference":"Patient\/PID-000000-918175ce"}}},
   {"resource":
    {"referenceRange":[{"low":{"value":4.2}, "high":{"value":5.9}}],
+    "meta":
+    {"security":
+     [{"system":
+       "http:\/\/terminology.hl7.org\/CodeSystem\/v3-ActReason",
+       "code":"HTEST",
+       "display":"test health data"}],
+     "tag":[{"system":"urn:ehr-testing-sim", "code":"42"}]},
     "interpretation":[{"coding":[{"code":"N"}]}],
     "encounter":
     {"reference":"Encounter\/PID-000000-918175ce-encounter"},
@@ -2949,6 +2991,13 @@ Resolving across both:
     "subject":{"reference":"Patient\/PID-000000-918175ce"}}},
   {"resource":
    {"referenceRange":[{"low":{"value":12.0}, "high":{"value":17.5}}],
+    "meta":
+    {"security":
+     [{"system":
+       "http:\/\/terminology.hl7.org\/CodeSystem\/v3-ActReason",
+       "code":"HTEST",
+       "display":"test health data"}],
+     "tag":[{"system":"urn:ehr-testing-sim", "code":"42"}]},
     "interpretation":[{"coding":[{"code":"H"}]}],
     "encounter":
     {"reference":"Encounter\/PID-000000-918175ce-encounter"},
@@ -2965,6 +3014,13 @@ Resolving across both:
     "subject":{"reference":"Patient\/PID-000000-918175ce"}}},
   {"resource":
    {"referenceRange":[{"low":{"value":36.0}, "high":{"value":50.0}}],
+    "meta":
+    {"security":
+     [{"system":
+       "http:\/\/terminology.hl7.org\/CodeSystem\/v3-ActReason",
+       "code":"HTEST",
+       "display":"test health data"}],
+     "tag":[{"system":"urn:ehr-testing-sim", "code":"42"}]},
     "interpretation":[{"coding":[{"code":"N"}]}],
     "encounter":
     {"reference":"Encounter\/PID-000000-918175ce-encounter"},
@@ -2982,6 +3038,13 @@ Resolving across both:
     "subject":{"reference":"Patient\/PID-000000-918175ce"}}},
   {"resource":
    {"referenceRange":[{"low":{"value":150}, "high":{"value":450}}],
+    "meta":
+    {"security":
+     [{"system":
+       "http:\/\/terminology.hl7.org\/CodeSystem\/v3-ActReason",
+       "code":"HTEST",
+       "display":"test health data"}],
+     "tag":[{"system":"urn:ehr-testing-sim", "code":"42"}]},
     "interpretation":[{"coding":[{"code":"N"}]}],
     "encounter":
     {"reference":"Encounter\/PID-000000-918175ce-encounter"},
@@ -3003,7 +3066,14 @@ Resolving across both:
     "status":"active",
     "beneficiary":{"reference":"Patient\/PID-000000-918175ce"},
     "payor":[{"display":"Medicare"}],
-    "type":{"text":"medicare"}}}]}
+    "type":{"text":"medicare"},
+    "meta":
+    {"security":
+     [{"system":
+       "http:\/\/terminology.hl7.org\/CodeSystem\/v3-ActReason",
+       "code":"HTEST",
+       "display":"test health data"}],
+     "tag":[{"system":"urn:ehr-testing-sim", "code":"42"}]}}}]}
 
 ========== END FILE ==========
 
@@ -7784,16 +7854,18 @@ excerpts of your real feed.
 
 ## What if synthetic data ever reached a real system — how would we find and remove it?
 
-You wouldn't have to hunt for it; you can list it exactly. The same
-config-plus-seed that generated a corpus regenerates it byte-for-byte, so the
-complete inventory of every identifier it ever contained (MRNs, visit numbers,
-message control IDs, FHIR resource ids) is always recoverable — feed that list
-to your system's purge tooling. On the FHIR side, every resource additionally
-carries the standard HTEST "test data" security label and a generator tag, so
-it's searchable and bulk-deletable by query. On the HL7v2 side, synthetic
-identifiers are deliberately fingerprinted (invalid-range SSNs, documented MRN
-and control-ID formats). And the write-safety gates exist so this question stays
-hypothetical.
+You wouldn't have to hunt for it; you can list it exactly. Run
+`sim identifiers --seed <seed> --patients <n> [--config <file>]` against the
+same config-plus-seed that generated the corpus and get back the complete
+inventory of every identifier it ever contained — patient ids, MRNs (every one,
+including any merged away), visit-relevant ids, message control IDs, FHIR
+resource ids, provider NPIs, and the run's own id — as machine-readable EDN;
+feed that list straight to your system's purge tooling. On the FHIR side, every
+resource additionally carries the standard HTEST "test data" security label and
+a generator tag, so it's searchable and bulk-deletable by query. On the HL7v2
+side, synthetic identifiers are deliberately fingerprinted (invalid-range SSNs,
+documented MRN and control-ID formats). And the simulator itself only ever
+writes files — nothing in it sends data to any server.
 
 ## What can't it do yet? (Honest list)
 
@@ -7889,7 +7961,8 @@ Four components (`ehr-testing-sim.site-profile`), each extending an
 existing idea rather than inventing a new mechanism:
 
 1. **MSH dialect.** A site profile's `:msh` supplies MSH-12 (HL7
-   version id) and MSH-3/4/5/6 (sending/receiving app+facility),
+   version id), MSH-3/4/5/6 (sending/receiving app+facility), and
+   MSH-11 (processing id — post-M6, ADR-0014's own Task 4 addition),
    defaulting field-by-field to today's hard-coded values when absent
    (`ehr-testing-sim.site-profile/default-msh`). Version changes the
    MSH-12 literal only — this layer does not restructure segments per
@@ -7898,6 +7971,26 @@ existing idea rather than inventing a new mechanism:
    could see multiple generated schemas but no documented way to
    switch versions) is answered: version selection is a named,
    configured field, never a hard-coded emitter constant.
+
+   **MSH-11 (`:processing-id`, HL7 Table 0103: "P" production, "T"
+   training, "D" debugging) defaults to "P" and is configurable to "T"
+   or "D".** A realism-vs-caution trade worth naming explicitly, since
+   it differs from every other dialect knob on this page: MSH-3/4/5/6/12
+   and the code-table/Z-segment knobs change how a fact is *said* with
+   no bearing on whether a receiving system treats the message
+   differently in kind, but MSH-11 is a field real interface engines
+   and downstream systems are *built* to route on — a training or
+   debugging processing id can (correctly, by HL7 convention) steer a
+   message to a sandbox environment, suppress a production side effect,
+   or otherwise change how the receiving system behaves. That is
+   exactly the point of the field, and also exactly why changing it
+   under test can silently defeat the test: a corpus generated with
+   `:processing-id "T"` against a system that special-cases training
+   traffic is no longer exercising the same code path production
+   traffic would hit. Leave this at its "P" default when the goal is
+   testing production-shaped behavior; set it deliberately, and record
+   why, when the goal is exercising a receiving system's own
+   training/debug handling.
 2. **Code-table overrides.** A site profile supplies its own value set
    for a user-defined HL7 table — patient class (table 0004,
    `docs/patient-state-model.md`'s `:class` field, PV1-2) and
@@ -7977,9 +8070,11 @@ layer has shipped or will ever ship belongs to exactly one:
    knob's surface is, by definition, exactly what the masking function
    (`emit-hl7-test/mask-dialect-surfaces`) strips before the weak-half
    invariance property compares two profiles' output — the masking
-   function's own declared surface (MSH-3/4/5/6/12, PV1-2/PV1-36,
+   function's own declared surface (MSH-3/4/5/6/11/12, PV1-2/PV1-36,
    Z-segment lines) **is** the enumeration of every dialect knob this
-   layer has shipped to date; adding a fourth dialect knob means
+   layer has shipped to date — MSH-11 (`:processing-id`) joined this
+   surface post-M6 (ADR-0014's own Task 4), the fourth dialect knob the
+   paragraph below already anticipated; adding a fifth means
    extending that function in the same change, or the invariance
    property test stops actually covering it.
 2. **Site config knobs** — bound before `Execute` runs, at
@@ -8033,7 +8128,7 @@ half** (messages) as a property test over 100 random seeds/patient
 counts (`emit-hl7-test/invariance-messages-agree-after-masking-
 dialect-surfaces`), comparing a default and a deliberately gaudy second
 profile after **masking** exactly the declared dialect surfaces
-(MSH-3/4/5/6/12, PV1-2/PV1-36, and Z-segment lines stripped entirely).
+(MSH-3/4/5/6/11/12, PV1-2/PV1-36, and Z-segment lines stripped entirely).
 The masking function (`emit-hl7-test/mask-dialect-surfaces`) is itself
 a deliverable of this claim, not merely test scaffolding: it is the
 precise, executable enumeration of what a dialect may touch, and
@@ -8066,7 +8161,20 @@ segments with a different MSH-12 literal, never a genuinely different
 segment set) stays future — HL7v2's own version-to-version segment
 changes are a large surface this layer doesn't attempt. Generalized
 naming idioms beyond `:surge-format` (ward ids, provider id formats)
-stay future too.
+stay future too. **A TEST-surname knob** (post-M6, ADR-0014's own Task
+4) — an optional site-profile field forcing every persona's own
+rendered surname to a fixed, obviously-synthetic marker (e.g. "TEST" or
+"ZZTEST", the convention some real EHRs already reserve for exactly
+this purpose) — is designed, not built: it would be a fifth dialect
+knob (bound at `pid-segment`'s own render call, truth-invariant the
+same way MSH/code-table/Z-segment/processing-id already are, since a
+patient's *actual* sampled name never changes, only which string PID-5
+renders) but isn't trivial to land in this same session — it needs its
+own masking-function extension and its own invariance coverage, the
+same discipline every other dialect knob here already carries, and
+this session's own scope is the MSH-11 knob. Recorded here so a future
+session has a named, reasoned starting point rather than reinventing
+the idea from scratch.
 
 ## Where this lands
 
@@ -9297,6 +9405,117 @@ a resolution note pointing here; `docs/sim-theory.md`'s Catalytic
 resolution table gains this ADR's citation in `gmf-module-set`'s own
 row, replacing "OPEN."
 
+---
+
+## ADR-0014 — Sim runs no external acceptance instruments; that is the consumer's job
+
+**Status:** Accepted (author-ratified 2026-07-27)
+
+**Context.** Milestone M6's own Task 3 landed
+`test/ehr_testing_sim/blaze_integration_test.clj`: skip-when-absent,
+but when a local `samply/blaze` FHIR server was reachable, it POSTed a
+run's own end-of-run Bundle(s) and asserted round-trip equivalence
+against Blaze's own verdict. This was reasoned, at the time, as
+EmitState's own instance of "never graded on our own homework"
+(`README.md`'s own phrase for claim #1's proof strategy,
+`docs/problem-statement.md`). On reflection the analogy doesn't hold:
+claim #1's actual proof strategy is validating the emitted CORPUS with
+independent tooling **someone else runs** (NIST's HL7v2 conformance
+tools, the HAPI parser, `notes/facts-register.md` F6) — this repo has
+never itself opened a socket to NIST's or HAPI's own infrastructure to
+do that checking; the checking happens in `ehr-testing-tools`, against
+artifacts sim produced and handed over as files. The Blaze test broke
+that symmetry: it made *this* repo the thing dialing out to an external
+server, the one shape claim #1's own proof strategy never asked sim
+itself to perform. It also left this repo with its only arbitrary-URL
+write path (`BLAZE_BASE_URL`, an environment variable naming a server
+this process would `POST` to) — a component this project's own safety
+argument (`docs/problem-statement.md`'s claim #7, "no PHI ever," proof
+by construction) had never had to account for before, because nothing
+else in sim ever sends data anywhere; it only writes files a caller
+chooses to read.
+
+**Decision.**
+
+1. **External acceptance instruments live with the consumer, never
+   with sim.** This extends claim #1's own already-accepted structure
+   (independent-parser validation happens in `ehr-testing-tools`, not
+   here) to FHIR: whatever real-server round-trip a state-document
+   emitter's output eventually needs is `ehr-testing-tools`' own
+   consumer-loop work (its own gate/corpus machinery, the same
+   division of labor its own ADRs already establish for v2 —
+   `.agents/plans/roadmap.md`'s own "Consumer plan: sim doesn't
+   validate itself in a vacuum" section, restated here as a binding
+   decision rather than a roadmap note). `test/ehr_testing_sim/
+   blaze_integration_test.clj` is deleted; `notes/facts-register.md` F13
+   (the JDK-8/HttpURLConnection finding that test motivated) is
+   annotated superseded, not deleted, per this register's own
+   append-only discipline.
+2. **Sim's own in-repo FHIR evidence is the serverless set, and stops
+   there.** The emitter-coherence property
+   (`ehr-testing-sim.v2-replay-test`, `docs/event-sourcing.md`), the
+   cross-emitter id sub-law
+   (`emit-state-test/fhir-patient-id-and-active-mrn-resolve-to-the-
+   same-hl7-identity`), and shape validation (Bundle JSON round-trips
+   through `clojure.data.json`, `emit-state-test`'s own
+   `patient-bundle-round-trips-through-clojure-data-json`) are the
+   complete list of what this repo itself proves about its FHIR output.
+   Anything requiring a real FHIR server's own verdict is out of scope
+   here, by design, not merely unbuilt.
+3. **Safety consequence, stated plainly:** the simulator writes files
+   only. Nothing in `ehr-testing-sim` sends data to any server, and no
+   component here accepts an arbitrary server URL as input — the
+   `BLAZE_BASE_URL` environment variable this ADR removes was the one
+   exception, and it no longer exists. The family's sole POSTing
+   component will be `ehr-testing-tools`' own managed `fhir-sink` (a
+   consumer-side component that starts what it talks to, rather than
+   dialing out to a caller-named URL) — recorded here so a future
+   session doesn't reintroduce an arbitrary-URL write path in sim
+   without first reading why this one was removed.
+4. **The shelved guard-ladder spec is tools' to pick up, not sim's.** A
+   guard-ladder design for gating writes to an external URL was
+   considered and shelved during this reversal; it is recorded here as
+   available reference material for `ehr-testing-tools`, should that
+   repo ever add an external-URL mode to its own `fhir-sink` (rather
+   than the start-what-it-talks-to shape decision 3 names as the
+   current plan) — sim itself has no further use for it, having no
+   external-URL write path left to gate.
+
+**Rejected.**
+
+- **Keeping the Blaze test as an opt-in, rarely-run check.** Rejected
+  because the objection isn't that the test runs too often or is
+  expensive — it's that its very existence means sim POSTs to a
+  server at all, the structural fact this ADR removes, not a frequency
+  problem a skip-when-absent guard already mitigates.
+- **Moving the Blaze test to `ehr-testing-tools` verbatim.** Considered
+  and set aside for this session: `ehr-testing-tools` already has its
+  own consumer-loop and gate machinery this capability belongs beside
+  (`.agents/plans/roadmap.md`'s own "Consumer plan" section, this
+  ADR's decision 1); porting this session's own Blaze-specific test
+  file verbatim would prejudge that repo's own design for how it wants
+  to shape its `fhir-sink` acceptance work, which is that repo's call,
+  not this one's to make on its behalf.
+
+**Consequences.** `README.md`, `docs/GLOSSARY.md`, and
+`.agents/plans/roadmap.md` are swept of their M6-session Blaze
+references (reworded to state this ADR's decision, not merely
+deleted, so a reader lands on the reasoning rather than a gap).
+`docs/simulate-your-facility.md`'s own "what if synthetic data ever
+reached a real system" FAQ answer states the same safety consequence
+(decision 3) as its own closing line. Every resource `ehr-testing-sim.
+emit-state` produces additionally carries a standard HTEST security
+label and a generator/run-id tag (`meta.tag`) — landed alongside this
+ADR, not a substitute for it: labeling test data and refusing to POST
+it anywhere are two independent safety properties, and this project
+now holds both. A new `sim identifiers` CLI verb (config + seed → the
+complete EDN inventory of every identifier a run's own output
+contains) is this project's own answer to "how would we find and
+remove it, if this ever reached a real system regardless" — enumerable
+by construction, per this project's own determinism guarantee, rather
+than a promise resting on the external-write path this ADR just
+removed.
+
 ========== END FILE ==========
 
 ========== FILE: ./notes/facts-register.md ==========
@@ -9326,7 +9545,8 @@ row, replacing "OPEN."
 | F10 | SNOMED CT `36971009` is "Sinusitis (disorder)"; `185345009` is "Encounter for symptom"; `315618009` is "FESS - Functional endoscopic sinus surgery - sphenoethmoidectomy" (a procedure concept). Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` (M5a's hand-written GMF interpreter fixture, ADR-0013 point 6 — this project's own authored data, not vendored Synthea content, so no NOTICE obligation) for `ConditionOnset`/`Encounter`/`Procedure` state concept triplets. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | NCBO BioPortal SNOMED CT US Edition concept pages (`bioportal.bioontology.org/ontologies/SNOMEDCT?p=classes&conceptid=<id>`), confirmed by web search this session (no direct browser fetch — `browser.ihtsdotools.org` and `clinicaltables.nlm.nih.gov` both returned 403/unreachable to this session's fetch tools) | 2026-07-27 | verified this session (search-engine-mediated, not a direct primary-source fetch — see this row's own evidence note) |
 | F11 | LOINC `8310-5` is "Body temperature" (component "Body temperature", `LP65487-8`). Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` for its `Observation` state's concept triplet. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | `loinc.org/8310-5` (title confirmed via web search this session; direct fetch returned HTTP 403) | 2026-07-27 | verified this session (search-engine-mediated) |
 | F12 | RxNorm RXCUI `308191` is "Amoxicillin 500 MG Oral Capsule". Used in `test/ehr_testing_sim/fixtures/fixture-clinic.json` for its `MedicationOrder` state's concept triplet. | `test/ehr_testing_sim/fixtures/fixture-clinic.json` | RxNorm/NDC crosswalk data, confirmed via web search this session (direct fetch to `rxnav.nlm.nih.gov` timed out — DNS/network unreachable to this session's fetch tools) | 2026-07-27 | verified this session (search-engine-mediated, not a direct RxNav API fetch — see this row's own evidence note) |
-| F13 | This repo's own development/test JVM (as invoked by `clojure -X:test` in the M6 session's own environment) is JDK 8 (`1.8.0_311`) — `java.net.http.HttpClient` (JDK 11+) is therefore unavailable; `test/ehr_testing_sim/blaze_integration_test.clj`'s own HTTP calls use `java.net.HttpURLConnection` (JDK 1.1+) instead, for exactly this reason. This is an observation about ONE session's own runtime, not a repo-wide pinned minimum-JDK claim (`deps.edn` states no `:min-jdk` and this repo has no CI yet to enforce one) — recorded so a future session doesn't reintroduce `java.net.http` without re-checking. | `test/ehr_testing_sim/blaze_integration_test.clj` (its own header docstring) | `(System/getProperty "java.version")`, run directly this session | 2026-07-27 | verified this session (this session's own runtime only, not a pinned repo-wide claim) |
+| F14 | The standard FHIR/HL7 test-data security label is HL7 v3-ActReason code `HTEST`, display "test health data", CodeSystem `http://terminology.hl7.org/CodeSystem/v3-ActReason` -- the label `ehr-testing-sim.emit-state` stamps into `meta.security` on every resource it renders (post-M6, ADR-0014), so a real system that ever received this data could find and purge it by a standard security-label query. | `src/ehr_testing_sim/emit_state.clj` (`htest-security`) | `hl7.org/fhir/testing.html`'s own worked XML example (`<security><system value=".../v3-ActReason"/><code value="HTEST"/><display value="test health data"/></security>`), fetched directly this session | 2026-07-27 | verified this session |
+| F13 | **SUPERSEDED** — test removed per ADR-0014; row retained for history, per this register's own append-only discipline. This repo's own development/test JVM (as invoked by `clojure -X:test` in the M6 session's own environment) is JDK 8 (`1.8.0_311`) — `java.net.http.HttpClient` (JDK 11+) is therefore unavailable; `test/ehr_testing_sim/blaze_integration_test.clj`'s own HTTP calls used `java.net.HttpURLConnection` (JDK 1.1+) instead, for exactly this reason. This was an observation about ONE session's own runtime, not a repo-wide pinned minimum-JDK claim (`deps.edn` states no `:min-jdk` and this repo has no CI yet to enforce one) — recorded so a future session doesn't reintroduce `java.net.http` without re-checking, should this repo ever grow another JDK-version-sensitive HTTP call site. | `test/ehr_testing_sim/blaze_integration_test.clj` (deleted; its own header docstring, while it existed) | `(System/getProperty "java.version")`, run directly the M6 session | 2026-07-27 | superseded 2026-07-27 (test removed, ADR-0014) |
 
 ========== END FILE ==========
 
@@ -11002,6 +11222,7 @@ logic, not patient records.
             [clojure.edn :as edn]
             [ehr-testing-sim.result :as result]
             [ehr-testing-sim.check :as check]
+            [ehr-testing-sim.identifiers :as identifiers]
             [ehr-testing-sim.run :as run])
   (:gen-class))
 
@@ -11040,7 +11261,12 @@ logic, not patient records.
              {:flag "--config" :doc "path to an EDN file supplying data-heavy engine keys with no flag of their own (:pathway/:pathways/:order-profiles/:churn-profile); merged UNDER explicit flags"}]}
     {:verb "check"
      :doc "Run the invariant catalog over a ground-truth log (EDN on stdin)."
-     :flags []}]})
+     :flags []}
+    {:verb "identifiers"
+     :doc "Config + seed -> the complete EDN inventory of every identifier this run's output contains (patient-ids, MRNs, visit beds, HL7 control ids, FHIR resource ids, provider NPIs, run-id) -- ADR-0014's own answer to 'how would we find and remove it.'"
+     :flags [{:flag "--seed" :doc "RNG seed (required; same as `sim run`'s own --seed)"}
+             {:flag "--patients" :doc "number of patients" :default "1"}
+             {:flag "--config" :doc "path to an EDN file supplying data-heavy engine keys (same as `sim run`)"}]}]})
 
 (defn parse
   [raw-args]
@@ -11067,12 +11293,14 @@ logic, not patient records.
   "The mountable dispatch: [action opts] -> Result. The -fn keys are
   injectable for tests (same pattern as tools' dispatch)."
   ([action opts] (dispatch-action action opts {}))
-  ([action opts {:keys [run-fn check-fn]
+  ([action opts {:keys [run-fn check-fn identifiers-fn]
                  :or {run-fn run/run-command
-                      check-fn check-command}}]
+                      check-fn check-command
+                      identifiers-fn identifiers/identifiers-command}}]
    (case action
      "run" (run-fn opts)
      "check" (check-fn opts)
+     "identifiers" (identifiers-fn opts)
      (unknown-action action))))
 
 ;; --- standalone shell -------------------------------------------------
@@ -11654,6 +11882,30 @@ logic, not patient records.
   (str (.format (.plusSeconds (reference-instant reference-date) seconds) hl7-timestamp-formatter)
        (hl7-offset-suffix utc-offset)))
 
+(defn control-id-for
+  "MSH-10 (message control id) for one ground-truth event -- the SAME
+  construction every message-builder call site below uses, extracted
+  once (post-M6, ADR-0014's own `sim identifiers` verb reuses this
+  exact function so its own inventory can never drift from what a real
+  emission actually renders): `active-mrn` and the event's own trigger
+  and `:t` for every single-subject type; `mrn1+mrn2` for :bed-swap
+  (genuinely two participants, no single :active-mrn to key on);
+  `surviving-mrn` for :merge (PID carries the survivor, not the one
+  being merged away). nil for any event type outside
+  `message-type-registry` (the same 'no message, no id' rule
+  `event->messages` already follows)."
+  [{:keys [event t active-mrn surviving-mrn participants swap]}]
+  (when-let [{:keys [trigger]} (message-type-registry event)]
+    (case event
+      :bed-swap
+      (let [[p1 p2] (mapv :patient-id participants)]
+        (str (:active-mrn (get swap p1)) "+" (:active-mrn (get swap p2)) "-" trigger "-" t))
+
+      :merge
+      (str surviving-mrn "-" trigger "-" t)
+
+      (str active-mrn "-" trigger "-" t))))
+
 (defn- msh-segment
   "MSH-3/4/5/6/12 (sending/receiving app+facility, version id) render
   `site-profile`'s :msh dialect, defaulting field-by-field to today's
@@ -11663,7 +11915,7 @@ logic, not patient records.
   .agents/plans/roadmap.md: a configured field, not a hard-coded
   emitter constant)."
   [site-profile {:keys [type trigger]} control-id ts]
-  (let [{:keys [version sending-app sending-facility receiving-app receiving-facility]}
+  (let [{:keys [version sending-app sending-facility receiving-app receiving-facility processing-id]}
         (site-profile/effective-msh site-profile)]
     (parser/create-segment
      "MSH"
@@ -11676,7 +11928,7 @@ logic, not patient records.
      (parser/create-field [])
      (parser/create-field [type trigger])
      (parser/create-field [control-id])
-     (parser/create-field ["P"])
+     (parser/create-field [processing-id])
      (parser/create-field [version]))))
 
 (defn- evn-segment
@@ -11955,10 +12207,10 @@ logic, not patient records.
   every segment renders through `site-profile`'s own dialect/code-table/
   Z-segment surfaces -- `z-segments-for`'s own docstring."
   [reference-date utc-offset facility providers personas site-profile
-   {:keys [event t active-mrn location from attending participants]}]
+   {:keys [event t active-mrn location from attending participants] :as ev}]
   (when-let [type+trigger (message-type-registry event)]
     (let [ts (hl7-timestamp reference-date t utc-offset)
-          control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
+          control-id (control-id-for ev)
           facility-name (name (:id facility))
           provider (provider-by-id providers attending)
           persona (get personas (:patient-id (first participants)))
@@ -11992,7 +12244,7 @@ logic, not patient records.
         [p1 p2] (mapv :patient-id participants)
         {mrn1 :active-mrn from1 :from to1 :to att1 :attending} (get swap p1)
         {mrn2 :active-mrn from2 :from to2 :to att2 :attending} (get swap p2)
-        control-id (str mrn1 "+" mrn2 "-" (:trigger type+trigger) "-" t)]
+        control-id (control-id-for ev)]
     (parser/str-message
      (apply parser/create-message
       parser/DEFAULT-DELIMITERS
@@ -12013,7 +12265,7 @@ logic, not patient records.
   (let [type+trigger (message-type-registry :merge)
         ts (hl7-timestamp reference-date t utc-offset)
         facility-name (name (:id facility))
-        control-id (str surviving-mrn "-" (:trigger type+trigger) "-" t)
+        control-id (control-id-for ev)
         survivor-id (:patient-id (first (filter #(= :survivor (:role %)) participants)))]
     (parser/str-message
      (apply parser/create-message
@@ -12085,7 +12337,7 @@ logic, not patient records.
    {:keys [t active-mrn location attending concept participants] :as ev}]
   (let [type+trigger (message-type-registry :order-placed)
         ts (hl7-timestamp reference-date t utc-offset)
-        control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
+        control-id (control-id-for ev)
         facility-name (name (:id facility))
         provider (provider-by-id providers attending)]
     (parser/str-message
@@ -12107,7 +12359,7 @@ logic, not patient records.
    {:keys [t active-mrn location attending concept results participants] :as ev}]
   (let [type+trigger (message-type-registry :result-available)
         ts (hl7-timestamp reference-date t utc-offset)
-        control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
+        control-id (control-id-for ev)
         facility-name (name (:id facility))
         provider (provider-by-id providers attending)
         obx-segments (map-indexed (fn [i r] (obx-segment (inc i) r)) results)]
@@ -12150,7 +12402,7 @@ logic, not patient records.
    {:keys [t active-mrn location attending participants] :as ev}]
   (let [type+trigger (message-type-registry :observation)
         ts (hl7-timestamp reference-date t utc-offset)
-        control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
+        control-id (control-id-for ev)
         facility-name (name (:id facility))
         provider (provider-by-id providers attending)]
     (parser/str-message
@@ -12264,7 +12516,24 @@ logic, not patient records.
      the fold for this reason). Procedure is deliberately absent --
      ground truth carries :procedure events, but nothing in this
      resource set needs them, and inventing a seventh resource type
-     nobody asked for would violate this law for its own sake."
+     nobody asked for would violate this law for its own sake.
+  5. Standards-native test-data marking (post-M6, ADR-0014): EVERY
+     resource this namespace renders carries `meta.security` (the
+     standard FHIR/HL7 HTEST \"test health data\" label, verified
+     against terminology.hl7.org before landing --
+     notes/facts-register.md F14) and `meta.tag` (this run's own
+     seed/run-id, system \"urn:ehr-testing-sim\") -- generator and
+     provenance on every resource, so a real system that ever received
+     this data could find and purge it by a standard security-label
+     query alone, never a project-specific convention only this repo
+     knows to look for. Applied as a POST-PROCESSING step over already-
+     built resources (`with-test-meta`, below), deliberately NOT
+     threaded into the individual resource builders: a run's own seed
+     is a property of the RUN, not of any patient's own folded state,
+     so threading it into `patient-resource`/`encounter-resource`/etc.
+     would violate law 4 above (\"populated ONLY from fields the fold
+     already carries\") for a concern that has nothing to do with
+     clinical content."
   (:require [ehr-testing-sim.engine :as engine]))
 
 ;; --- Law 1: snapshot-at-instant -------------------------------------------
@@ -12408,14 +12677,45 @@ logic, not patient records.
      :payor [{:display (:name payer)}]
      :type {:text (name (:type payer))}}))
 
+;; --- Law 5: standards-native test-data marking -----------------------------
+
+(def ^:private htest-security
+  "The standard FHIR/HL7 test-data security label -- HL7 v3-ActReason
+  HTEST, display \"test health data\" (notes/facts-register.md F14,
+  verified against terminology.hl7.org before landing, per this
+  project's own no-guessing-codes rule). Carried on every resource this
+  namespace renders (law 5, above)."
+  {:system "http://terminology.hl7.org/CodeSystem/v3-ActReason"
+   :code "HTEST"
+   :display "test health data"})
+
+(defn- run-tag
+  "This run's own provenance tag: system \"urn:ehr-testing-sim\", code =
+  the run's seed/run-id (rendered as a string -- FHIR's own Coding.code
+  is a string, never a bare number)."
+  [run-id]
+  {:system "urn:ehr-testing-sim" :code (str run-id)})
+
+(defn- with-test-meta
+  "Merges law 5's own meta.security/meta.tag onto one already-built
+  resource. Merge, not overwrite: no builder above sets :meta today, so
+  this is additive in practice, but merging (not assoc-ing a bare
+  {:security ... :tag ...}) means a future resource type that DOES
+  carry its own :meta content composes rather than silently losing it."
+  [run-id resource]
+  (update resource :meta merge {:security [htest-security] :tag [(run-tag run-id)]}))
+
 (defn patient-bundle
   "One patient's own state -> a FHIR Bundle (type \"collection\") of
   every resource that state actually holds -- Patient/Coverage whenever
   a persona has folded (M4's :registered, always this patient's first
   event); Encounter once admitted; Condition/Observation/
   MedicationRequest exactly as many as the accumulator carries, zero
-  otherwise. No resource is emitted speculatively."
-  [reference-date utc-offset patient-state]
+  otherwise. No resource is emitted speculatively. `run-id` (this run's
+  own seed) is stamped onto every resource's own meta.security/meta.tag
+  (law 5) -- a run-level fact, applied after the resource builders run,
+  never threaded into them (see law 5's own docstring note)."
+  [reference-date utc-offset run-id patient-state]
   (let [resources (concat
                     (some-> (patient-resource patient-state) vector)
                     (some-> (encounter-resource reference-date utc-offset patient-state) vector)
@@ -12425,21 +12725,22 @@ logic, not patient records.
                     (some-> (coverage-resource patient-state) vector))]
     {:resourceType "Bundle"
      :type "collection"
-     :entry (mapv (fn [r] {:resource r}) resources)}))
+     :entry (mapv (fn [r] {:resource (with-test-meta run-id r)}) resources)}))
 
 (defn bundle-run
   "The stage function: ground-truth log -> {patient-id -> Bundle}, one
   per patient who exists (has folded at least a :registered event) at
   or before `t`. `t` may be an explicit instant (seconds from run
   start) or `:end` (this run's own last event time) -- the CLI's own
-  `sim run --emit fhir [--at ...]` convenience. Calls
+  `sim run --emit fhir [--at ...]` convenience. `run-id` (this run's
+  own seed) is stamped onto every resource, per law 5. Calls
   ehr-testing-sim.engine/replay exactly once (the fold); every bundle
   is a pure projection of that single call's own output, per
   `snapshot-at`'s law."
-  [ground-truth reference-date utc-offset t]
+  [ground-truth reference-date utc-offset run-id t]
   (let [t (if (= :end t) (reduce max 0 (map :t ground-truth)) t)
         snapshot (snapshot-at (engine/replay ground-truth) t)]
-    (into {} (map (fn [[patient-id state]] [patient-id (patient-bundle reference-date utc-offset state)])) snapshot)))
+    (into {} (map (fn [[patient-id state]] [patient-id (patient-bundle reference-date utc-offset run-id state)])) snapshot)))
 
 ========== END FILE ==========
 
@@ -14865,6 +15166,146 @@ logic, not patient records.
 
 ========== END FILE ==========
 
+========== FILE: ./src/ehr_testing_sim/identifiers.clj ==========
+(ns ehr-testing-sim.identifiers
+  "The `sim identifiers` capability (post-M6, ADR-0014): config + seed
+  -> the complete, machine-readable EDN inventory of every identifier a
+  run's own output actually contains -- patient-ids, MRNs (every one
+  any patient-id ever held, including merged-away), the bed ids each
+  patient's own visit touched (this project's own closest thing to a
+  visit id today -- no separate encounter/visit-number field is landed
+  yet, docs/GLOSSARY.md's own PV1-19 note), HL7 message control ids,
+  FHIR resource ids, provider NPIs, and this run's own meta.tag run-id
+  (ehr-testing-sim.emit-state's HTEST/run-tag law).
+
+  Determinism makes synthetic data ENUMERABLE, not merely recognizable:
+  if a run's own output ever reached a real system, this inventory --
+  not a search, not forensics -- is the complete, regenerable list of
+  every identifier to look for and remove (docs/simulate-your-
+  facility.md's own FAQ answer to exactly that question).
+
+  A PROJECTION over `ehr-testing-sim.engine/run`'s own output, reusing
+  this project's existing single-sourced id-derivation functions
+  (`ehr-testing-sim.emit-hl7/control-id-for`, `ehr-testing-sim.emit-
+  state/bundle-run`'s own resource ids) rather than re-deriving any of
+  them independently, and reusing `ehr-testing-sim.run`'s own config-
+  merging/module-resolution/incompatible-assignment plumbing (the same
+  projection-over-the-same-run posture `run-command` itself has) rather
+  than a second config dialect: this verb can never disagree with what
+  a real emission of the SAME run actually contains, because it reads
+  the exact functions that produce it."
+  (:require [ehr-testing-sim.emit-hl7 :as emit-hl7]
+            [ehr-testing-sim.emit-state :as emit-state]
+            [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.result :as result]
+            [ehr-testing-sim.run :as run]))
+
+(defn- final-world
+  "{patient-id -> patient-state} as it stood at the end of the run --
+  the same fold `ehr-testing-sim.emit-state/snapshot-at` computes for
+  `:end`, taken directly off `replay`'s own last record rather than a
+  second call (this namespace's own single-source-of-truth posture,
+  applied to itself)."
+  [replay-records]
+  (if (seq replay-records) (:world-after (last replay-records)) {}))
+
+(defn- visit-beds
+  "patient-id -> the DISTINCT bed ids that patient's own `:location`
+  ever named, in first-seen order -- read off `:world-after` at every
+  replay step (not the per-record :before/:after convenience view,
+  which only tracks the event's PRIMARY participant, ADR-0010; a bed-
+  swap's second participant would otherwise be missed)."
+  [replay-records patient-ids]
+  (into {}
+        (map (fn [patient-id]
+               [patient-id
+                (into [] (distinct)
+                      (keep #(get-in % [:world-after patient-id :location :bed]) replay-records))]))
+        patient-ids))
+
+(defn- control-ids
+  [ground-truth]
+  (into (sorted-set) (keep emit-hl7/control-id-for) ground-truth))
+
+(defn- fhir-resource-ids
+  [fhir-bundles]
+  (into (sorted-set)
+        (mapcat (fn [[_ bundle]] (map (comp :id :resource) (:entry bundle))))
+        fhir-bundles))
+
+(defn identifiers-command
+  "opts: the SAME config surface `ehr-testing-sim.run/run-command`
+  accepts (:seed required, :patients, :config, plus every
+  `ehr-testing-sim.engine/config-keys` entry) -- this is a projection
+  over the SAME run, not a parallel config dialect. Runs the simulation
+  exactly once (`engine-run-fn`, injectable, the same -fn convention
+  `run-command` uses), builds this run's own end-of-run FHIR Bundles
+  (`ehr-testing-sim.emit-state/bundle-run`, the SAME resource-id
+  derivation `sim run --emit fhir` uses) so resource ids come from the
+  one real builder, and returns Result-wrapped:
+
+    {:run-id             this run's own seed, as a string -- the SAME
+                          value ehr-testing-sim.emit-state's meta.tag
+                          carries on every FHIR resource
+     :patient-ids        [...], sorted
+     :mrns               [...], sorted -- every MRN any patient-id ever
+                          held, including one merged away (a merge's
+                          own evolve never clears the merged-away
+                          patient's :mrns, only marks :status :merged)
+     :visit-beds         {patient-id -> [bed-id ...]}, first-seen order
+     :control-ids        [...], sorted -- every MSH-10 this run's own
+                          messages would carry
+     :fhir-resource-ids  [...], sorted
+     :provider-npis      [...], sorted}
+
+  Deterministic by construction (same config+seed => identical ground-
+  truth/providers => identical inventory, ADR-0002); complete against
+  THIS run by construction (every id comes from the same ground-truth/
+  bundle-run/materialized-providers a real emission of this run would
+  also read, never a separately-maintained list -- proved as a property,
+  test/ehr_testing_sim/identifiers_test.clj)."
+  ([opts] (identifiers-command opts {}))
+  ([raw-opts {:keys [engine-run-fn] :or {engine-run-fn engine/run}}]
+   (let [opts (run/merge-config-file raw-opts)
+         {:keys [seed reference-date utc-offset modules]} opts
+         conflicts (run/incompatible-assignments opts)
+         resolved-modules (when modules (run/resolve-modules modules))]
+     (cond
+       (nil? seed)
+       (result/error :missing-required-opt
+                     {:message "--seed is required (determinism is a feature, not a default)"
+                      :opt :seed})
+
+       (seq conflicts)
+       (result/rejected :incompatible-assignment {:conflicts conflicts})
+
+       (and resolved-modules (not (result/ok? resolved-modules)))
+       resolved-modules
+
+       :else
+       (let [reference-date (or reference-date emit-hl7/default-reference-date)
+             utc-offset (or utc-offset emit-hl7/default-utc-offset)
+             engine-opts (cond-> (merge (select-keys opts engine/config-keys)
+                                        {:seed seed :churn-profile (run/effective-churn-profile opts)})
+                           resolved-modules (assoc :modules (:payload resolved-modules)))
+             {:keys [ground-truth providers exhausted]} (engine-run-fn engine-opts)]
+         (if exhausted
+           (result/error :capacity-exhausted exhausted)
+           (let [replay-records (engine/replay ground-truth)
+                 world (final-world replay-records)
+                 patient-ids (vec (sort (keys world)))
+                 fhir-bundles (emit-state/bundle-run ground-truth reference-date utc-offset seed :end)]
+             (result/ok
+              {:run-id (str seed)
+               :patient-ids patient-ids
+               :mrns (vec (into (sorted-set) (mapcat :mrns) (vals world)))
+               :visit-beds (visit-beds replay-records patient-ids)
+               :control-ids (vec (control-ids ground-truth))
+               :fhir-resource-ids (vec (fhir-resource-ids fhir-bundles))
+               :provider-npis (vec (sort (map :id providers)))}))))))))
+
+========== END FILE ==========
+
 ========== FILE: ./src/ehr_testing_sim/manifest.clj ==========
 (ns ehr-testing-sim.manifest
   "The corpus-manifest bridge: a `sim run` emits a provenance manifest
@@ -15616,7 +16057,7 @@ logic, not patient records.
             [ehr-testing-sim.pathway :as pathway]
             [ehr-testing-sim.result :as result]))
 
-(defn- resolve-modules
+(defn resolve-modules
   "M5b: `:modules` at the config/CLI-facing layer is a vector of NAME
   STRINGS (resolving to `resources/modules/<name>.json` -- test code may
   point at other fixture paths via a lower-level API, per this
@@ -15703,7 +16144,7 @@ logic, not patient records.
    (or (first (filter #(= i (:patient-ordinal %)) module-assignment))
        (seq (filterv :weight module-assignment)))))
 
-(defn- incompatible-assignments
+(defn incompatible-assignments
   "The full check: every ordinal (0-indexed, `patients` of them,
   default 1) certain to receive BOTH an encounter-opening pathway and a
   module. Guarded by each config's OWN schema validity
@@ -15729,14 +16170,32 @@ logic, not patient records.
                      :module-source :module-assignment})))
           (range (or patients 1)))))
 
-(defn- merge-config-file
+(defn effective-churn-profile
+  "M2b: resolves opts' `:churn`/`:churn-profile` into the profile
+  `engine/run` actually wants -- a bare `:churn` toggle expands to
+  `churn/sample-profile`; an explicit `:churn-profile` is merged OVER
+  `churn/default-churn-profile` (a caller only needs to name the rates
+  they want to change); neither key present means nil, the opt-in path
+  the pinned fixture depends on. Public: `ehr-testing-sim.identifiers/
+  identifiers-command` reuses this SAME resolution (a projection over
+  the same run `run-command` executes), rather than re-deriving it."
+  [{:keys [churn churn-profile]}]
+  (cond
+    churn-profile (merge churn/default-churn-profile churn-profile)
+    churn churn/sample-profile
+    :else nil))
+
+(defn merge-config-file
   "M4 Task 0: `:config` (a path to an EDN file) supplies the data-heavy
   engine keys that have no CLI flag of their own (`:pathway`/
   `:pathways`/`:order-profiles`, a full `:churn-profile` map) -- read
   once, merged UNDER the caller's own opts (an explicit opt wins over
   anything the file also names; the file exists to supply what flags
   can't express, not to override them). Absent `:config` -- the
-  default -- this is the identity function on opts, byte for byte."
+  default -- this is the identity function on opts, byte for byte.
+  Public: `ehr-testing-sim.identifiers/identifiers-command` reuses this
+  SAME config-merging step (a projection over the same run this
+  namespace's own `run-command` executes), rather than re-deriving it."
   [opts]
   (if-let [path (:config opts)]
     (merge (edn/read-string (slurp path)) (dissoc opts :config))
@@ -15840,10 +16299,7 @@ logic, not patient records.
        (let [reference-date (or reference-date emit-hl7/default-reference-date)
              utc-offset (or utc-offset emit-hl7/default-utc-offset)
              warm-up-seconds (or warm-up-seconds 0)
-             effective-churn-profile (cond
-                                       churn-profile (merge churn/default-churn-profile churn-profile)
-                                       churn churn/sample-profile
-                                       :else nil)
+             effective-churn-profile (effective-churn-profile opts)
              engine-params (-> (select-keys opts [:patients :arrival-gap :warm-up-seconds])
                                 (assoc :reference-date reference-date :utc-offset utc-offset))
              engine-opts (cond-> (merge (select-keys opts engine/config-keys)
@@ -15866,7 +16322,7 @@ logic, not patient records.
                                :events (count ground-truth)}}
               (= "hl7" emit) (assoc :messages (emit-hl7/emit ground-truth reference-date utc-offset facility providers site-profile))
               (= "fhir" emit) (assoc :fhir-bundles
-                                     (emit-state/bundle-run ground-truth reference-date utc-offset (or at :end)))))))))))
+                                     (emit-state/bundle-run ground-truth reference-date utc-offset seed (or at :end)))))))))))
 
 ========== END FILE ==========
 
@@ -15911,19 +16367,29 @@ logic, not patient records.
    [:sending-app {:optional true} :string]
    [:sending-facility {:optional true} :string]
    [:receiving-app {:optional true} :string]
-   [:receiving-facility {:optional true} :string]])
+   [:receiving-facility {:optional true} :string]
+   [:processing-id {:optional true} [:enum "P" "T" "D"]]])
 
 (def default-msh
   "Today's hard-coded MSH values (ehr-testing-sim.emit-hl7, pre-site-
   profiles) -- what an absent/empty profile's MSH dialect renders,
   byte-identical to always (SimHospital issue #17's own citation,
   .agents/plans/roadmap.md, is why :version in particular is now a
-  configured field rather than a hard-coded emitter constant)."
+  configured field rather than a hard-coded emitter constant).
+  `:processing-id` (MSH-11, HL7 Table 0103: \"P\" production, \"T\"
+  training, \"D\" debugging) defaults to \"P\" -- this project's own
+  output has always rendered a literal \"P\" here, pre-dating this
+  field's own existence as a configured knob (post-M6, ADR-0014's own
+  Task 4); a site profile may override it to \"T\"/\"D\" for a
+  training/debugging feed instead. See docs/site-profiles.md's own
+  realism-vs-caution paragraph on this specific knob before changing it
+  in a config a consumer's own routing logic depends on."
   {:version "2.3"
    :sending-app "EHR-TESTING-SIM"
    :sending-facility "SIM"
    :receiving-app ""
-   :receiving-facility ""})
+   :receiving-facility ""
+   :processing-id "P"})
 
 (defn effective-msh
   "`default-msh` overridden field-by-field by `site-profile`'s :msh --
@@ -16336,125 +16802,6 @@ logic, not patient records.
                                                                :high (double (:high reference-range))})
                      interpretation (assoc :interpretation interpretation)))
                  observations))))
-
-========== END FILE ==========
-
-========== FILE: ./test/ehr_testing_sim/blaze_integration_test.clj ==========
-(ns ehr-testing-sim.blaze-integration-test
-  "Task 3 (M6): the ecological loop -- samply/blaze (a same-language
-  Clojure FHIR server, .agents/plans/roadmap.md's own M6 consumer-plan
-  citation) is EmitState's natural first real-world consumer, the same
-  role ehr-testing-tools plays for EmitHL7 (README.md's own 'never
-  graded on its own homework' claim). If a Blaze server is reachable at
-  a configured base URL, this test POSTs a run's own end-of-run
-  Bundle(s), reads the resources back, and asserts round-trip
-  equivalence on the fields we wrote. Unreachable -> a clean skip, the
-  SAME skip-when-absent pattern ehr-testing-tools' own sim-harness/
-  available? establishes for ITS cross-repo consumer loop (ADR-0001's
-  dependency-arrow discipline, applied here to an external service
-  rather than a sibling repo) -- this project never depends on Blaze
-  being present; it merely checks against it when it is.
-
-  Start a local Blaze to actually exercise this test:
-
-      docker run -p 8080:8080 samply/blaze:latest
-
-  (the same one-liner README.md's own demo section names). Base URL is
-  configurable via the BLAZE_BASE_URL environment variable, defaulting
-  to http://localhost:8080/fhir. Uses only java.net.HttpURLConnection
-  (JDK 1.1+) rather than the newer java.net.http.HttpClient (JDK 11+,
-  unavailable on this session's own JDK 8 runtime -- notes/facts-
-  register.md F13) -- no new runtime dependency for one integration
-  test's own HTTP calls."
-  (:require [clojure.data.json :as json]
-            [clojure.java.io :as io]
-            [clojure.test :refer [deftest is testing]]
-            [ehr-testing-sim.emit-state :as emit-state]
-            [ehr-testing-sim.engine :as engine])
-  (:import [java.net URL HttpURLConnection SocketTimeoutException]))
-
-(def base-url
-  (or (System/getenv "BLAZE_BASE_URL") "http://localhost:8080/fhir"))
-
-(defn- open-connection
-  ^HttpURLConnection [url method]
-  (doto ^HttpURLConnection (.openConnection (URL. url))
-    (.setRequestMethod method)
-    (.setConnectTimeout 2000)
-    (.setReadTimeout 2000)))
-
-(defn- read-body
-  [^HttpURLConnection conn]
-  (let [status (.getResponseCode conn)
-        stream (if (< status 400) (.getInputStream conn) (.getErrorStream conn))]
-    {:status status :body (when stream (slurp stream))}))
-
-(defn reachable?
-  "A short-timeout GET against Blaze's own /metadata capability
-  statement -- any exception (connection refused, DNS failure, timeout)
-  or non-200 means 'treat as absent,' never a test error."
-  []
-  (try
-    (= 200 (:status (read-body (open-connection (str base-url "/metadata") "GET"))))
-    (catch Exception _ false)))
-
-(def absence-message
-  (str "Blaze unreachable at " base-url " -- skipping the ecological-loop test. "
-       "Start one with: docker run -p 8080:8080 samply/blaze:latest"))
-
-(defn- as-transaction
-  "ehr-testing-sim.emit-state/patient-bundle's own Bundle is :type
-  \"collection\" (a snapshot, not a submission payload -- EmitState's
-  own rendering law says nothing about how a consumer submits one) --
-  this test's OWN concern converts it to a FHIR transaction Bundle (one
-  POST-to-its-own-resourceType entry per resource), the shape Blaze's
-  base URL actually accepts. Kept local here, not added to emit-state's
-  public surface."
-  [bundle]
-  (assoc bundle
-         :type "transaction"
-         :entry (mapv (fn [{:keys [resource] :as entry}]
-                        (assoc entry :request {:method "POST" :url (:resourceType resource)}))
-                      (:entry bundle))))
-
-(defn- post-bundle!
-  [bundle]
-  (let [conn (open-connection base-url "POST")]
-    (doto conn
-      (.setDoOutput true)
-      (.setRequestProperty "Content-Type" "application/fhir+json"))
-    (with-open [w (io/writer (.getOutputStream conn))]
-      (.write w (json/write-str (as-transaction bundle))))
-    (read-body conn)))
-
-(defn- get-resource!
-  [relative-location]
-  (read-body (open-connection (str base-url "/" relative-location) "GET")))
-
-(deftest ^:integration blaze-accepts-end-of-run-bundles-and-round-trips-patient-fields
-  (if-not (reachable?)
-    (do (println absence-message) (is true absence-message))
-    (let [{:keys [ground-truth]} (engine/run {:seed 42 :patients 2})
-          bundles (emit-state/bundle-run ground-truth "2024-01-01" "+00:00" :end)]
-      (is (= 2 (count bundles)) "sanity: both patients produced a Bundle")
-      (doseq [[patient-id bundle] bundles]
-        (let [{:keys [status body]} (post-bundle! bundle)]
-          (testing (str "Blaze's own verdict on patient " patient-id "'s Bundle -- any rejection here is a"
-                        " FINDING (facts-register row: 'verified against Blaze <version>, <date>'), not a"
-                        " test-authoring bug -- fix our shapes if we're wrong, record theirs if strict beyond R4")
-            (is (= 200 status) body))
-          (when (= 200 status)
-            (let [transaction-response (json/read-str body :key-fn keyword)
-                  patient-entry (first (filter #(= "Patient" (get-in % [:resource :resourceType]))
-                                               (:entry transaction-response)))
-                  posted (:resource patient-entry)
-                  location (get-in patient-entry [:response :location])
-                  fetched (json/read-str (:body (get-resource! location)) :key-fn keyword)]
-              (testing "round-trip equivalence on the fields we wrote"
-                (is (= (:birthDate posted) (:birthDate fetched)))
-                (is (= (:gender posted) (:gender fetched)))
-                (is (= (get-in posted [:name 0 :family]) (get-in fetched [:name 0 :family])))
-                (is (= (get-in posted [:identifier 0 :value]) (get-in fetched [:identifier 0 :value])))))))))))
 
 ========== END FILE ==========
 
@@ -17238,7 +17585,14 @@ logic, not patient records.
   (let [r (cli/dispatch-action "explode" {})]
     (is (result/error? r))
     (is (= :unknown-command (:category r)))
-    (is (= ["run" "check"] (:known (:payload r))))))
+    (is (= ["run" "check" "identifiers"] (:known (:payload r))))))
+
+(deftest dispatch-routes-identifiers
+  (let [seen (atom nil)
+        r (cli/dispatch-action "identifiers" {:seed 1}
+                               {:identifiers-fn (fn [opts] (reset! seen opts) (result/ok :listed))})]
+    (is (result/ok? r))
+    (is (= {:seed 1} @seen))))
 
 (deftest run-requires-seed
   (let [r (cli/dispatch-action "run" {})]
@@ -18292,7 +18646,8 @@ logic, not patient records.
   this milestone's own tests."
   {:name "St. Aldric's Memorial"
    :msh {:version "2.5.1" :sending-app "ALDRIC-EHR" :sending-facility "ALDRIC"
-         :receiving-app "DOWNSTREAM" :receiving-facility "DOWNSTREAM-FAC"}
+         :receiving-app "DOWNSTREAM" :receiving-facility "DOWNSTREAM-FAC"
+         :processing-id "T"}
    :code-tables {:patient-class {:inpatient {:code "IN" :coding-system "99ALDRIC"}}
                  :discharge-disposition {:discharged-to-home {:code "HOME" :coding-system "99ALDRIC"}}}})
 
@@ -18307,12 +18662,26 @@ logic, not patient records.
       (is (= "ALDRIC" (message/get-field-first-value parsed "MSH" 4))))
     (testing "MSH-5/6: receiving app/facility"
       (is (= "DOWNSTREAM" (message/get-field-first-value parsed "MSH" 5)))
-      (is (= "DOWNSTREAM-FAC" (message/get-field-first-value parsed "MSH" 6))))))
+      (is (= "DOWNSTREAM-FAC" (message/get-field-first-value parsed "MSH" 6))))
+    (testing "MSH-11: processing id (post-M6, ADR-0014's own Task 4 knob)"
+      (is (= "T" (message/get-field-first-value parsed "MSH" 11))))))
+
+(deftest msh-11-processing-id-defaults-to-P-and-accepts-T-or-D
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        parsed-for (fn [processing-id]
+                     (parser/parse
+                      (first (emit-hl7/emit ground-truth ref-date utc-offset facility providers
+                                            (when processing-id {:msh {:processing-id processing-id}})))))]
+    (is (= "P" (message/get-field-first-value (parsed-for nil) "MSH" 11)) "no profile: today's default")
+    (is (= "P" (message/get-field-first-value (parsed-for "P") "MSH" 11)))
+    (is (= "T" (message/get-field-first-value (parsed-for "T") "MSH" 11)))
+    (is (= "D" (message/get-field-first-value (parsed-for "D") "MSH" 11)))))
 
 (deftest absent-profile-renders-todays-hardcoded-msh-values
   (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
         parsed (parser/parse (first (emit-hl7/emit ground-truth ref-date utc-offset facility providers)))]
     (is (= "2.3" (message/get-field-first-value parsed "MSH" 12)))
+    (is (= "P" (message/get-field-first-value parsed "MSH" 11)))
     (is (= "EHR-TESTING-SIM" (message/get-field-first-value parsed "MSH" 3)))
     (is (= "SIM" (message/get-field-first-value parsed "MSH" 4)))))
 
@@ -18390,14 +18759,18 @@ logic, not patient records.
 ;; profile is allowed to touch.
 
 (defn- mask-msh-fields
-  "Blanks MSH-3/4/5/6/12 (sending/receiving app+facility, version id) --
-  the declared MSH dialect surface. MSH-1 is the field-separator
-  character itself (not a token `str/split` produces); MSH-2 (encoding
-  characters) is index 1 after the split, so MSH-3/4/5/6/12 land at
-  indices 2/3/4/5/11."
+  "Blanks MSH-3/4/5/6/11/12 (sending/receiving app+facility, processing
+  id, version id) -- the declared MSH dialect surface. MSH-1 is the
+  field-separator character itself (not a token `str/split` produces);
+  MSH-2 (encoding characters) is index 1 after the split, so
+  MSH-3/4/5/6/11/12 land at indices 2/3/4/5/10/11. MSH-11 (processing
+  id) joined this surface post-M6 (ADR-0014's own Task 4 knob) --
+  docs/site-profiles.md's own rule that a new dialect knob extends this
+  function in the same change, or the invariance property stops
+  actually covering it."
   [msh-line]
   (let [fields (str/split msh-line #"\|" -1)]
-    (str/join "|" (map-indexed (fn [i f] (if (#{2 3 4 5 11} i) "" f)) fields))))
+    (str/join "|" (map-indexed (fn [i f] (if (#{2 3 4 5 10 11} i) "" f)) fields))))
 
 (defn- mask-pv1-fields
   "Blanks PV1-2/PV1-36 -- the two declared code-table-override fields.
@@ -18408,8 +18781,9 @@ logic, not patient records.
 
 (defn mask-dialect-surfaces
   "Masks every declared site-profile dialect surface (docs/site-
-  profiles.md Task 4) in one rendered ER7 message: MSH-3/4/5/6/12,
-  PV1-2/PV1-36, and strips Z-segment lines entirely (a Z-segment's
+  profiles.md Task 4, extended post-M6 by ADR-0014's own MSH-11 knob)
+  in one rendered ER7 message: MSH-3/4/5/6/11/12, PV1-2/PV1-36, and
+  strips Z-segment lines entirely (a Z-segment's
   CONTENT, not merely a field within it, is site-specific -- its bare
   presence following a trigger is still exercised by the Z-segment
   tests above, not by this property). Two profiles' renderings of the
@@ -18461,6 +18835,20 @@ logic, not patient records.
           zpi-msg (first messages)]
       (is (some? (parser/parse zpi-msg)))
       (is (= 1 (count (message/get-segments (parser/parse zpi-msg) "ZPI")))))))
+
+;; --- post-M6 (ADR-0014): control-id-for is the ONE source every message
+;; builder AND `sim identifiers` derive MSH-10 from -- proven here by
+;; checking it against a real run's own rendered messages, not merely
+;; against itself.
+
+(defspec control-id-for-matches-every-rendered-messages-own-msh-10 100
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 6)]
+    (let [{:keys [ground-truth facility providers]} (engine/run {:seed seed :patients patients})
+          messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+          rendered-control-ids (into #{} (map #(message/get-field-first-value (parser/parse %) "MSH" 10)) messages)
+          derived-control-ids (into #{} (keep emit-hl7/control-id-for) ground-truth)]
+      (= rendered-control-ids derived-control-ids))))
 
 ========== END FILE ==========
 
@@ -18526,7 +18914,7 @@ logic, not patient records.
 
 (deftest patient-resource-carries-patient-id-active-mrn-and-persona-fields
   (let [state {:patient-id "PID-000000-abc" :active-mrn "MRN000001" :status :admitted :persona a-persona}
-        bundle (emit-state/patient-bundle ref-date utc-offset state)
+        bundle (emit-state/patient-bundle ref-date utc-offset 42 state)
         patient (first (filter #(= "Patient" (:resourceType %)) (map :resource (:entry bundle))))]
     (is (= "PID-000000-abc" (:id patient)))
     (is (= "MRN000001" (:value (first (:identifier patient)))))
@@ -18541,7 +18929,7 @@ logic, not patient records.
                   :location {:ward "Renal" :bed "RENAL-01" :placement :licensed}
                   :admitted-at 100 :persona a-persona}
         discharged (assoc admitted :status :discharged :discharged-at 500)
-        resources-of (fn [state] (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state))))
+        resources-of (fn [state] (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset 42 state))))
         encounter-of (fn [state] (first (filter #(= "Encounter" (:resourceType %)) (resources-of state))))]
     (is (nil? (encounter-of never-admitted)))
     (is (= "in-progress" (:status (encounter-of admitted))))
@@ -18555,7 +18943,7 @@ logic, not patient records.
         state {:patient-id "P1" :active-mrn "M1" :status :discharged :persona a-persona
                :conditions [{:codes [a-concept] :citation {:module "sinusitis" :state :onset}
                              :onset-t 10 :clinical-status :resolved :end-t 200}]}
-        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state)))
+        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset 42 state)))
         condition (first (filter #(= "Condition" (:resourceType %)) resources))]
     (is (= "36971009" (:code (first (:coding (:code condition))))))
     (is (= "http://snomed.info/sct" (:system (first (:coding (:code condition))))))
@@ -18567,7 +18955,7 @@ logic, not patient records.
         state {:patient-id "P1" :active-mrn "M1" :status :admitted :persona a-persona
                :observations [{:codes [loinc] :t 50 :value 4.1 :unit "K/uL"
                                :reference-range {:low 4.5 :high 11.0} :interpretation :low}]}
-        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state)))
+        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset 42 state)))
         obs (first (filter #(= "Observation" (:resourceType %)) resources))]
     (is (= "6690-2" (:code (first (:coding (:code obs))))))
     (is (= "http://loinc.org" (:system (first (:coding (:code obs))))))
@@ -18581,7 +18969,7 @@ logic, not patient records.
         state {:patient-id "P1" :active-mrn "M1" :status :admitted :persona a-persona
                :medication-orders [{:codes [rxnorm] :citation {:module "m" :state :s}
                                     :ordered-t 20 :status :completed :ended-t 300}]}
-        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state)))
+        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset 42 state)))
         med (first (filter #(= "MedicationRequest" (:resourceType %)) resources))]
     (is (= "308191" (:code (first (:coding (:medicationCodeableConcept med))))))
     (is (= "completed" (:status med)))
@@ -18589,21 +18977,21 @@ logic, not patient records.
 
 (deftest coverage-resource-renders-the-sampled-payer
   (let [state {:patient-id "P1" :active-mrn "M1" :status :admitted :persona a-persona}
-        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state)))
+        resources (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset 42 state)))
         coverage (first (filter #(= "Coverage" (:resourceType %)) resources))]
     (is (= "active" (:status coverage)))
     (is (= "Commercial HMO" (:display (first (:payor coverage)))))))
 
 (deftest no-invented-fields-a-bare-registered-only-patient-yields-just-patient-and-coverage
   (let [state {:patient-id "P1" :active-mrn "M1" :status :new :persona a-persona}
-        resources (map (comp :resourceType) (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset state))))]
+        resources (map (comp :resourceType) (map :resource (:entry (emit-state/patient-bundle ref-date utc-offset 42 state))))]
     (is (= #{"Patient" "Coverage"} (set resources)))))
 
 ;; --- the bundle is valid JSON --------------------------------------------
 
 (deftest patient-bundle-round-trips-through-clojure-data-json
   (let [{:keys [ground-truth]} (engine/run {:seed 42 :patients 2})
-        bundles (emit-state/bundle-run ground-truth ref-date utc-offset :end)]
+        bundles (emit-state/bundle-run ground-truth ref-date utc-offset 42 :end)]
     (is (= 2 (count bundles)))
     (doseq [[_ bundle] bundles]
       (is (= "Bundle" (:resourceType (json/read-str (json/write-str bundle) :key-fn keyword)))))))
@@ -18615,7 +19003,7 @@ logic, not patient records.
   (prop/for-all [seed gen/large-integer
                  patients (gen/choose 1 8)]
     (let [{:keys [ground-truth]} (engine/run {:seed seed :patients patients})
-          bundles (emit-state/bundle-run ground-truth ref-date utc-offset :end)
+          bundles (emit-state/bundle-run ground-truth ref-date utc-offset seed :end)
           messages (emit-hl7/emit ground-truth ref-date utc-offset)]
       (every?
        (fn [i]
@@ -18628,6 +19016,41 @@ logic, not patient records.
                  (and (= pid (:id patient))
                       (seq own-messages))))))
        (range patients)))))
+
+;; --- Standards-native test-data marking (post-M6, ADR-0014) --------------
+;; notes/facts-register.md F14: HTEST system/code/display verified against
+;; terminology.hl7.org before landing (no-guessing-codes rule).
+
+(def ^:private htest-security
+  {:system "http://terminology.hl7.org/CodeSystem/v3-ActReason"
+   :code "HTEST"
+   :display "test health data"})
+
+(deftest patient-bundle-resources-carry-htest-security-and-run-tag
+  (let [state {:patient-id "P1" :active-mrn "M1" :status :admitted :persona a-persona}
+        bundle (emit-state/patient-bundle ref-date utc-offset 42 state)
+        resources (map :resource (:entry bundle))]
+    (is (seq resources) "sanity: this state actually renders resources")
+    (doseq [r resources]
+      (is (= [htest-security] (:security (:meta r))))
+      (is (= [{:system "urn:ehr-testing-sim" :code "42"}] (:tag (:meta r)))))))
+
+(defspec every-resource-in-every-bundle-carries-htest-and-run-tag 100
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 5)]
+    (let [{:keys [ground-truth]} (engine/run {:seed seed :patients patients})
+          bundles (emit-state/bundle-run ground-truth ref-date utc-offset seed :end)]
+      (and (seq bundles)
+           (every?
+            (fn [[_ bundle]]
+              (and (seq (:entry bundle))
+                   (every?
+                    (fn [{:keys [resource]}]
+                      (and (= [htest-security] (:security (:meta resource)))
+                           (= [{:system "urn:ehr-testing-sim" :code (str seed)}]
+                              (:tag (:meta resource)))))
+                    (:entry bundle))))
+            bundles)))))
 
 ========== END FILE ==========
 
@@ -20887,6 +21310,120 @@ logic, not patient records.
 
 ========== END FILE ==========
 
+========== FILE: ./test/ehr_testing_sim/identifiers_test.clj ==========
+(ns ehr-testing-sim.identifiers-test
+  "The `sim identifiers` capability (post-M6, ADR-0014). Written test-
+  first (ADR-0004): determinism (same config+seed => identical
+  inventory) and completeness against a real run (every id a real
+  emission of THIS run actually carries -- MRNs/control-ids on the
+  wire, resource ids in the FHIR Bundles, provider NPIs, patient-ids --
+  is present in the inventory, checked by independent extraction and
+  set-comparison, never by re-reading identifiers-command's own
+  output)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [ehr-testing-sim.emit-hl7 :as emit-hl7]
+            [ehr-testing-sim.emit-state :as emit-state]
+            [ehr-testing-sim.engine :as engine]
+            [ehr-testing-sim.identifiers :as identifiers]
+            [ehr-testing-sim.result :as result]
+            [com.nervestaple.hl7-parser.parser :as parser]
+            [com.nervestaple.hl7-parser.message :as message]))
+
+(def ref-date "2024-01-01")
+(def utc-offset "+00:00")
+
+(deftest identifiers-command-requires-seed
+  (let [r (identifiers/identifiers-command {})]
+    (is (result/error? r))
+    (is (= :missing-required-opt (:category r)))))
+
+(deftest identifiers-command-rejects-incompatible-assignment
+  (testing "the SAME static incompatible-assignment check run-command
+            performs (ehr-testing-sim.run/incompatible-assignments,
+            reused here, never re-derived)"
+    (let [r (identifiers/identifiers-command
+             {:seed 1 :patients 1
+              :module-assignment [{:patient-ordinal 0 :module-id "sinusitis"}]})]
+      (is (result/rejected? r))
+      (is (= :incompatible-assignment (:category r))))))
+
+(deftest identifiers-command-surfaces-an-unresolvable-module-name
+  (let [r (identifiers/identifiers-command {:seed 1 :modules ["not-a-real-module"]})]
+    (is (result/error? r))
+    (is (= :module-not-found (:category r)))))
+
+(def ^:private one-bed-no-ed-facility
+  "The same tiny facility ehr-testing-sim.run-test's own capacity-
+  exhaustion test uses -- guarantees exhaustion deterministically
+  rather than relying on a lucky seed."
+  {:id :tiny
+   :wards [{:id :renal :name "Renal" :beds 1 :surge-slots 0
+            :surge-format "%s-H%02d" :class :inpatient}]})
+
+(deftest identifiers-command-surfaces-capacity-exhaustion-as-a-structured-error
+  (let [r (identifiers/identifiers-command {:seed 1 :patients 2 :facility one-bed-no-ed-facility})]
+    (is (result/error? r))
+    (is (= :capacity-exhausted (:category r)))))
+
+(deftest identifiers-command-shape
+  (let [r (identifiers/identifiers-command {:seed 42 :patients 3})]
+    (is (result/ok? r))
+    (let [{:keys [run-id patient-ids mrns visit-beds control-ids fhir-resource-ids provider-npis]} (:payload r)]
+      (is (= "42" run-id))
+      (is (= 3 (count patient-ids)))
+      (is (seq mrns))
+      (is (= (set patient-ids) (set (keys visit-beds))))
+      (is (seq control-ids))
+      (is (seq fhir-resource-ids))
+      (is (seq provider-npis)))))
+
+;; --- determinism -----------------------------------------------------------
+
+(defspec identifiers-command-is-deterministic 50
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 5)]
+    (let [opts {:seed seed :patients patients}
+          r1 (identifiers/identifiers-command opts)
+          r2 (identifiers/identifiers-command opts)]
+      (= (:payload r1) (:payload r2)))))
+
+;; --- completeness: every id a real emission of THIS run carries is present,
+;; checked by independent extraction against emit-hl7/emit and emit-state/
+;; bundle-run -- never by re-deriving from identifiers-command's own output.
+
+(defspec identifiers-command-is-complete-against-a-real-run 50
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 5)]
+    (let [{:keys [ground-truth facility providers]} (engine/run {:seed seed :patients patients})
+          messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+          bundles (emit-state/bundle-run ground-truth ref-date utc-offset seed :end)
+          wire-mrns (into #{} (map #(message/get-field-first-value (parser/parse %) "PID" 3)) messages)
+          wire-control-ids (into #{} (map #(message/get-field-first-value (parser/parse %) "MSH" 10)) messages)
+          bundle-resource-ids (into #{} (mapcat (fn [[_ b]] (map (comp :id :resource) (:entry b)))) bundles)
+          expected-patient-ids (into #{} (map #(engine/patient-id-for seed %)) (range patients))
+          expected-npis (into #{} (map :id) providers)
+          {:keys [payload]} (identifiers/identifiers-command {:seed seed :patients patients})]
+      (and (clojure.set/subset? wire-mrns (set (:mrns payload)))
+           (clojure.set/subset? wire-control-ids (set (:control-ids payload)))
+           (clojure.set/subset? bundle-resource-ids (set (:fhir-resource-ids payload)))
+           (= expected-patient-ids (set (:patient-ids payload)))
+           (= expected-npis (set (:provider-npis payload)))))))
+
+(deftest identifiers-command-includes-a-merged-away-patients-own-mrn
+  (testing "a merge's own evolve never clears the merged-away patient's
+            :mrns (only :status :merged) -- the inventory must still
+            surface that MRN, since it once appeared on the wire"
+    (let [r (identifiers/identifiers-command
+             {:seed 7 :patients 4
+              :churn-profile {:merge 1.0 :cancel-transfer 0 :cancel-discharge 0 :bed-swap 0}})]
+      (is (result/ok? r))
+      (is (= 4 (count (:mrns (:payload r))))))))
+
+========== END FILE ==========
+
 ========== FILE: ./test/ehr_testing_sim/manifest_test.clj ==========
 (ns ehr-testing-sim.manifest-test
   "Tripwire for the corpus-manifest bridge: what `build` produces
@@ -21487,6 +22024,20 @@ logic, not patient records.
   (let [profile {:msh {:version "2.5.1" :sending-app "ALDRIC-EHR"}}]
     (is (= (assoc site-profile/default-msh :version "2.5.1" :sending-app "ALDRIC-EHR")
            (site-profile/effective-msh profile)))))
+
+;; --- post-M6 (ADR-0014, Task 4): MSH-11 processing id -----------------------
+
+(deftest default-msh-processing-id-is-P
+  (is (= "P" (:processing-id site-profile/default-msh))))
+
+(deftest effective-msh-overrides-processing-id
+  (is (= "T" (:processing-id (site-profile/effective-msh {:msh {:processing-id "T"}}))))
+  (is (= "D" (:processing-id (site-profile/effective-msh {:msh {:processing-id "D"}})))))
+
+(deftest processing-id-only-accepts-the-documented-enum
+  (is (site-profile/valid-profile? {:msh {:processing-id "T"}}))
+  (is (site-profile/valid-profile? {:msh {:processing-id "D"}}))
+  (is (not (site-profile/valid-profile? {:msh {:processing-id "X"}}))))
 
 ;; --- Task 2: code-table overrides ------------------------------------------
 
