@@ -1,9 +1,9 @@
 ========== PACK HEADER ==========
 repo: ehr-testing-sim
-generated (UTC): 2026-07-27T03:13:05Z
-HEAD: a181cadb9568c986c9ea6ab1af860c0e77355e1e
+generated (UTC): 2026-07-27T03:55:36Z
+HEAD: e0ed952c8d42da45e62dd9d7fe59c4ad3982fdf2
 git status --porcelain:
- M AUTHORS-GUIDE.md
+working tree clean
 elides: .agents/skills, .agents/prompts/archive
 ========== END PACK HEADER ==========
 
@@ -427,6 +427,89 @@ CLI-produced traces (order/result post-Task-0, and Persona-enriched);
 `docs/sim-theory.edn`'s diagram companion files updated for the new
 `payer-pool` wire.
 
+## Site profiles — code tables, MSH dialect, Z-segments — **landed**
+
+Lands the config layer `docs/site-profiles.md` designed (M4's own
+session): a `site-profile` value (`ehr-testing-sim.site-profile/
+SiteProfile`, all keys optional) as a real catalytic on **EmitHL7**
+(`docs/sim-theory.edn`, target 3) — no new stage, one new wire, the
+same shape `order-profiles`/`provider-pool` joining `Execute` already
+established. **The default-profile identity is this milestone's own
+determinism anchor**, property-tested (`emit-hl7-test/default-profile-
+is-the-absent-profile`): no profile arg, an explicit `nil`, and `{}`
+all render identically. Ships an MSH dialect (version, sending/
+receiving app+facility — **SimHospital issue #17's own citation**,
+this roadmap's earlier scope note, answered: version selection is now
+a configured field, not a hard-coded emitter constant); PV1-2/PV1-36
+code-table overrides (rendering-time substitutions over the SAME
+underlying state value, `ehr-testing-sim.site-profile/code-for`); and
+a Z-segment template DSL (field→state/persona/event-path bindings,
+rendered after standard segments on their own declared trigger,
+escaped per ER7, an unbound path rendering empty rather than throwing
+— **SimHospital issue #21's own citation**, answered for the custom-
+segment scope item). The parser round-trip check this milestone's own
+spec asked for (`emit-hl7-test/parser-round-trips-messages-bearing-an-
+unknown-z-segment`) passed clean — `org.clojars.cmiles74/clojure-hl7-
+parser` is segment-name-agnostic on read, so no facts-register finding
+was needed here.
+
+**The invariance property, proven both structurally and statistically.**
+The milestone's own thesis — two site profiles over one seed produce
+the same ground truth in two accents — is checked two ways: the strong
+half (ground truth) structurally, since `:site-profile` is not a
+member of `ehr-testing-sim.engine/config-keys` and is therefore
+incapable of reaching `Execute` at all, not merely untested; the weak
+half (messages) via a property test over 100 random seeds/patient
+counts, comparing a default and a deliberately gaudy second profile
+(HL7 2.5.1, a renamed sending facility, custom patient-class/
+disposition codes, a `ZPI` payer Z-segment) after masking exactly the
+declared dialect surfaces (MSH-3/4/5/6/12, PV1-2/PV1-36, Z-segment
+lines) — the masking function itself is a deliverable, since it is the
+precise, executable statement of what a dialect may touch and nothing
+more. A CLI-produced two-profile demo (`docs/demos/site-profiles/`)
+carries the same event rendered under both profiles side by side, with
+ground-truth identity verified programmatically at generation time, not
+merely asserted in prose.
+
+**`:naming :surge-format` migrates to the profile — the one documented
+exception.** Every other component binds at `EmitHL7`'s own render
+call sites (Task 3's seam, `docs/site-profiles.md`); surge bed ids,
+by contrast, are already baked into ground truth at DECIDE time
+(`ehr-testing-sim.facility/surge-slot-ids`, pre-dating this milestone),
+so `ehr-testing-sim.site-profile/apply-naming` is a facility-config
+transform a caller applies BEFORE `engine/run`, never auto-wired into
+it and never read by `EmitHL7` — a config-level compatibility shim,
+not a fifth emit-time dialect surface, named here so it isn't
+mistaken for one.
+
+**`;; NEXT` stays on `RunModules`, Milestone M5, per the ratified
+order** — this milestone added a catalytic wire to an already-`:built`
+stage (`EmitHL7`), not a new stage of its own, so there was never a
+marker to move; recorded here so a future session doesn't go looking
+for one.
+
+230 tests / 625 assertions green, coverage 95.90%/98.06% (flat against
+the M4 baseline 95.91%/98.00% — a 0.01pp forms difference, well within
+noise, no regression to justify). The pinned fixture
+(`test/ehr_testing_sim/fixtures/pinned_seed_42_patients_5.edn`) is
+untouched this session — `:site-profile` never reaches `engine/run`,
+so there was no perturbation to regenerate against, the first
+milestone since ADR-0009 was ratified where that's true by
+construction rather than by luck.
+
+**Note for the author: the tools-side gate-loop baseline review
+(`ehr-testing-tools`' own consumer-loop Task 3, its own committed
+verdict baseline artifact) is now genuinely due again.** Sim's default
+(no-profile) message shape changed twice since that baseline was last
+recorded — M3/M4's own deltas (order/result messages, PID/IN1
+enrichment) plus this session's own default-path addition (PV1-36 now
+present, blank, on every non-discharge message; populated on discharge
+where before this field didn't exist at all). Re-run tools' Task 3
+procedure when convenient to confirm the gate's verdict on the new
+default shape and record any delta against the committed baseline —
+noted here, not actioned, since that review lives in tools' own
+repo/session per ADR-0001's dependency direction.
+
 ## M5 — GMF interpreter + module vendoring decision + CompileTrajectory
 
 Lands **RunModules** and **CompileTrajectory** (both `:planned`),
@@ -514,25 +597,12 @@ the milestone before it:
   demoting it to dormant, the way `ehr-testing-tools` did at its own
   ADR-0008, is recorded as its own ADR when that happens, not folded
   into this roadmap.
-- **Site profiles** (`docs/site-profiles.md`, this session) —
-  **proposed**, for author review rather than decided placement:
-  code-table overrides, naming idioms beyond `:surge-format`, and
-  Z-segment templates, as their own milestone landing **after M3**.
-  Reasoned there rather than earlier because Z-segment templates are
-  thin content without order/result data to bind them to — a
-  site-profile milestone landing before M3's `order-profiles` catalytic
-  exists would have little beyond code-table overrides to actually
-  exercise. **Scope addition: MSH-12 (HL7 version id) as an explicit
-  site-profile config knob** — SimHospital issue #17
-  (`docs/research/SimHospital-Synthea-limitations-considered.md` §5.3),
-  a consumer of HL7v2.6 who could see multiple generated schemas in the
-  project but no documented way to switch versions, is this milestone's
-  citation for making version selection a named, configured field
-  rather than a hard-coded emitter constant. **Custom-segment
-  citation**: SimHospital issue #21, a 2024 user asking how to add GT1
-  and ZG1 segments — the same issue this roadmap's M4 entry cites for
-  US phone formatting — is this milestone's citation for the
-  Z-segment-template scope item above.
+- **Site profiles** — **landed**, see its own section above (between
+  M4 and M5). GT1/ZG1 (SimHospital issue #21's own second half — the
+  same issue cited there for the Z-segment-template scope item) and
+  version-driven segment *restructuring* (beyond the MSH-12 literal)
+  stay future, per `docs/site-profiles.md`'s own honestly-updated
+  today/future table.
 
 ## Consumer plan: sim doesn't validate itself in a vacuum
 
@@ -1135,10 +1205,15 @@ bed-swap, merge — docs/patient-state-model.md), order/result step
 types with a real CBC+BMP order-profiles catalytic (verified LOINC
 codes) plus ORM^O01/ORU^R01 emission (M3), a per-patient
 pathway-assignment layer (`:pathways`), `:step-rejected` ground-truth
-events for decide-time rejections (ADR-0012), and, as of Milestone M4,
+events for decide-time rejections (ADR-0012), Milestone M4's
 **Persona** — demographic sampling (name, DOB, sex, address, phone,
 SSN-shaped id) and age-linked payer sampling, folded into every
-patient's `:registered` event, with PID and IN1 segment enrichment.
+patient's `:registered` event, with PID and IN1 segment enrichment —
+and, landed most recently, **site profiles**
+(docs/site-profiles.md): an MSH dialect, PV1-2/PV1-36 code-table
+overrides, and a Z-segment template DSL, all bound at emit time and
+proven invariant to ground truth (two site profiles over one seed
+render the same facts in two accents).
 
 ## Pipeline: now / next / later
 
@@ -1176,11 +1251,13 @@ flowchart LR
 ```
 
 **Now** (green): Execute, Check, EmitHL7, InjectChurn (M2b), Execute's
-own order/result step types and EmitHL7's ORM/ORU cycle (M3), and, as
-of Milestone M4, **Persona** — demographics sampling from vendored,
-hashed tables plus a real `payer-pool` catalytic wire, folded into
-Execute's own step queue via the `:registered` event, plus PID/IN1
-enrichment — property-tested and green (207 tests / 582 assertions).
+own order/result step types and EmitHL7's ORM/ORU cycle (M3), Milestone
+M4's **Persona** — demographics sampling from vendored, hashed tables
+plus a real `payer-pool` catalytic wire, folded into Execute's own step
+queue via the `:registered` event, plus PID/IN1 enrichment — and
+EmitHL7's fourth catalytic, **site-profile** — MSH dialect, code-table
+overrides, Z-segment templates — property-tested and green (230 tests
+/ 625 assertions).
 **Next** (amber): **RunModules**, Milestone M5 — the GMF interpreter
 port, the `gmf-module-set` vendoring-vs-lockfile decision, and
 `CompileTrajectory`. **Later** (dashed grey): everything else in the
@@ -1192,8 +1269,9 @@ detail view (every resource wire, catalytic input, and the
 [`docs/sim-theory.edn`](docs/sim-theory.edn). [`.agents/plans/roadmap.md`](.agents/plans/roadmap.md)
 is the milestone plan this diagram's *next*/*later* stages resolve
 into. [`docs/site-profiles.md`](docs/site-profiles.md) answers "how do
-I make it simulate *my* hospital" — the config layer for site-specific
-codes, naming idioms, and Z-segments.
+I make it simulate *my* hospital" — landed: `--config` a `:site-profile`
+(MSH dialect, code-table overrides, Z-segment templates) and get your
+own hospital's dialect, ground truth unchanged either way.
 
 ## Relation to the ehr-testing-* family
 
@@ -1569,6 +1647,13 @@ generating throwaway ones.
   so the excerpt also documents that ordinary apostrophes need no ER7
   escaping at all (Task 4's own finding is about literal delimiter
   characters, not everyday punctuation).
+- [`site-profiles/`](site-profiles/) — the site-profiles milestone's
+  own invariance property: the SAME seed, rendered under no profile and
+  under a deliberately gaudy second profile (a different HL7 version,
+  renamed sending facility, custom patient-class/disposition codes, a
+  `ZPI` payer Z-segment) — one `ground-truth.edn` (byte-identical
+  either way), two `messages-*.txt` files that differ only on the
+  declared dialect surfaces.
 
 Each subdirectory holds:
 
@@ -1579,6 +1664,13 @@ Each subdirectory holds:
   separated (each message's own segments are `\r`-delimited internally,
   per the real ER7 wire format — a text viewer that shows them running
   together per message is rendering that CR correctly, not truncating)
+
+`site-profiles/` is the one exception to this shape: it renders the
+SAME ground truth under two different site profiles, so it holds
+`config-aldric.edn` (the second profile's `--config` file),
+`ground-truth.edn` (ONE file — the two runs' logs are byte-identical,
+verified when generating this demo), and `messages-default.txt` /
+`messages-aldric.txt` in place of a single `messages.txt`.
 
 ========== END FILE ==========
 
@@ -2265,6 +2357,219 @@ MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101031100+0000||ADT^A03|MRN000004-A03-11460|
 MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101044700+0000||ADT^A03|MRN000003-A03-17220|P|2.3EVN|A03|20240101044700+0000PID|1||MRN000003||Nguyen^David||19701021|M|||702 Crestwood Ave^^Tucson^AZ^85701||546-698-1880PV1|1|I|Renal^^RENAL-03^general-hospital||||9818880558^Reyes^Priya
 
 MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101054500+0000||ADT^A03|MRN000005-A03-20700|P|2.3EVN|A03|20240101054500+0000PID|1||MRN000005||Taylor^Lisa||19620814|F|||78 Magnolia St^^Atlanta^GA^30303||987-630-6408PV1|1|I|Renal^^RENAL-04^general-hospital||||9818880558^Reyes^Priya
+========== END FILE ==========
+
+========== FILE: ./docs/demos/site-profiles/README.md ==========
+# Demo: two site profiles, one seed — the invariance property (Milestone site-profiles)
+
+`docs/site-profiles.md`'s own thesis, made concrete: the SAME seed and
+patient count, rendered under two different site profiles, produce
+byte-identical ground truth and messages that differ only on the
+declared dialect surfaces (MSH-3/4/5/6/12, PV1-2/PV1-36, and the
+presence of a Z-segment).
+
+## Commands
+
+```bash
+clojure -M:cli run --seed 42 --patients 2 --emit hl7
+clojure -M:cli run --seed 42 --patients 2 --emit hl7 --config docs/demos/site-profiles/config-aldric.edn
+```
+
+The first run uses no site profile at all (the absent/default profile);
+the second uses [`config-aldric.edn`](config-aldric.edn) — `:site-profile`
+has no CLI flag of its own, so it rides `run-command`'s `--config`
+passthrough (`ehr-testing-sim.run/run-command`'s docstring), the same
+vehicle `:pathway`/`:order-profiles` use.
+
+## The gaudy profile
+
+`config-aldric.edn` is deliberately different-looking on every dialect
+surface this milestone defines: HL7 version 2.5.1 (not 2.3), a renamed
+sending facility (`ALDRIC-EHR`/`ALDRIC`, not `EHR-TESTING-SIM`/`SIM`)
+plus receiving app/facility (blank by default), custom patient-class
+and discharge-disposition codes (`IN^99ALDRIC`, `HOME^99ALDRIC`), and a
+`ZPI` payer Z-segment bound to the patient's own sampled persona/payer
+state.
+
+## What to look for
+
+- [`ground-truth.edn`](ground-truth.edn): the SAME log for both runs —
+  verified programmatically when this demo was generated (`(= default-
+  ground-truth aldric-ground-truth)` => `true`), and it is ONE file
+  here, not two, precisely because there's only one ground truth to
+  show.
+- [`messages-default.txt`](messages-default.txt) /
+  [`messages-aldric.txt`](messages-aldric.txt): the same four messages
+  (two admissions, two discharges), rendered twice.
+
+## Excerpt: patient 1's admission (`MRN000001`), both profiles
+
+Default profile (`messages-default.txt`):
+
+```
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ADT^A01|MRN000001-A01-0|P|2.3
+EVN|A01|20240101000000+0000
+PID|1||MRN000001||Miller^Sophia||20120103|F|||204 Maple Ave^^Portland^OR^97201||564-979-8065
+PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya
+IN1|1||commercial-hmo|Commercial HMO
+```
+
+St. Aldric's Memorial profile (`messages-aldric.txt`):
+
+```
+MSH|^~\&|ALDRIC-EHR|ALDRIC|DOWNSTREAM|DOWNSTREAM-FAC|20240101000000+0000||ADT^A01|MRN000001-A01-0|P|2.5.1
+EVN|A01|20240101000000+0000
+PID|1||MRN000001||Miller^Sophia||20120103|F|||204 Maple Ave^^Portland^OR^97201||564-979-8065
+PV1|1|IN^99ALDRIC|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya
+IN1|1||commercial-hmo|Commercial HMO
+ZPI|commercial-hmo|commercial|ALDRIC-PAYER-V1
+```
+
+(Segments shown one per line for readability, trailing empty PV1 fields
+elided; the real wire format uses `\r`, HL7v2's actual segment
+delimiter, and PV1 carries its full 36 fields — see `mask-pv1-fields`,
+`test/ehr_testing_sim/emit_hl7_test.clj`, for exactly which two are
+masked when comparing.)
+
+**MSH-3/4/5/6/12** (sending/receiving app+facility, version id) are the
+only MSH fields that differ. **PV1-2** (patient class) differs
+(`I` → `IN^99ALDRIC`) — the same underlying `:inpatient` state value,
+rendered through St. Aldric's own code-table override
+(`ehr-testing-sim.site-profile/code-for`). **ZPI** is new: a Z-segment
+this profile alone declares, bound to `[:persona :payer :id]` and
+`[:persona :payer :type]` (both resolve against the SAME `:registered`
+event's persona that produced the IN1 segment above — `commercial-hmo`
+appears in both), plus a literal fallback field. Patient 1's own
+discharge (later in each `messages-*.txt`) shows the same pattern on
+**PV1-36** (discharge disposition): `01` (today's standard default)
+vs. `HOME^99ALDRIC`.
+
+Everything else — PID's demographic fields, the ward/bed/attending in
+PV1-3/6/7, IN1's payer id/name, the timestamps themselves — is
+byte-identical across both renderings, because none of it is a
+declared dialect surface.
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/site-profiles/config-aldric.edn ==========
+;; St. Aldric's Memorial -- the deliberately gaudy second profile,
+;; docs/site-profiles.md's own invariance-property demo (Task 4).
+;; A different HL7 version, a renamed sending facility, an overridden
+;; patient-class/discharge-disposition code, and a ZPI payer Z-segment.
+{:site-profile
+ {:name "St. Aldric's Memorial"
+  :msh {:version "2.5.1"
+        :sending-app "ALDRIC-EHR"
+        :sending-facility "ALDRIC"
+        :receiving-app "DOWNSTREAM"
+        :receiving-facility "DOWNSTREAM-FAC"}
+  :code-tables {:patient-class {:inpatient {:code "IN" :coding-system "99ALDRIC"}}
+                :discharge-disposition {:discharged-to-home {:code "HOME" :coding-system "99ALDRIC"}}}
+  :z-segments [{:segment "ZPI"
+                :trigger #{:admission}
+                :fields [{:path [:persona :payer :id]}
+                         {:path [:persona :payer :type]}
+                         {:literal "ALDRIC-PAYER-V1"}]}]}}
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/site-profiles/ground-truth.edn ==========
+[{:event :registered,
+  :t 0,
+  :active-mrn "MRN000001",
+  :persona
+  {:name {:family "Miller", :given "Sophia"},
+   :sex :female,
+   :dob "2012-01-03",
+   :age 12,
+   :address
+   {:street "204 Maple Ave",
+    :city "Portland",
+    :state "OR",
+    :zip "97201"},
+   :phone "564-979-8065",
+   :ssn "900-90-9980",
+   :payer
+   {:id "commercial-hmo", :name "Commercial HMO", :type :commercial}},
+  :participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :active-mrn "MRN000001",
+  :attending "3903633105",
+  :warm-up false,
+  :reason "Kidney problems",
+  :event :admission,
+  :t 0,
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :forced false}
+ {:event :registered,
+  :t 3480,
+  :active-mrn "MRN000002",
+  :persona
+  {:name {:family "Smith-Jones", :given "Mary"},
+   :sex :female,
+   :dob "1954-03-09",
+   :age 70,
+   :address
+   {:street "35 Aspen Way",
+    :city "Albuquerque",
+    :state "NM",
+    :zip "87102"},
+   :phone "497-619-7552",
+   :ssn "900-86-3096",
+   :payer {:id "medicare-65", :name "Medicare", :type :medicare}},
+  :participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :warm-up false}
+ {:home-ward "Renal",
+  :participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :active-mrn "MRN000002",
+  :attending "3903633105",
+  :warm-up false,
+  :reason "Kidney problems",
+  :event :admission,
+  :t 3480,
+  :location {:ward "Renal", :bed "RENAL-02", :placement :licensed},
+  :forced false}
+ {:event :discharge,
+  :t 6840,
+  :active-mrn "MRN000001",
+  :location {:ward "Renal", :bed "RENAL-04", :placement :licensed},
+  :attending "3903633105",
+  :participants [{:patient-id "PID-000000-918175ce", :role :subject}],
+  :warm-up false}
+ {:event :discharge,
+  :t 15060,
+  :active-mrn "MRN000002",
+  :location {:ward "Renal", :bed "RENAL-02", :placement :licensed},
+  :attending "3903633105",
+  :participants [{:patient-id "PID-000001-881e2907", :role :subject}],
+  :warm-up false}]
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/site-profiles/messages-aldric.txt ==========
+MSH|^~\&|ALDRIC-EHR|ALDRIC|DOWNSTREAM|DOWNSTREAM-FAC|20240101000000+0000||ADT^A01|MRN000001-A01-0|P|2.5.1EVN|A01|20240101000000+0000PID|1||MRN000001||Miller^Sophia||20120103|F|||204 Maple Ave^^Portland^OR^97201||564-979-8065PV1|1|IN^99ALDRIC|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||IN1|1||commercial-hmo|Commercial HMOZPI|commercial-hmo|commercial|ALDRIC-PAYER-V1
+
+MSH|^~\&|ALDRIC-EHR|ALDRIC|DOWNSTREAM|DOWNSTREAM-FAC|20240101005800+0000||ADT^A01|MRN000002-A01-3480|P|2.5.1EVN|A01|20240101005800+0000PID|1||MRN000002||Smith-Jones^Mary||19540309|F|||35 Aspen Way^^Albuquerque^NM^87102||497-619-7552PV1|1|IN^99ALDRIC|Renal^^RENAL-02^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||IN1|1||medicare-65|MedicareZPI|medicare-65|medicare|ALDRIC-PAYER-V1
+
+MSH|^~\&|ALDRIC-EHR|ALDRIC|DOWNSTREAM|DOWNSTREAM-FAC|20240101015400+0000||ADT^A03|MRN000001-A03-6840|P|2.5.1EVN|A03|20240101015400+0000PID|1||MRN000001||Miller^Sophia||20120103|F|||204 Maple Ave^^Portland^OR^97201||564-979-8065PV1|1|IN^99ALDRIC|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||HOME^99ALDRIC
+
+MSH|^~\&|ALDRIC-EHR|ALDRIC|DOWNSTREAM|DOWNSTREAM-FAC|20240101041100+0000||ADT^A03|MRN000002-A03-15060|P|2.5.1EVN|A03|20240101041100+0000PID|1||MRN000002||Smith-Jones^Mary||19540309|F|||35 Aspen Way^^Albuquerque^NM^87102||497-619-7552PV1|1|IN^99ALDRIC|Renal^^RENAL-02^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||HOME^99ALDRIC
+
+
+========== END FILE ==========
+
+========== FILE: ./docs/demos/site-profiles/messages-default.txt ==========
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101000000+0000||ADT^A01|MRN000001-A01-0|P|2.3EVN|A01|20240101000000+0000PID|1||MRN000001||Miller^Sophia||20120103|F|||204 Maple Ave^^Portland^OR^97201||564-979-8065PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||IN1|1||commercial-hmo|Commercial HMO
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101005800+0000||ADT^A01|MRN000002-A01-3480|P|2.3EVN|A01|20240101005800+0000PID|1||MRN000002||Smith-Jones^Mary||19540309|F|||35 Aspen Way^^Albuquerque^NM^87102||497-619-7552PV1|1|I|Renal^^RENAL-02^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||IN1|1||medicare-65|Medicare
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101015400+0000||ADT^A03|MRN000001-A03-6840|P|2.3EVN|A03|20240101015400+0000PID|1||MRN000001||Miller^Sophia||20120103|F|||204 Maple Ave^^Portland^OR^97201||564-979-8065PV1|1|I|Renal^^RENAL-04^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||01
+
+MSH|^~\&|EHR-TESTING-SIM|SIM|||20240101041100+0000||ADT^A03|MRN000002-A03-15060|P|2.3EVN|A03|20240101041100+0000PID|1||MRN000002||Smith-Jones^Mary||19540309|F|||35 Aspen Way^^Albuquerque^NM^87102||497-619-7552PV1|1|I|Renal^^RENAL-02^general-hospital||||3903633105^Reyes^Priya|||||||||||||||||||||||||||||01
+
+
 ========== END FILE ==========
 
 ========== FILE: ./docs/event-sourcing.md ==========
@@ -3792,17 +4097,22 @@ provenance that these milestones answer real requests.
 
      then paste the output back in below.
 
-     MILESTONE M4 NOTE: this session's environment had no Python
-     interpreter available, so the mermaid block's `payer-pool` wire
-     (Persona's equation gained `payer-pool` as a real catalytic input,
-     docs/sim-theory-equations.txt) was applied BY HAND, following the
-     converter's own established conventions exactly (source-type node
-     declaration, `.-> ` dashed catalytic wire syntax, light-rounded
-     source styling) rather than mechanically regenerated. A future
-     session with Python available should re-run the converter and
-     diff against this block to confirm the hand-applied change matches
-     what the tool itself would have produced -- recorded here so this
-     isn't silently assumed identical. -->
+     MILESTONE site-profiles NOTE: this session's environment DID have
+     Python available, so the whole block below is a mechanical
+     regeneration (not a hand-edit) -- `site-profile` joined EmitHL7's
+     equation as a real catalytic input (this milestone's own catalytic
+     wire, docs/sim-theory.edn). This also resolves the M4 session's own
+     open item (its note, once here, asked a future Python-having
+     session to diff its hand-applied `payer-pool` wire against the
+     tool's real output): re-running the converter over the
+     THEN-CURRENT equations file first, before this milestone's own
+     edit, and diffing against the already-shipped M4 block confirmed
+     every node declaration, wire, and style line matched exactly --
+     the only difference was the `%% Arrow N` comment numbers (off by
+     one, an artifact of a since-added header line changing the
+     equations file's own line count, not a structural or convention
+     mismatch). Confirmed, not merely assumed, before regenerating with
+     this milestone's own addition on top. -->
 
 # The simulator's resource theory — diagram
 
@@ -3813,6 +4123,7 @@ Verified in this render:
 - **The `pathway-ir` union renders as a funnel/merge node** — `UnionPathwayIr`, green inverted-trapezoid, wiring both `compiled-pathway` and `authored-pathway` in and `pathway-ir` out — exactly ehr-testing-tools' own established convention for a union resource (`docs/notation.md`, `ehr-testing-tools.pipeline/union-resource->equation-line`), reused here rather than invented.
 - **`SystemUnderTest` and `ToolsCorpusIntake` render dashed** — both carry `{external: true}`, the same device tools' own external stages use.
 - **Gap, reported rather than faked:** the converter has no visual axis for `:built` vs `:planned` — only `{external: true}` (dashed) exists, and ehr-testing-tools' own history (`docs/notation.md`, "External stages") records that reusing dashed rendering for *planned-but-will-be-built-here* stages was tried once and deliberately dropped, because it conflates "not yet built" with "never built by this repo," which is a different claim. `ehr-testing-tools.pipeline/pipeline->equations-text` resolves this the same way this session does: a `:planned` stage gets a `# planned: <Label>` *comment* line in the equations text — documentary only, "not a distinct visual state" (that namespace's own docstring). So below, every stage box is visually identical dark-solid except the two external stages (dashed) and the union (green funnel); built vs. planned is legible only in [`sim-theory-equations.txt`](sim-theory-equations.txt)'s `# planned:` comments, not in the diagram itself. This is the same limitation tools carries in its own pipeline diagram, not a regression introduced here.
+- **The site-profiles milestone adds exactly one wire, no new stage or node shape:** `site-profile` joins `EmitHL7`'s existing catalytic set (dashed `.->`, light-rounded source node, same convention every other catalytic already uses) — the milestone's own theory-flip note (docs/sim-theory.edn's `:emit-hl7` entry) said this would be a wire-count change only if the converter renders catalytics; it does, and this is that one new wire.
 
 ```mermaid
 flowchart LR
@@ -3830,6 +4141,7 @@ flowchart LR
     payer_pool(["payer-pool"])
     provider_pool(["provider-pool"])
     sim_config(["sim-config"])
+    site_profile(["site-profile"])
     snomed_icd10_map(["snomed-icd10-map"])
 
     %% --- Operations (boxes; spiders use distinct shapes) ---
@@ -3848,59 +4160,60 @@ flowchart LR
     ToolsCorpusIntake["ToolsCorpusIntake"]
 
     %% --- Wires (typed connections) ---
-    %% Arrow 20: Persona
+    %% Arrow 19: Persona
     sim_config -- sim-config --> Persona
     demographics_tables -. demographics-tables .-> Persona
     payer_pool -. payer-pool .-> Persona
 
-    %% Arrow 23: RunModules
+    %% Arrow 22: RunModules
     Persona -- persona --> RunModules
     gmf_module_set -. gmf-module-set .-> RunModules
     gmf_interpreter -. gmf-interpreter .-> RunModules
 
-    %% Arrow 26: CompileTrajectory
+    %% Arrow 25: CompileTrajectory
     RunModules -- clinical-trajectory --> CompileTrajectory
 
-    %% Arrow 28: InjectChurn
+    %% Arrow 27: InjectChurn
     UnionPathwayIr -- pathway-ir --> InjectChurn
     Calibrate -- churn-profile --> InjectChurn
 
-    %% Arrow 30: Execute
+    %% Arrow 29: Execute
     InjectChurn -- operational-pathway --> Execute
     provider_pool -. provider-pool .-> Execute
     order_profiles -. order-profiles .-> Execute
 
-    %% Arrow 32: Check
+    %% Arrow 31: Check
     Execute -- ground-truth-log --> Check
     invariant_catalog -. invariant-catalog .-> Check
 
-    %% Arrow 34: EmitHL7
+    %% Arrow 33: EmitHL7
     Execute -- ground-truth-log --> EmitHL7
     hl7_parser_dep -. hl7-parser-dep .-> EmitHL7
     message_type_registry -. message-type-registry .-> EmitHL7
     snomed_icd10_map -. snomed-icd10-map .-> EmitHL7
+    site_profile -. site-profile .-> EmitHL7
 
-    %% Arrow 37: EmitState
+    %% Arrow 36: EmitState
     Execute -- state-history --> EmitState
 
-    %% Arrow 40: Package
+    %% Arrow 39: Package
     EmitHL7 -- hl7v2-stream --> Package
     Execute -- ground-truth-log --> Package
 
-    %% Arrow 43: Calibrate
+    %% Arrow 42: Calibrate
     Package -- sim-corpus --> Calibrate
     feed_statistics -- feed-statistics --> Calibrate
     Calibrate -- churn-profile --> Calibrate
     Calibrate -- churn-profile --> churn_profile
 
-    %% Arrow 46: UnionPathwayIr
+    %% Arrow 45: UnionPathwayIr
     CompileTrajectory -- compiled-pathway --> UnionPathwayIr
     authored_pathway -- authored-pathway --> UnionPathwayIr
 
-    %% Arrow 49: SystemUnderTest
+    %% Arrow 48: SystemUnderTest
     EmitHL7 -- hl7v2-stream --> SystemUnderTest
 
-    %% Arrow 50: ToolsCorpusIntake
+    %% Arrow 49: ToolsCorpusIntake
     Package -- sim-corpus --> ToolsCorpusIntake
 
     %% --- Styling ---
@@ -3933,6 +4246,7 @@ flowchart LR
     style payer_pool fill:#f5f5f5,stroke:#999,color:#333
     style provider_pool fill:#f5f5f5,stroke:#999,color:#333
     style sim_config fill:#f5f5f5,stroke:#999,color:#333
+    style site_profile fill:#f5f5f5,stroke:#999,color:#333
     style snomed_icd10_map fill:#f5f5f5,stroke:#999,color:#333
 ```
 
@@ -4091,7 +4405,7 @@ operational-pathway × provider-pool × order-profiles → ground-truth-log + st
 
 ground-truth-log × invariant-catalog → pass + rejected  [Check]  {catalytic: invariant-catalog}
 
-ground-truth-log × hl7-parser-dep × message-type-registry × snomed-icd10-map → hl7v2-stream  [EmitHL7]  {catalytic: hl7-parser-dep, message-type-registry, snomed-icd10-map}
+ground-truth-log × hl7-parser-dep × message-type-registry × snomed-icd10-map × site-profile → hl7v2-stream  [EmitHL7]  {catalytic: hl7-parser-dep, message-type-registry, snomed-icd10-map, site-profile}
 
 # planned: EmitState
 state-history → state-document  [EmitState]
@@ -4212,10 +4526,11 @@ sim-corpus → catalog-entry  [ToolsCorpusIntake]  {external: true}
    :status :built
    :inputs ["ground-truth-log"]
    :outputs ["hl7v2-stream"]
-   :catalytic ["hl7-parser-dep" "message-type-registry" "snomed-icd10-map"]
+   :catalytic ["hl7-parser-dep" "message-type-registry" "snomed-icd10-map" "site-profile"]
    :laws ["bidirectional derivability: every emitted message is derivable from the log, and every message is traceable back to the log event that produced it (problem-statement Guarantees) -- the property that makes the corpus a test instrument rather than mere traffic -- property-tested (emit-hl7-test/bidirectional-derivability, 100 trials green 2026-07-26)"
-          "native code rendering: concept triplets render as coded fields (CWE etc.) in their own system; the ONE sanctioned translation is SNOMED->ICD-10-CM for billing segments (DG1), via the pinned NLM map (catalytic target 1), or code pairs carried from the module where provided"]
-   :contract "v0 scope was ADT^A01 (admission) and ADT^A03 (discharge) only; M1 added A02 (transfer); M2b adds the full churn family -- A11/A12/A13 (cancel-admit/cancel-transfer/cancel-discharge), A17 (bed-swap, ONE message carrying both patients' PID/PV1 pairs -- the real HL7v2 A17 shape), and A40 (merge, PID carries the surviving MRN, MRG-1 the prior/merged-away one). MSH/EVN/PID/PV1(/MRG) populated minimally, on org.clojars.cmiles74/clojure-hl7-parser's structures (the emitter's only runtime dependency, docs/third-party-sources.md). Timestamps render from a pinned :reference-date run-config input (ehr-testing-sim.emit-hl7/default-reference-date), never wall-clock. M3 (this session): ORM^O01 (order-placed -- ORC-1 \"NW\", OBR-4 the panel-level LOINC concept as CWE) and ORU^R01 (result-available -- OBR-4 the same panel concept, one OBX per analyte: OBX-3 CWE with the analyte's own LOINC triplet, OBX-5 value, OBX-6 units, OBX-7 reference range as \"low-high\", OBX-8 the abnormal flag rendered in HL7's own N/L/H vocabulary, Table 0078). Neither carries EVN (an ADT-specific segment, not part of the order-message family, HL7v2 convention). :step-rejected renders NOTHING -- no message-type-registry entry, by design (ADR-0012): truth about the run, never wire traffic."}
+          "native code rendering: concept triplets render as coded fields (CWE etc.) in their own system; the ONE sanctioned translation is SNOMED->ICD-10-CM for billing segments (DG1), via the pinned NLM map (catalytic target 1), or code pairs carried from the module where provided"
+          "dialect invariance (docs/site-profiles.md, the site-profiles milestone's own thesis): for a fixed (config, seed), ground-truth-log is byte-identical across any two site-profile catalytic values -- site-profile can only change hl7v2-stream's rendering (MSH-3/4/5/6/12, code-table-overridden fields, Z-segment content), never a fact -- property-tested (emit-hl7-test/invariance-messages-agree-after-masking-dialect-surfaces, 100 trials green 2026-07-26) alongside the structural guarantee that :site-profile is not a member of ehr-testing-sim.engine/config-keys at all"]
+   :contract "v0 scope was ADT^A01 (admission) and ADT^A03 (discharge) only; M1 added A02 (transfer); M2b adds the full churn family -- A11/A12/A13 (cancel-admit/cancel-transfer/cancel-discharge), A17 (bed-swap, ONE message carrying both patients' PID/PV1 pairs -- the real HL7v2 A17 shape), and A40 (merge, PID carries the surviving MRN, MRG-1 the prior/merged-away one). MSH/EVN/PID/PV1(/MRG) populated minimally, on org.clojars.cmiles74/clojure-hl7-parser's structures (the emitter's only runtime dependency, docs/third-party-sources.md). Timestamps render from a pinned :reference-date run-config input (ehr-testing-sim.emit-hl7/default-reference-date), never wall-clock. M3: ORM^O01 (order-placed -- ORC-1 \"NW\", OBR-4 the panel-level LOINC concept as CWE) and ORU^R01 (result-available -- OBR-4 the same panel concept, one OBX per analyte: OBX-3 CWE with the analyte's own LOINC triplet, OBX-5 value, OBX-6 units, OBX-7 reference range as \"low-high\", OBX-8 the abnormal flag rendered in HL7's own N/L/H vocabulary, Table 0078). Neither carries EVN (an ADT-specific segment, not part of the order-message family, HL7v2 convention). :step-rejected renders NOTHING -- no message-type-registry entry, by design (ADR-0012): truth about the run, never wire traffic. The site-profiles milestone (this session): `site-profile` (ehr-testing-sim.site-profile/SiteProfile, catalytic target 3 -- an optional, all-keys-optional config value, absent/nil/{} all rendering identically to the pre-milestone baseline) lands as a REAL catalytic wire, not merely declared -- MSH-3/4/5/6/12 (sending/receiving app+facility, version id -- SimHospital issue #17's own citation, .agents/plans/roadmap.md), PV1-2/PV1-36 (patient-class/discharge-disposition code-table overrides, rendering-time substitutions over the SAME underlying state value), and a Z-segment template DSL (field->state/persona/event-path bindings, rendered after standard segments on their own declared trigger, escaped per ER7, unbound paths empty rather than throwing -- SimHospital issue #21's own citation for the custom-segment scope item). `:naming :surge-format`'s migration to the profile is the one documented exception bound at CONFIG time rather than emit time (ehr-testing-sim.site-profile/apply-naming, a facility-config transform a caller applies before Execute, never auto-wired) -- named here so this stage's own catalytic doesn't silently claim credit for it."}
 
   {:id :emit-state
    :label "EmitState"
@@ -4293,8 +4608,12 @@ One file describes three systems:
   that shipped ahead of its stage. As of Milestone M3, Execute's own
   step vocabulary further grows (`:order`/`:result-followup`, the
   `order-profiles` catalytic now real) and EmitHL7 gains
-  ORM^O01/ORU^R01. Everything the *now* claims is property-tested and
-  green (207 tests / 582 assertions, 2026-07-26).
+  ORM^O01/ORU^R01. As of the site-profiles milestone, EmitHL7 gains a
+  fourth catalytic (`site-profile`) — MSH dialect, code-table
+  overrides, and Z-segment templates, all property-tested against the
+  dialect-invariance law stated on that stage's own equation entry.
+  Everything the *now* claims is property-tested and green (230 tests /
+  625 assertions, 2026-07-26).
 - **next** — the single stage marked `;; NEXT` in the EDN: **RunModules**,
   Milestone M5 — the GMF interpreter port, the `gmf-module-set`
   vendoring-vs-lockfile decision, and `CompileTrajectory`.
@@ -4315,7 +4634,7 @@ pathway-ir = compiled-pathway ∪ authored-pathway      (union)
 pathway-ir × churn-profile → operational-pathway      [InjectChurn]
 operational-pathway → ground-truth-log + state-history [Execute]
 ground-truth-log → pass + rejected                    [Check]        {catalytic: invariant-catalog}
-ground-truth-log → hl7v2-stream                       [EmitHL7]      {catalytic: hl7-parser-dep, message-type-registry, snomed-icd10-map}
+ground-truth-log → hl7v2-stream                       [EmitHL7]      {catalytic: hl7-parser-dep, message-type-registry, snomed-icd10-map, site-profile}
 state-history → state-document                        [EmitState]
 hl7v2-stream × ground-truth-log → sim-corpus + run-manifest [Package]
 sim-corpus × feed-statistics × churn-profile → churn-profile [Calibrate]  (feedback, round-bounded)
@@ -4359,6 +4678,34 @@ follow), and `payer-pool`, recorded at the time as a comment at
 Simulated Hospital's order profiles and the ORM/ORU result cycle were
 discussed from this project's first session but, until this pass,
 named in no planning artifact.
+
+## Site profiles land `site-profile` as a fourth catalytic on EmitHL7
+
+[`docs/site-profiles.md`](site-profiles.md) — the "simulate MY
+hospital" config layer — lands as a fourth catalytic input on
+`EmitHL7`, the same shape `order-profiles`/`provider-pool` joining
+`Execute` already established: no new stage, no new `:inputs`/
+`:outputs`, one new catalytic wire on a stage that was already
+`:built`. `site-profile` (`ehr-testing-sim.site-profile/SiteProfile`)
+is an optional config value — absent, nil, or `{}` all render
+identically to the pre-milestone baseline, property-tested as this
+milestone's own determinism anchor — carrying an MSH dialect (version,
+sending/receiving app+facility), code-table overrides for PV1-2/PV1-36
+(rendering-time substitutions over the SAME underlying state value,
+never a new fact), and a Z-segment template DSL (field bindings to
+state/persona/event paths, rendered after standard segments, escaped,
+unbound paths empty rather than throwing). The milestone's own thesis —
+two site profiles over one seed produce the same ground truth in two
+accents — is the dialect-invariance law now stated directly on
+`EmitHL7`'s own equation entry (`sim-theory.edn`), property-tested
+alongside the structural guarantee that `site-profile` never reaches
+`Execute` at all (not a member of `ehr-testing-sim.engine/config-keys`).
+`:naming :surge-format`'s migration to the profile is the one
+documented exception bound at config-construction time rather than
+emit time (`ehr-testing-sim.site-profile/apply-naming`, a facility-
+config transform a caller applies before `Execute`, never auto-wired)
+— named here so it isn't mistaken for a second catalytic wire this
+stage doesn't actually carry.
 
 ## M2a lands under Execute's existing contract — no new stage or wire
 
@@ -4595,12 +4942,13 @@ Recorded here rather than silently decided:
 ========== FILE: ./docs/site-profiles.md ==========
 # Site profiles: the "simulate MY hospital" config layer
 
-**Design capture only — no code lands with this document.** This is
-the answer to the first question any domain expert asks on meeting
-this project: "how do I make it simulate *my* hospital?"
-`docs/clinical-realities.md`'s site-defined-codes entry names the
-reality this layer exists to configure; this document specifies the
-config layer itself.
+**Landed.** This is the answer to the first question any domain expert
+asks on meeting this project: "how do I make it simulate *my*
+hospital?" — and, as of the site-profiles milestone
+(`.agents/plans/roadmap.md`), a working `--config`-file knob, not just
+a design document. `docs/clinical-realities.md`'s site-defined-codes
+entry names the reality this layer exists to configure; this document
+specifies the config layer itself.
 
 ## The reality this layer answers to
 
@@ -4647,85 +4995,152 @@ citizen's pattern gets a name and a home for what comes next.
   of any site-profile machinery existing to configure it — a preview
   of the pattern, not itself site-profile content.
 
-## What this layer designs, for a future milestone
+## What this layer designs — landed
 
-Three components, each extending an existing idea rather than
-inventing a new mechanism:
+Four components (`ehr-testing-sim.site-profile`), each extending an
+existing idea rather than inventing a new mechanism:
 
-1. **Code-table overrides.** A site profile supplies its own value set
-   for a user-defined HL7 table — most concretely, patient class
-   (table 0004, `docs/patient-state-model.md`'s `:class` field) and
-   discharge disposition (table 0112, `docs/clinical-realities.md`'s
-   post-mortem entry already names disposition codes 20/40–42 for
-   died-here/died-at-home/place-unknown). Overriding a table is a
-   **rendering-time substitution**: the underlying state value
-   (`:class :inpatient`, a disposition concept) doesn't change: only
-   which code string an emitter writes for it does, per the site
-   profile in effect. This is `:surge-format`'s pattern applied to
-   code tables instead of bed-naming strings.
-2. **Naming idioms**, generalizing `:surge-format` beyond bed slots to
-   any place this project's engine currently picks one baked-in
-   naming convention — ward ids, provider id formats, whatever a
-   future resource model needs named. Each is a config-supplied format
-   or lookup a site profile overrides, never a hard-coded string in
-   engine or emitter code.
-3. **Z-segment templates**, binding a Z-segment's fields to state
-   paths in the patient accumulator — most naturally, paths into the
-   reserved `:attributes` map, since a Z-segment by definition carries
-   facts standard segments don't. A template is a declarative mapping
-   (field position → state path, plus a table/format for the value)
-   that the emitter reads at render time. This is where a site's fully
-   custom fields (decedent-affairs tracking, ME-referral status,
-   whatever a real site's Z-segments carry) become renderable without
-   the engine needing to know what any particular site's Z-segment
-   means — only that a template says where its values come from.
+1. **MSH dialect.** A site profile's `:msh` supplies MSH-12 (HL7
+   version id) and MSH-3/4/5/6 (sending/receiving app+facility),
+   defaulting field-by-field to today's hard-coded values when absent
+   (`ehr-testing-sim.site-profile/default-msh`). Version changes the
+   MSH-12 literal only — this layer does not restructure segments per
+   version (see the today/future table below for that honest scope
+   line). SimHospital issue #17's own citation (a HL7v2.6 consumer who
+   could see multiple generated schemas but no documented way to
+   switch versions) is answered: version selection is a named,
+   configured field, never a hard-coded emitter constant.
+2. **Code-table overrides.** A site profile supplies its own value set
+   for a user-defined HL7 table — patient class (table 0004,
+   `docs/patient-state-model.md`'s `:class` field, PV1-2) and
+   discharge disposition (table 0112, PV1-36; this project's own
+   standard default renders the one case it produces today,
+   "discharged to home" — `docs/clinical-realities.md`'s post-mortem
+   disposition codes 20/40–42 stay future, since `:expired` isn't a
+   landed status yet). Overriding a table is a **rendering-time
+   substitution**: the underlying state value (`:class :inpatient`, a
+   disposition concept) doesn't change: only which code string an
+   emitter writes for it does, per the site profile in effect
+   (`ehr-testing-sim.site-profile/code-for`) — the site's own code
+   plus an optional coding-system suffix, standard values otherwise.
+   This is `:surge-format`'s pattern applied to code tables instead of
+   bed-naming strings.
+3. **Naming: `:surge-format` migrates to the profile.** A config-level
+   compatibility shim (`ehr-testing-sim.site-profile/apply-naming`), not
+   an emit-time dialect like the other three — surge bed ids are
+   already baked into ground truth at DECIDE time
+   (`ehr-testing-sim.facility/surge-slot-ids`, pre-dating this layer),
+   so a site profile's `:naming :surge-format` is a facility-config
+   TRANSFORM a caller applies BEFORE `ehr-testing-sim.engine/run`, never
+   auto-wired into it and never read by the emitter. Facility-level
+   `:surge-format` is still honored when a profile carries no `:naming`
+   key; the profile wins when both are present. Generalizing naming
+   beyond bed slots (ward ids, provider id formats) stays future — see
+   the today/future table.
+4. **Z-segment templates**, binding a Z-segment's fields to
+   state/persona/event paths (`get-in`-style, e.g. `[:persona :payer
+   :type]`, `[:location :ward]`) — most naturally, paths into the
+   reserved `:attributes` map once M5's interpreter writes to it, but
+   not limited to it: any path into the per-render context
+   (`ehr-testing-sim.emit-hl7`'s own event map plus the patient's
+   persona) resolves today. A template is a declarative mapping
+   (`:segment`, `:trigger` — the event types it attaches to — and
+   `:fields`, each `:path` or a `:literal` fallback) the emitter reads
+   at render time, rendered AFTER standard segments, escaped per ER7,
+   an unbound path rendering an EMPTY field rather than throwing. This
+   is where a site's fully custom fields (decedent-affairs tracking,
+   ME-referral status, whatever a real site's Z-segments carry, or —
+   landed as this layer's own worked example — a `ZPI` payer segment)
+   become renderable without the engine needing to know what any
+   particular site's Z-segment means — only that a template says where
+   its values come from. SimHospital issue #21's own citation (a 2024
+   user asking how to add GT1 and ZG1) is answered for the mechanism;
+   GT1/ZG1 as SHIPPED templates stay future (see below).
 
 **Applied at the emitter, because idiosyncrasy is a rendering
-dialect.** All three components bind at emit time
-(`docs/sim-theory.edn`'s `EmitHL7`/`EmitState` stages), never inside
-`decide`/`evolve` or the ground-truth log. This follows directly from
-ADR-0002's separation of ground truth from wire format: a site profile
-changes how a fact is *said*, never what fact is true. The engine and
-the invariant catalog (`check.clj`) never need to know which site
-profile is active; only the emitter's render call sites do.
+dialect** — with one documented exception. MSH dialect, code-table
+overrides, and Z-segment templates all bind at emit time
+(`docs/sim-theory.edn`'s `EmitHL7` stage — a real catalytic wire now,
+not a declared-ahead-of-time one), never inside `decide`/`evolve` or
+the ground-truth log, following directly from ADR-0002's separation of
+ground truth from wire format: a site profile changes how a fact is
+*said*, never what fact is true — property-tested as this layer's own
+invariance claim, below. `:naming :surge-format`'s migration is the
+one exception (component 3, above): it binds at facility-config
+construction time, before `Execute`, because the fact it touches
+(which bed-id string a surge slot gets) was already a decide-time fact
+before this layer existed to configure it. The engine and the
+invariant catalog (`check.clj`) never need to know which site profile
+is active; only the emitter's render call sites (and, for naming, a
+caller's own pre-run config-assembly step) do.
 
-## The invariance claim
+## The invariance claim — proven
 
 **Two site profiles over one seed produce the same ground truth in two
-accents.** Stated as a **future property test**, once site profiles
-are built: for a fixed `(config, seed)` pair, the ground-truth log is
+accents.** For a fixed `(config, seed)` pair, the ground-truth log is
 byte-identical across any two site profiles — a site profile can only
-change `hl7v2-stream`'s rendering (code strings, Z-segment content,
-naming idioms), never `ground-truth-log`'s content or `check.clj`'s
-verdict on it. This is the same "truth is invariant under dialect"
-argument [`docs/event-sourcing.md`](event-sourcing.md) makes for
-emitter coherence generally, specialized to site profiles as the
+change `hl7v2-stream`'s rendering (code strings, Z-segment content),
+never `ground-truth-log`'s content or `check.clj`'s verdict on it. This
+is the same "truth is invariant under dialect" argument
+[`docs/event-sourcing.md`](event-sourcing.md) makes for emitter
+coherence generally, specialized to site profiles as the
 dialect-selection mechanism: two hospitals' interfaces can disagree
 about what a disposition code looks like on the wire while agreeing,
 provably, about what actually happened to the patient.
 
+Checked two ways, not one: the **strong half** (ground truth)
+structurally — `:site-profile` is not a member of
+`ehr-testing-sim.engine/config-keys`, so it is structurally incapable
+of reaching `Execute` at all, not merely untested against it
+(`emit-hl7-test/site-profile-never-reaches-the-engine`). The **weak
+half** (messages) as a property test over 100 random seeds/patient
+counts (`emit-hl7-test/invariance-messages-agree-after-masking-
+dialect-surfaces`), comparing a default and a deliberately gaudy second
+profile after **masking** exactly the declared dialect surfaces
+(MSH-3/4/5/6/12, PV1-2/PV1-36, and Z-segment lines stripped entirely).
+The masking function (`emit-hl7-test/mask-dialect-surfaces`) is itself
+a deliverable of this claim, not merely test scaffolding: it is the
+precise, executable enumeration of what a dialect may touch, and
+nothing more — a vaguer masking (blanking whole segments, say) would
+prove a weaker, less useful claim. A CLI-produced two-profile demo
+(`docs/demos/site-profiles/`) shows the same event rendered under both
+profiles side by side, ground-truth identity verified programmatically
+when the demo was generated.
+
 ## Honest split: today vs. future
 
-**Exists today:** `:surge-format` (a real, shipped config knob) and the
-reserved `:attributes` map (a real, shipped extension point, currently
-written only by engine-internal state like `:donor`, not yet by any
-site-profile mechanism). **Designed, not built:** code-table overrides,
-generalized naming idioms beyond bed slots, Z-segment templates, the
-site-profile config schema that would bundle all of these into one
-named, swappable unit, and the invariance property test above. No
-`sim-config` key for "the active site profile" exists yet; this
-document specifies what one would configure, not its wire format or
-schema.
+**Exists today:** all four landed components above (MSH dialect,
+code-table overrides, the `:surge-format` naming migration, Z-segment
+templates), the `ehr-testing-sim.site-profile/SiteProfile` schema
+bundling them into one named, swappable `:site-profile` config value
+(threaded through `ehr-testing-sim.run/run-command` via `--config`, no
+CLI flag of its own — the same data-heavy-key passthrough
+`:pathway`/`:order-profiles` use), and the invariance property proven
+above. The reserved `:attributes` map is still a real, shipped
+extension point written only by engine-internal state (`:donor`), not
+yet by any site-profile mechanism — a Z-segment template CAN bind a
+`:path` into it once something writes there, but nothing does yet.
+
+**Designed, not built:** GT1/ZG1 as SHIPPED Z-segment templates (only
+the mechanism landed; a config author writes their own `ZPI`-style
+template today, the same way this layer's own worked example does —
+no pre-built GT1/ZG1 template ships). MSH-version-driven segment
+**restructuring** (a v2.6 profile still gets today's v1-shaped
+segments with a different MSH-12 literal, never a genuinely different
+segment set) stays future — HL7v2's own version-to-version segment
+changes are a large surface this layer doesn't attempt. Generalized
+naming idioms beyond `:surge-format` (ward ids, provider id formats)
+stay future too.
 
 ## Where this lands
 
-`.agents/plans/roadmap.md` records a proposed milestone for this layer
-(marked for author review — placement, not existence, is the open
-question), reasoned as landing after M3: Z-segment templates are thin
-content without order/result data to bind them to (M3's
-`order-profiles` catalytic, `docs/sim-theory.edn`), so a site-profile
-milestone that lands before M3 would have little beyond code-table
-overrides to actually exercise.
+Landed between Milestone M4 and Milestone M5 in
+`.agents/plans/roadmap.md`, per that document's own session
+ratification — after M3, as this document originally reasoned: Z-segment
+templates would have been thin content without order/result data to
+bind them to (M3's `order-profiles` catalytic, `docs/sim-theory.edn`),
+so landing before M3 would have exercised little beyond code-table
+overrides.
 
 ========== END FILE ==========
 
@@ -7071,7 +7486,8 @@ docs/problem-statement.md / AGENTS.md).
   merge exists is always the patient's one and only MRN)."
   (:require [com.nervestaple.hl7-parser.parser :as parser]
             [clojure.string :as str]
-            [ehr-testing-sim.config :as config]))
+            [ehr-testing-sim.config :as config]
+            [ehr-testing-sim.site-profile :as site-profile]))
 
 (def default-reference-date
   "Pinned default for the :reference-date run-config input (an ISO
@@ -7140,20 +7556,29 @@ docs/problem-statement.md / AGENTS.md).
        (hl7-offset-suffix utc-offset)))
 
 (defn- msh-segment
-  [{:keys [type trigger]} control-id ts]
-  (parser/create-segment
-   "MSH"
-   (parser/create-field (parser/pr-delimiters parser/DEFAULT-DELIMITERS))
-   (parser/create-field ["EHR-TESTING-SIM"])
-   (parser/create-field ["SIM"])
-   (parser/create-field [])
-   (parser/create-field [])
-   (parser/create-field [ts])
-   (parser/create-field [])
-   (parser/create-field [type trigger])
-   (parser/create-field [control-id])
-   (parser/create-field ["P"])
-   (parser/create-field ["2.3"])))
+  "MSH-3/4/5/6/12 (sending/receiving app+facility, version id) render
+  `site-profile`'s :msh dialect, defaulting field-by-field to today's
+  hard-coded values (ehr-testing-sim.site-profile/default-msh) when
+  `site-profile` is nil, {}, or simply doesn't override that field --
+  Milestone site-profiles Task 2 (SimHospital issue #17's own citation,
+  .agents/plans/roadmap.md: a configured field, not a hard-coded
+  emitter constant)."
+  [site-profile {:keys [type trigger]} control-id ts]
+  (let [{:keys [version sending-app sending-facility receiving-app receiving-facility]}
+        (site-profile/effective-msh site-profile)]
+    (parser/create-segment
+     "MSH"
+     (parser/create-field (parser/pr-delimiters parser/DEFAULT-DELIMITERS))
+     (parser/create-field [sending-app])
+     (parser/create-field [sending-facility])
+     (parser/create-field [receiving-app])
+     (parser/create-field [receiving-facility])
+     (parser/create-field [ts])
+     (parser/create-field [])
+     (parser/create-field [type trigger])
+     (parser/create-field [control-id])
+     (parser/create-field ["P"])
+     (parser/create-field [version]))))
 
 (defn- evn-segment
   [trigger ts]
@@ -7326,22 +7751,93 @@ docs/problem-statement.md / AGENTS.md).
   [merged-mrn]
   (parser/create-segment "MRG" (parser/create-field [merged-mrn])))
 
+(defn- blank-fields
+  [n]
+  (repeat n (parser/create-field [])))
+
 (defn- pv1-segment
   "PV1-6 (prior location) is read directly off the CURRENT event's own
   :from -- present only on :transfer events -- never a separately
   maintained prior-location field on patient state (docs/patient-
   state-model.md's Simulated Hospital lesson: one :location field plus
-  the log's own facts replaces a shadow-field zoo)."
-  [facility-name location from provider]
-  (parser/create-segment
-   "PV1"
-   (parser/create-field ["1"])
-   (parser/create-field ["I"])
-   (location-field facility-name location)
-   (parser/create-field [])
-   (parser/create-field [])
-   (location-field facility-name from)
-   (provider-field provider)))
+  the log's own facts replaces a shadow-field zoo).
+
+  Milestone site-profiles Task 2: PV1-2 (patient class) renders through
+  `site-profile`'s :patient-class code-table override when present,
+  today's hard-coded \"I\" otherwise (:inpatient is the only class this
+  project ever produces, docs/patient-state-model.md). PV1-36
+  (discharge disposition) renders the SAME way, but only when
+  `disposition-state` is non-nil -- callers pass a state keyword
+  (:discharged-to-home) only for :discharge events; every other event
+  type passes nil, rendering PV1-36 empty, exactly as before this
+  milestone (no disposition concept existed to render at all)."
+  [site-profile facility-name location from provider disposition-state]
+  (apply parser/create-segment
+         "PV1"
+         (parser/create-field ["1"])
+         (parser/create-field (site-profile/code-for site-profile :patient-class
+                                                      site-profile/standard-patient-class-codes :inpatient))
+         (location-field facility-name location)
+         (parser/create-field [])
+         (parser/create-field [])
+         (location-field facility-name from)
+         (provider-field provider)
+         (concat (blank-fields 28)
+                 [(if disposition-state
+                    (parser/create-field (site-profile/code-for site-profile :discharge-disposition
+                                                                 site-profile/standard-discharge-disposition-codes
+                                                                 disposition-state))
+                    (parser/create-field []))])))
+
+;; --- Milestone site-profiles Task 3: Z-segment templates -- THE SEAM -----
+;; A site's fully custom fields (docs/site-profiles.md), bound declaratively
+;; to state/persona/event paths rather than hard-coded engine knowledge of
+;; what any particular site's Z-segment means.
+
+(defn- context-for-event
+  "The per-render lookup context a Z-segment template's `:path` bindings
+  resolve against (get-in): the event map itself (so [:location :ward],
+  [:attending], [:t], etc. all resolve directly, the same paths
+  docs/site-profiles.md's own examples name) plus :persona -- looked up
+  off the SAME `personas` map `emit` computes once per call, the primary
+  (first) participant's persona for a genuinely multi-participant event
+  (bed-swap, merge), the same simplification `ehr-testing-sim.engine/
+  replay`'s own :patient-id convenience view already makes."
+  [personas event]
+  (assoc event :persona (get personas (:patient-id (first (:participants event))))))
+
+(defn- render-z-field
+  "One Z-segment field: `:path` looked up (get-in -- nil-safe through a
+  missing intermediate map, so an unbound path never throws) in
+  `context`, `:literal` as a fixed fallback, an EMPTY field when
+  neither resolves to a value -- Task 3's own never-throw requirement.
+  Escaped per ER7, same as every other free-text-carrying field this
+  namespace renders (persona names, addresses, payer names)."
+  [context {:keys [path literal]}]
+  (let [value (if path (get-in context path) literal)
+        rendered (cond (nil? value) nil (keyword? value) (name value) :else (str value))]
+    (parser/create-field (if rendered [(escape-er7 rendered)] []))))
+
+(defn- z-segment-for
+  [context template]
+  (apply parser/create-segment (:segment template)
+         (mapv (partial render-z-field context) (:fields template))))
+
+(defn- z-segments-for
+  "0+ rendered Z-segments for `event` -- one per `site-profile`'s own
+  :z-segments template whose :trigger set names this event's :event, in
+  the profile's own template order. Rendered AFTER every standard
+  segment at every call site below (Task 3's own ordering requirement,
+  achieved by `concat`-ing this vector onto the end of each message's
+  segment list). No site-profile, or a profile with no :z-segments,
+  renders none -- an empty vector `concat`s as a no-op, so absent-
+  profile output is untouched by this function's existence."
+  [site-profile personas event]
+  (let [context (context-for-event personas event)]
+    (into []
+          (comp (filter #(contains? (:trigger %) (:event event)))
+                (map (partial z-segment-for context)))
+          (:z-segments site-profile))))
 
 (defn- single-subject-message
   "Renders one single-participant ground-truth event to an ER7 string,
@@ -7352,30 +7848,39 @@ docs/problem-statement.md / AGENTS.md).
   the log (docs/patient-state-model.md), so this renderer needs no
   event-type-specific branching to show the reinstated facts. M4: IN1
   rides ONLY :admission (`in1-segment`'s own docstring); every type
-  here gets PID enrichment uniformly via `personas`."
-  [reference-date utc-offset facility providers personas
+  here gets PID enrichment uniformly via `personas`. Milestone
+  site-profiles: PV1-36 disposition rides ONLY :discharge (the same
+  single-event-type gate IN1 already established for admission), and
+  every segment renders through `site-profile`'s own dialect/code-table/
+  Z-segment surfaces -- `z-segments-for`'s own docstring."
+  [reference-date utc-offset facility providers personas site-profile
    {:keys [event t active-mrn location from attending participants]}]
   (when-let [type+trigger (message-type-registry event)]
     (let [ts (hl7-timestamp reference-date t utc-offset)
           control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
           facility-name (name (:id facility))
           provider (provider-by-id providers attending)
-          persona (get personas (:patient-id (first participants)))]
+          persona (get personas (:patient-id (first participants)))
+          disposition-state (when (= :discharge event) :discharged-to-home)]
       (parser/str-message
        (apply parser/create-message
         parser/DEFAULT-DELIMITERS
-        (msh-segment type+trigger control-id ts)
+        (msh-segment site-profile type+trigger control-id ts)
         (evn-segment (:trigger type+trigger) ts)
         (pid-segment active-mrn persona)
-        (pv1-segment facility-name location from provider)
-        (when (and (= :admission event) persona) [(in1-segment (:payer persona))]))))))
+        (pv1-segment site-profile facility-name location from provider disposition-state)
+        (concat (when (and (= :admission event) persona) [(in1-segment (:payer persona))])
+                (z-segments-for site-profile personas {:event event :t t :active-mrn active-mrn
+                                                       :location location :from from :attending attending
+                                                       :participants participants})))))))
 
 (defn- bed-swap-message
   "A17 (swap patients): ONE message per ground-truth event, carrying
   BOTH patients' PID/PV1 pairs -- the real HL7v2 A17 shape, and why the
   emitter-derivability law now keys on the event's own log position
   rather than a single :active-mrn (a bed-swap message has two)."
-  [reference-date utc-offset facility providers personas {:keys [t participants swap]}]
+  [reference-date utc-offset facility providers personas site-profile
+   {:keys [t participants swap] :as ev}]
   (let [type+trigger (message-type-registry :bed-swap)
         ts (hl7-timestamp reference-date t utc-offset)
         facility-name (name (:id facility))
@@ -7384,34 +7889,36 @@ docs/problem-statement.md / AGENTS.md).
         {mrn2 :active-mrn from2 :from to2 :to att2 :attending} (get swap p2)
         control-id (str mrn1 "+" mrn2 "-" (:trigger type+trigger) "-" t)]
     (parser/str-message
-     (parser/create-message
+     (apply parser/create-message
       parser/DEFAULT-DELIMITERS
-      (msh-segment type+trigger control-id ts)
+      (msh-segment site-profile type+trigger control-id ts)
       (evn-segment (:trigger type+trigger) ts)
       (pid-segment mrn1 (get personas p1))
-      (pv1-segment facility-name to1 from1 (provider-by-id providers att1))
+      (pv1-segment site-profile facility-name to1 from1 (provider-by-id providers att1) nil)
       (pid-segment mrn2 (get personas p2))
-      (pv1-segment facility-name to2 from2 (provider-by-id providers att2))))))
+      (pv1-segment site-profile facility-name to2 from2 (provider-by-id providers att2) nil)
+      (z-segments-for site-profile personas ev)))))
 
 (defn- merge-message
   "A40 (merge patient): PID carries the SURVIVING mrn, MRG-1 carries the
   prior (merged-away) one (docs/patient-state-model.md's identity
   payoff) -- ONE message per merge event."
-  [reference-date utc-offset facility _providers personas
-   {:keys [t surviving-mrn merged-mrn participants]}]
+  [reference-date utc-offset facility _providers personas site-profile
+   {:keys [t surviving-mrn merged-mrn participants] :as ev}]
   (let [type+trigger (message-type-registry :merge)
         ts (hl7-timestamp reference-date t utc-offset)
         facility-name (name (:id facility))
         control-id (str surviving-mrn "-" (:trigger type+trigger) "-" t)
         survivor-id (:patient-id (first (filter #(= :survivor (:role %)) participants)))]
     (parser/str-message
-     (parser/create-message
+     (apply parser/create-message
       parser/DEFAULT-DELIMITERS
-      (msh-segment type+trigger control-id ts)
+      (msh-segment site-profile type+trigger control-id ts)
       (evn-segment (:trigger type+trigger) ts)
       (pid-segment surviving-mrn (get personas survivor-id))
-      (pv1-segment facility-name nil nil nil)
-      (mrg-segment merged-mrn)))))
+      (pv1-segment site-profile facility-name nil nil nil nil)
+      (mrg-segment merged-mrn)
+      (z-segments-for site-profile personas ev)))))
 
 ;; --- M3: ORM^O01 + ORU^R01 (docs/sim-theory.edn's order-profiles
 ;; catalytic, docs/operational-models.md) -----------------------------------
@@ -7469,29 +7976,30 @@ docs/problem-statement.md / AGENTS.md).
 (defn- orm-message
   "ORM^O01: order placed. No EVN segment -- EVN is an ADT-specific
   segment (HL7v2 convention), not part of the order-message family."
-  [reference-date utc-offset facility providers personas
-   {:keys [t active-mrn location attending concept participants]}]
+  [reference-date utc-offset facility providers personas site-profile
+   {:keys [t active-mrn location attending concept participants] :as ev}]
   (let [type+trigger (message-type-registry :order-placed)
         ts (hl7-timestamp reference-date t utc-offset)
         control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
         facility-name (name (:id facility))
         provider (provider-by-id providers attending)]
     (parser/str-message
-     (parser/create-message
+     (apply parser/create-message
       parser/DEFAULT-DELIMITERS
-      (msh-segment type+trigger control-id ts)
+      (msh-segment site-profile type+trigger control-id ts)
       (pid-segment active-mrn (get personas (:patient-id (first participants))))
-      (pv1-segment facility-name location nil provider)
+      (pv1-segment site-profile facility-name location nil provider nil)
       (orc-segment control-id)
-      (obr-segment 1 concept)))))
+      (obr-segment 1 concept)
+      (z-segments-for site-profile personas ev)))))
 
 (defn- oru-message
   "ORU^R01: result available -- OBR (order context) plus one OBX per
   analyte, in the same order the profile's own :results carries them
   (derived straight from the log, ehr-testing-sim.order-profiles'
   sampling order -- no re-sorting here)."
-  [reference-date utc-offset facility providers personas
-   {:keys [t active-mrn location attending concept results participants]}]
+  [reference-date utc-offset facility providers personas site-profile
+   {:keys [t active-mrn location attending concept results participants] :as ev}]
   (let [type+trigger (message-type-registry :result-available)
         ts (hl7-timestamp reference-date t utc-offset)
         control-id (str active-mrn "-" (:trigger type+trigger) "-" t)
@@ -7501,12 +8009,12 @@ docs/problem-statement.md / AGENTS.md).
     (parser/str-message
      (apply parser/create-message
       parser/DEFAULT-DELIMITERS
-      (msh-segment type+trigger control-id ts)
+      (msh-segment site-profile type+trigger control-id ts)
       (pid-segment active-mrn (get personas (:patient-id (first participants))))
-      (pv1-segment facility-name location nil provider)
+      (pv1-segment site-profile facility-name location nil provider nil)
       (orc-segment control-id)
       (obr-segment 1 concept)
-      obx-segments))))
+      (concat obx-segments (z-segments-for site-profile personas ev))))))
 
 (defn event->messages
   "Renders one ground-truth event to a vector of 0+ ER7 message strings
@@ -7518,15 +8026,17 @@ docs/problem-statement.md / AGENTS.md).
   is now a shape this stage already accommodates. Events outside
   `message-type-registry` render an empty vector, not an error."
   ([reference-date utc-offset facility providers ev]
-   (event->messages reference-date utc-offset facility providers {} ev))
-  ([reference-date utc-offset facility providers personas {:keys [event] :as ev}]
+   (event->messages reference-date utc-offset facility providers {} nil ev))
+  ([reference-date utc-offset facility providers personas ev]
+   (event->messages reference-date utc-offset facility providers personas nil ev))
+  ([reference-date utc-offset facility providers personas site-profile {:keys [event] :as ev}]
    (cond
      (not (message-type-registry event)) []
-     (= :bed-swap event) [(bed-swap-message reference-date utc-offset facility providers personas ev)]
-     (= :merge event) [(merge-message reference-date utc-offset facility providers personas ev)]
-     (= :order-placed event) [(orm-message reference-date utc-offset facility providers personas ev)]
-     (= :result-available event) [(oru-message reference-date utc-offset facility providers personas ev)]
-     :else [(single-subject-message reference-date utc-offset facility providers personas ev)])))
+     (= :bed-swap event) [(bed-swap-message reference-date utc-offset facility providers personas site-profile ev)]
+     (= :merge event) [(merge-message reference-date utc-offset facility providers personas site-profile ev)]
+     (= :order-placed event) [(orm-message reference-date utc-offset facility providers personas site-profile ev)]
+     (= :result-available event) [(oru-message reference-date utc-offset facility providers personas site-profile ev)]
+     :else [(single-subject-message reference-date utc-offset facility providers personas site-profile ev)])))
 
 (def ^:private default-providers
   "A fixed, arbitrary reference-seed provider pool -- purely a fallback
@@ -7545,14 +8055,22 @@ docs/problem-statement.md / AGENTS.md).
   log. `utc-offset`/`facility`/`providers` default for standalone
   convenience; callers rendering a specific run's log should pass back
   that SAME run's :utc-offset/:facility/:providers (ehr-testing-sim.run
-  does)."
+  does). `site-profile` (Milestone site-profiles) is the LAST, optional
+  argument: absent (the 5-arg arity), nil, or {} all render identically
+  -- the default-profile identity property (docs/site-profiles.md, this
+  milestone's own determinism anchor) -- since :site-profile reaches no
+  stage but this one's own render call sites, never ground-truth-log or
+  check.clj (ehr-testing-sim.engine/config-keys has no such key)."
   ([ground-truth reference-date]
    (emit ground-truth reference-date default-utc-offset config/default-facility default-providers))
   ([ground-truth reference-date utc-offset]
    (emit ground-truth reference-date utc-offset config/default-facility default-providers))
   ([ground-truth reference-date utc-offset facility providers]
+   (emit ground-truth reference-date utc-offset facility providers nil))
+  ([ground-truth reference-date utc-offset facility providers site-profile]
    (let [personas (personas-by-patient-id ground-truth)]
-     (into [] (mapcat (partial event->messages reference-date utc-offset facility providers personas)) ground-truth))))
+     (into [] (mapcat (partial event->messages reference-date utc-offset facility providers personas site-profile))
+           ground-truth))))
 
 ========== END FILE ==========
 
@@ -9360,6 +9878,15 @@ docs/problem-statement.md / AGENTS.md).
   CLI-invisible despite reaching `engine/run` from a direct API caller;
   never again silently, per that test).
 
+  Milestone site-profiles: `:site-profile` (ehr-testing-sim.site-profile/
+  SiteProfile) is threaded straight to `emit-hl7/emit`, the SAME
+  rendering/manifest-only treatment `:utc-offset` already gets -- it is
+  NOT a member of `engine/config-keys` and never reaches `engine/run` at
+  all (docs/site-profiles.md's own binds-at-emit-time-only law), so it
+  rides `:config` the same passthrough way `:pathway`/`:order-profiles`
+  do (no `--site-profile` flag exists), never the plumbing-completeness
+  test's own engine-facing set.
+
   `opts`'s second, injectable arity follows the SAME -fn convention
   `ehr-testing-sim.cli/dispatch-action` already uses (`:engine-run-fn`,
   defaulting to the real `ehr-testing-sim.engine/run`) -- the seam the
@@ -9368,7 +9895,7 @@ docs/problem-statement.md / AGENTS.md).
   ([opts] (run-command opts {}))
   ([raw-opts {:keys [engine-run-fn] :or {engine-run-fn engine/run}}]
    (let [opts (merge-config-file raw-opts)
-         {:keys [seed patients emit reference-date utc-offset warm-up-seconds churn churn-profile]} opts]
+         {:keys [seed patients emit reference-date utc-offset warm-up-seconds churn churn-profile site-profile]} opts]
      (if (nil? seed)
        (result/error :missing-required-opt
                      {:message "--seed is required (determinism is a feature, not a default)"
@@ -9399,7 +9926,180 @@ docs/problem-statement.md / AGENTS.md).
                                                 :invocation {:verb "run" :opts opts}})
                      :summary {:patients (or patients 1)
                                :events (count ground-truth)}}
-              (= "hl7" emit) (assoc :messages (emit-hl7/emit ground-truth reference-date utc-offset facility providers))))))))))
+              (= "hl7" emit) (assoc :messages (emit-hl7/emit ground-truth reference-date utc-offset facility providers site-profile))))))))))
+
+========== END FILE ==========
+
+========== FILE: ./src/ehr_testing_sim/site_profile.clj ==========
+(ns ehr-testing-sim.site-profile
+  "Site profiles (docs/site-profiles.md): the 'simulate MY hospital'
+  config layer. A site profile changes HOW a fact is said at emit time
+  (MSH dialect, code-table overrides, Z-segment content) -- never WHAT
+  happened (ADR-0002; docs/site-profiles.md's own applied-at-the-
+  emitter argument: all three bind at ehr-testing-sim.emit-hl7's render
+  call sites, never inside decide/evolve or the ground-truth log).
+
+  Every key is optional; the default profile is the ABSENT profile
+  (nil) -- ehr-testing-sim.emit-hl7 renders identically whether no
+  profile arg is passed, an explicit nil is passed, or {} is passed.
+  That three-way agreement is this milestone's own determinism anchor,
+  property-tested in emit-hl7-test alongside the stronger two-profile
+  invariance property (Task 4): ground truth never depends on which
+  site profile, if any, is in effect, because :site-profile is not a
+  member of ehr-testing-sim.engine/config-keys at all -- structurally
+  incapable of reaching `engine/run`, not merely undertested.
+
+  :naming :surge-format is the one documented exception to 'binds at
+  emit time only'. Surge bed ids are baked into ground truth at DECIDE
+  time (ehr-testing-sim.facility/surge-slot-ids, a decision that
+  pre-dates this namespace -- docs/operational-models.md) -- so unlike
+  the other three components, a site profile's naming override
+  (`apply-naming`, below) is a FACILITY-CONFIG TRANSFORM a caller
+  applies to `:facility` BEFORE ehr-testing-sim.engine/run, not
+  something ehr-testing-sim.emit-hl7 ever reads. Calling it a
+  'config-level compatibility shim' (docs/site-profiles.md,
+  .agents/plans/roadmap.md) is exactly this distinction: config-level,
+  not emit-time -- it is never auto-wired into `run`, so a caller who
+  doesn't apply it sees the exact facility they always would."
+  (:require [malli.core :as m]))
+
+;; --- MSH dialect -----------------------------------------------------------
+
+(def MshDialect
+  [:map
+   [:version {:optional true} :string]
+   [:sending-app {:optional true} :string]
+   [:sending-facility {:optional true} :string]
+   [:receiving-app {:optional true} :string]
+   [:receiving-facility {:optional true} :string]])
+
+(def default-msh
+  "Today's hard-coded MSH values (ehr-testing-sim.emit-hl7, pre-site-
+  profiles) -- what an absent/empty profile's MSH dialect renders,
+  byte-identical to always (SimHospital issue #17's own citation,
+  .agents/plans/roadmap.md, is why :version in particular is now a
+  configured field rather than a hard-coded emitter constant)."
+  {:version "2.3"
+   :sending-app "EHR-TESTING-SIM"
+   :sending-facility "SIM"
+   :receiving-app ""
+   :receiving-facility ""})
+
+(defn effective-msh
+  "`default-msh` overridden field-by-field by `site-profile`'s :msh --
+  a nil profile, an empty profile, or a profile with no :msh key all
+  render `default-msh` exactly (merge over nil's own :msh is nil,
+  `(merge m nil)` is `m`)."
+  [site-profile]
+  (merge default-msh (:msh site-profile)))
+
+;; --- Code-table overrides (docs/site-profiles.md's rendering-time
+;; substitution: the underlying state value never changes, only which
+;; code string an emitter writes for it does) --------------------------
+
+(def CodeTableEntry
+  [:map [:code :string] [:coding-system {:optional true} :string]])
+
+(def CodeTable
+  [:map-of :keyword CodeTableEntry])
+
+(def CodeTables
+  [:map
+   [:patient-class {:optional true} CodeTable]
+   [:discharge-disposition {:optional true} CodeTable]])
+
+(def standard-patient-class-codes
+  "HL7v2 Table 0004 (patient class), today's hard-coded value. This
+  project only ever produces :inpatient (docs/patient-state-model.md's
+  :class field is set unconditionally at admission, never :outpatient/
+  :emergency/etc.), so \"I\" is the only entry this milestone's own
+  rendering ever exercises -- the rest of the table is named here so a
+  future site profile has somewhere documented to override against
+  once other classes are produced."
+  {:inpatient {:code "I"} :outpatient {:code "O"} :emergency {:code "E"}
+   :preadmit {:code "P"} :recurring {:code "R"} :obstetrics {:code "B"}})
+
+(def standard-discharge-disposition-codes
+  "HL7v2 Table 0112 (discharge disposition). This project doesn't yet
+  track a differentiated disposition outcome (docs/clinical-
+  realities.md's post-mortem entry names codes 20/40-42 for a future
+  milestone) -- every discharge today is the one standard case, \"01\"
+  (discharged to home/self care)."
+  {:discharged-to-home {:code "01"}})
+
+(defn code-for
+  "Renders `state-value` (a keyword) as the ER7 field's component vector
+  -- [code] or [code coding-system] -- from `site-profile`'s own
+  override table (keyed under `table-key`, one of :patient-class /
+  :discharge-disposition) when present, `standard-table`'s matching
+  entry otherwise. This IS the code-table-overrides law made code: the
+  underlying state value never changes, only which code string renders
+  for it, per whichever site profile (if any) is in effect."
+  [site-profile table-key standard-table state-value]
+  (let [override (get-in site-profile [:code-tables table-key state-value])
+        {:keys [code coding-system]} (or override (get standard-table state-value))]
+    (if coding-system [code coding-system] [code])))
+
+;; --- Naming: a facility-config transform, NOT an emit-time dialect --
+;; see this namespace's own docstring for why :naming is the one
+;; documented exception ------------------------------------------------
+
+(def Naming
+  [:map [:surge-format {:optional true} :string]])
+
+(defn apply-naming
+  "Overrides every ward's :surge-format with `site-profile`'s :naming
+  :surge-format, when present -- the profile wins over each ward's own
+  facility-level value (docs/site-profiles.md's documented precedence:
+  facility-level surge-format is still honored when the profile carries
+  no :naming key at all). Absent :naming (or an absent profile
+  entirely) is the identity function on `facility` -- a caller who
+  doesn't opt into this transform sees the exact same facility they
+  always would. A caller applies this BEFORE
+  ehr-testing-sim.engine/run, if at all: never automatically wired into
+  `run` itself (this is a config-authoring convenience, not a stage the
+  engine or emitter knows exists), and never inside decide/evolve."
+  [site-profile facility]
+  (if-let [fmt (get-in site-profile [:naming :surge-format])]
+    (update facility :wards (fn [wards] (mapv #(assoc % :surge-format fmt) wards)))
+    facility))
+
+;; --- Z-segment templates (Task 3: the seam) -------------------------------
+
+(def ZSegmentName
+  "Z-prefixed, three characters total -- the standards-blessed shape of
+  a site-invented segment id (docs/site-profiles.md: \"ZPI\", \"ZDS\",
+  whatever a given site invented)."
+  [:re #"^Z[A-Z0-9]{2}$"])
+
+(def ZFieldBinding
+  "One field of a Z-segment template: `:path` (a vector of keywords,
+  looked up via get-in against a per-render context assembled by
+  ehr-testing-sim.emit-hl7 -- state/persona/event paths, e.g. [:persona
+  :payer :type] or [:location :ward]) or `:literal` (a fixed string
+  fallback). `:path` wins when both are present. An unbound path (nil
+  at any step, or missing entirely) renders an EMPTY field, never
+  throws -- docs/site-profiles.md Task 3's own requirement."
+  [:map
+   [:path {:optional true} [:vector :keyword]]
+   [:literal {:optional true} :string]])
+
+(def ZSegmentTemplate
+  [:map
+   [:segment ZSegmentName]
+   [:trigger [:set :keyword]]
+   [:fields [:vector ZFieldBinding]]])
+
+(def SiteProfile
+  [:map
+   [:name {:optional true} :string]
+   [:msh {:optional true} MshDialect]
+   [:code-tables {:optional true} CodeTables]
+   [:naming {:optional true} Naming]
+   [:z-segments {:optional true} [:vector ZSegmentTemplate]]])
+
+(defn valid-profile? [profile] (m/validate SiteProfile profile))
+(defn explain-profile [profile] (m/explain SiteProfile profile))
 
 ========== END FILE ==========
 
@@ -10278,6 +10978,7 @@ docs/problem-statement.md / AGENTS.md).
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.emit-hl7 :as emit-hl7]
             [ehr-testing-sim.persona :as persona]
+            [ehr-testing-sim.site-profile :as site-profile]
             [com.nervestaple.hl7-parser.parser :as parser]
             [com.nervestaple.hl7-parser.message :as message])
   (:import [java.time LocalDate LocalDateTime]
@@ -10783,6 +11484,200 @@ docs/problem-statement.md / AGENTS.md).
           expected (.plusSeconds (.atStartOfDay (LocalDate/parse ref-date)) seconds)]
       (and (= expected parsed)
            (= "+0000" offset-part)))))
+
+;; --- Milestone site-profiles, Task 1: the default-profile identity -------
+;; docs/site-profiles.md's own determinism anchor: no profile arg at all,
+;; an explicit nil, and an explicit {} must all render IDENTICALLY -- and,
+;; since nothing in emit-hl7 consumed a site-profile before this milestone,
+;; identically to today's own pre-milestone output too (the 5-arg arity
+;; below is untouched).
+
+(defspec default-profile-is-the-absent-profile 100
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 8)]
+    (let [{:keys [ground-truth facility providers]} (engine/run {:seed seed :patients patients})
+          five-arg (emit-hl7/emit ground-truth ref-date utc-offset facility providers)
+          nil-profile (emit-hl7/emit ground-truth ref-date utc-offset facility providers nil)
+          empty-profile (emit-hl7/emit ground-truth ref-date utc-offset facility providers {})]
+      (= five-arg nil-profile empty-profile))))
+
+;; --- Milestone site-profiles, Task 2: MSH dialect + code-table overrides -
+
+(def ^:private aldric-profile
+  "A deliberately different-looking profile -- distinct MSH dialect
+  fields and an overridden patient-class code -- exercised throughout
+  this milestone's own tests."
+  {:name "St. Aldric's Memorial"
+   :msh {:version "2.5.1" :sending-app "ALDRIC-EHR" :sending-facility "ALDRIC"
+         :receiving-app "DOWNSTREAM" :receiving-facility "DOWNSTREAM-FAC"}
+   :code-tables {:patient-class {:inpatient {:code "IN" :coding-system "99ALDRIC"}}
+                 :discharge-disposition {:discharged-to-home {:code "HOME" :coding-system "99ALDRIC"}}}})
+
+(deftest msh-dialect-renders-the-profiles-version-and-app-facility-fields
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers aldric-profile)
+        parsed (parser/parse (first messages))]
+    (testing "MSH-12: version id"
+      (is (= "2.5.1" (message/get-field-first-value parsed "MSH" 12))))
+    (testing "MSH-3/4: sending app/facility"
+      (is (= "ALDRIC-EHR" (message/get-field-first-value parsed "MSH" 3)))
+      (is (= "ALDRIC" (message/get-field-first-value parsed "MSH" 4))))
+    (testing "MSH-5/6: receiving app/facility"
+      (is (= "DOWNSTREAM" (message/get-field-first-value parsed "MSH" 5)))
+      (is (= "DOWNSTREAM-FAC" (message/get-field-first-value parsed "MSH" 6))))))
+
+(deftest absent-profile-renders-todays-hardcoded-msh-values
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        parsed (parser/parse (first (emit-hl7/emit ground-truth ref-date utc-offset facility providers)))]
+    (is (= "2.3" (message/get-field-first-value parsed "MSH" 12)))
+    (is (= "EHR-TESTING-SIM" (message/get-field-first-value parsed "MSH" 3)))
+    (is (= "SIM" (message/get-field-first-value parsed "MSH" 4)))))
+
+(deftest pv1-2-patient-class-renders-through-the-profiles-code-table
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        default-parsed (parser/parse (first (emit-hl7/emit ground-truth ref-date utc-offset facility providers)))
+        aldric-parsed (parser/parse (first (emit-hl7/emit ground-truth ref-date utc-offset facility providers aldric-profile)))]
+    (testing "no profile: today's hard-coded \"I\""
+      (is (= "I" (message/get-field-first-value default-parsed "PV1" 2))))
+    (testing "overridden: site code + coding-system suffix"
+      (is (= "IN^99ALDRIC" (message/get-field-first-value aldric-parsed "PV1" 2))))))
+
+(deftest pv1-36-discharge-disposition-renders-only-on-discharge-through-the-profiles-code-table
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        admission-msg (first (emit-hl7/emit ground-truth ref-date utc-offset facility providers))
+        discharge-msg (first (filter #(re-find #"\^A03" %) (emit-hl7/emit ground-truth ref-date utc-offset facility providers)))
+        aldric-discharge-msg (first (filter #(re-find #"\^A03" %)
+                                            (emit-hl7/emit ground-truth ref-date utc-offset facility providers aldric-profile)))]
+    (testing "non-discharge messages carry no disposition"
+      (is (= "" (or (message/get-field-first-value (parser/parse admission-msg) "PV1" 36) ""))))
+    (testing "discharge, no profile: today's standard default"
+      (is (= "01" (message/get-field-first-value (parser/parse discharge-msg) "PV1" 36))))
+    (testing "discharge, overridden profile"
+      (is (= "HOME^99ALDRIC" (message/get-field-first-value (parser/parse aldric-discharge-msg) "PV1" 36))))))
+
+;; --- Milestone site-profiles, Task 3: Z-segment templates -- THE SEAM -----
+
+(def ^:private zpi-profile
+  "A profile carrying a ZPI payer Z-segment, triggered on :admission,
+  bound to persona/payer state paths plus a literal fallback field."
+  (assoc aldric-profile
+         :z-segments [{:segment "ZPI" :trigger #{:admission}
+                       :fields [{:path [:persona :payer :id]}
+                                {:path [:persona :payer :type]}
+                                {:path [:persona :payer :nonexistent-key]}
+                                {:literal "ALDRIC-PAYER-V1"}]}]))
+
+(deftest z-segment-renders-after-standard-segments-on-its-trigger-event
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        admission (first (filter #(= :admission (:event %)) ground-truth))
+        patient-id (:patient-id (first (:participants admission)))
+        {:keys [persona]} (find-registered ground-truth patient-id)
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers zpi-profile)
+        parsed (parser/parse (first messages))]
+    (testing "standard segments still present, in order, ahead of the Z-segment
+              (IN1 too -- this is an admission message)"
+      (is (= ["MSH" "EVN" "PID" "PV1" "IN1" "ZPI"] (mapv (comp name :id) (:segments parsed)))))
+    (testing "ZPI-1/ZPI-2: bound to persona/payer state paths"
+      (is (= (get-in persona [:payer :id]) (message/get-field-first-value parsed "ZPI" 1)))
+      (is (= (name (get-in persona [:payer :type])) (message/get-field-first-value parsed "ZPI" 2))))
+    (testing "ZPI-3: an unbound path renders empty, never throws"
+      (is (= "" (or (message/get-field-first-value parsed "ZPI" 3) ""))))
+    (testing "ZPI-4: literal fallback"
+      (is (= "ALDRIC-PAYER-V1" (message/get-field-first-value parsed "ZPI" 4))))))
+
+(deftest z-segment-only-renders-on-its-declared-trigger
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers zpi-profile)
+        discharge-msg (first (filter #(re-find #"\^A03" %) messages))]
+    (is (empty? (message/get-segments (parser/parse discharge-msg) "ZPI")))))
+
+(deftest no-site-profile-renders-no-z-segments
+  (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+        messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers)]
+    (is (every? #(empty? (message/get-segments (parser/parse %) "ZPI")) messages))))
+
+;; --- Milestone site-profiles, Task 4: the invariance property ------------
+;; docs/site-profiles.md's own thesis: two site profiles over one seed
+;; produce the SAME ground truth in two accents. The strong half (ground
+;; truth) is checked structurally, above (run-test's own
+;; not-an-engine-input assertion) and trivially here (both emit calls
+;; below consume the exact same `ground-truth` value -- there is no second
+;; ground truth to diverge). The weak half (messages) needs the masking
+;; function: the precise, documented enumeration of every field a site
+;; profile is allowed to touch.
+
+(defn- mask-msh-fields
+  "Blanks MSH-3/4/5/6/12 (sending/receiving app+facility, version id) --
+  the declared MSH dialect surface. MSH-1 is the field-separator
+  character itself (not a token `str/split` produces); MSH-2 (encoding
+  characters) is index 1 after the split, so MSH-3/4/5/6/12 land at
+  indices 2/3/4/5/11."
+  [msh-line]
+  (let [fields (str/split msh-line #"\|" -1)]
+    (str/join "|" (map-indexed (fn [i f] (if (#{2 3 4 5 11} i) "" f)) fields))))
+
+(defn- mask-pv1-fields
+  "Blanks PV1-2/PV1-36 -- the two declared code-table-override fields.
+  PV1's segment id occupies split-index 0, so field N lands at index N."
+  [pv1-line]
+  (let [fields (str/split pv1-line #"\|" -1)]
+    (str/join "|" (map-indexed (fn [i f] (if (#{2 36} i) "" f)) fields))))
+
+(defn mask-dialect-surfaces
+  "Masks every declared site-profile dialect surface (docs/site-
+  profiles.md Task 4) in one rendered ER7 message: MSH-3/4/5/6/12,
+  PV1-2/PV1-36, and strips Z-segment lines entirely (a Z-segment's
+  CONTENT, not merely a field within it, is site-specific -- its bare
+  presence following a trigger is still exercised by the Z-segment
+  tests above, not by this property). Two profiles' renderings of the
+  SAME ground-truth event must be equal after this masking -- the
+  invariance property's own precise statement of what a dialect may
+  touch, and nothing more."
+  [message]
+  (->> (str/split message #"\r\n|\r|\n")
+       (remove #(re-find #"^Z" %))
+       (map (fn [line]
+              (cond
+                (str/starts-with? line "MSH") (mask-msh-fields line)
+                (str/starts-with? line "PV1") (mask-pv1-fields line)
+                :else line)))
+       (str/join "\r")))
+
+(def ^:private gaudy-profile
+  "The deliberately different-looking second profile Task 4 asks for:
+  a different HL7 version (2.5.1), a renamed sending facility, custom
+  patient-class/disposition codes, and a ZPI payer Z-segment -- exactly
+  `zpi-profile` above, reused here under the name this property's own
+  intent names it by."
+  zpi-profile)
+
+(deftest site-profile-never-reaches-the-engine
+  (testing "the invariance property's OWN strong half, stated structurally
+            (docs/site-profiles.md): :site-profile is not a member of
+            ehr-testing-sim.engine/config-keys, so it is structurally
+            incapable of perturbing ground-truth -- not merely untested"
+    (is (not (contains? (set engine/config-keys) :site-profile)))))
+
+(defspec invariance-messages-agree-after-masking-dialect-surfaces 100
+  (prop/for-all [seed gen/large-integer
+                 patients (gen/choose 1 6)]
+    (let [{:keys [ground-truth facility providers]} (engine/run {:seed seed :patients patients})
+          default-messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers nil)
+          gaudy-messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers gaudy-profile)]
+      (and (= (count default-messages) (count gaudy-messages))
+           (= (map mask-dialect-surfaces default-messages)
+              (map mask-dialect-surfaces gaudy-messages))))))
+
+(deftest parser-round-trips-messages-bearing-an-unknown-z-segment
+  (testing "docs/site-profiles.md Task 3: the parser must still parse
+            messages bearing unknown Z-segments -- asserted directly,
+            not merely assumed; a failure here would be a documented
+            parser finding (notes/facts-register.md), not a silent gap"
+    (let [{:keys [ground-truth facility providers]} (engine/run {:seed 42 :patients 1})
+          messages (emit-hl7/emit ground-truth ref-date utc-offset facility providers zpi-profile)
+          zpi-msg (first messages)]
+      (is (some? (parser/parse zpi-msg)))
+      (is (= 1 (count (message/get-segments (parser/parse zpi-msg) "ZPI")))))))
 
 ========== END FILE ==========
 
@@ -12036,7 +12931,8 @@ docs/problem-statement.md / AGENTS.md).
   ones already known to work, using the injectable `:engine-run-fn`
   seam (same -fn convention as `ehr-testing-sim.cli/dispatch-action`)
   so no real simulation ever has to run against sentinel data."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [ehr-testing-sim.engine :as engine]
             [ehr-testing-sim.run :as run]
             [ehr-testing-sim.result :as result]))
@@ -12117,6 +13013,113 @@ docs/problem-statement.md / AGENTS.md).
         (is (= ::from-opts-patients (:patients @captured))
             "an explicit opt wins over the same key in the config file")
         (finally (.delete tmp))))))
+
+;; --- Milestone site-profiles: :site-profile is emit-only, never an
+;; engine/run input (docs/site-profiles.md's own binds-at-emit-time-only
+;; law) -- passthrough proven end to end via :emit "hl7", not via the
+;; engine-run-fn seam above, since :site-profile never reaches engine/run
+;; at all.
+
+(deftest run-command-threads-site-profile-into-emitted-messages
+  (testing "a :site-profile reaches ehr-testing-sim.emit-hl7/emit (its own
+            MSH dialect renders) without being a member of
+            ehr-testing-sim.engine/config-keys"
+    (is (not (contains? (set engine/config-keys) :site-profile)))
+    (let [r (run/run-command {:seed 42 :patients 1 :emit "hl7"
+                              :site-profile {:msh {:sending-app "ALDRIC-EHR"}}})
+          message (first (:messages (:payload r)))]
+      (is (result/ok? r))
+      (is (str/includes? message "ALDRIC-EHR")))))
+
+(deftest run-command-config-file-passthrough-carries-site-profile
+  (testing ":site-profile is a data-heavy key with no CLI flag of its own --
+            the same :config passthrough vehicle :pathway/:order-profiles use"
+    (let [tmp (java.io.File/createTempFile "sim-config" ".edn")
+          _ (spit tmp (pr-str {:site-profile {:msh {:sending-app "FROM-FILE"}}}))]
+      (try
+        (let [r (run/run-command {:seed 1 :patients 1 :emit "hl7" :config (.getPath tmp)})]
+          (is (str/includes? (first (:messages (:payload r))) "FROM-FILE")))
+        (finally (.delete tmp))))))
+
+========== END FILE ==========
+
+========== FILE: ./test/ehr_testing_sim/site_profile_test.clj ==========
+(ns ehr-testing-sim.site-profile-test
+  "docs/site-profiles.md: the site-profile schema (Task 1), MSH dialect
+  and code-table override helpers (Task 2). Written before
+  ehr-testing-sim.site-profile exists (ADR-0004 test-first)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [ehr-testing-sim.config :as config]
+            [ehr-testing-sim.site-profile :as site-profile]))
+
+;; --- Task 1: schema, all keys optional, absent profile is legal ----------
+
+(deftest absent-profile-is-a-valid-profile
+  (testing "the default profile IS the absent profile (docs/site-profiles.md)
+            -- nil and {} both validate, every key is optional"
+    (is (site-profile/valid-profile? {}))))
+
+(deftest a-fully-populated-profile-validates
+  (let [profile {:name "St. Aldric's Memorial"
+                 :msh {:version "2.5.1" :sending-app "ALDRIC-EHR" :sending-facility "ALDRIC"
+                       :receiving-app "DOWNSTREAM" :receiving-facility "DOWNSTREAM-FAC"}
+                 :code-tables {:patient-class {:inpatient {:code "IN" :coding-system "99ALDRIC"}}
+                               :discharge-disposition {:discharged-to-home {:code "HOME"}}}
+                 :naming {:surge-format "%s-OVERFLOW-%d"}
+                 :z-segments [{:segment "ZPI" :trigger #{:admission}
+                               :fields [{:path [:persona :payer :type]}
+                                        {:literal "V1"}]}]}]
+    (is (site-profile/valid-profile? profile))))
+
+(deftest malformed-profile-fails-validation
+  (testing "a Z-segment name that isn't Z-prefixed is rejected"
+    (is (not (site-profile/valid-profile?
+              {:z-segments [{:segment "XPI" :trigger #{:admission} :fields []}]})))))
+
+;; --- Task 2: MSH dialect ---------------------------------------------------
+
+(deftest effective-msh-defaults-match-todays-hardcoded-values
+  (testing "absent profile / nil / {} all render today's hard-coded MSH
+            values -- the default-profile identity anchor, at the MSH layer"
+    (is (= site-profile/default-msh (site-profile/effective-msh nil)))
+    (is (= site-profile/default-msh (site-profile/effective-msh {})))))
+
+(deftest effective-msh-overrides-field-by-field
+  (let [profile {:msh {:version "2.5.1" :sending-app "ALDRIC-EHR"}}]
+    (is (= (assoc site-profile/default-msh :version "2.5.1" :sending-app "ALDRIC-EHR")
+           (site-profile/effective-msh profile)))))
+
+;; --- Task 2: code-table overrides ------------------------------------------
+
+(deftest code-for-falls-back-to-standard-when-no-override
+  (is (= ["I"] (site-profile/code-for nil :patient-class
+                                      site-profile/standard-patient-class-codes :inpatient)))
+  (is (= ["I"] (site-profile/code-for {} :patient-class
+                                      site-profile/standard-patient-class-codes :inpatient))))
+
+(deftest code-for-uses-the-profiles-override-when-present
+  (let [profile {:code-tables {:patient-class {:inpatient {:code "IN" :coding-system "99ALDRIC"}}}}]
+    (is (= ["IN" "99ALDRIC"]
+           (site-profile/code-for profile :patient-class
+                                  site-profile/standard-patient-class-codes :inpatient)))))
+
+(deftest code-for-discharge-disposition-standard-default
+  (is (= ["01"] (site-profile/code-for nil :discharge-disposition
+                                      site-profile/standard-discharge-disposition-codes
+                                      :discharged-to-home))))
+
+;; --- Task 2: :naming :surge-format facility-config transform --------------
+
+(deftest apply-naming-is-identity-when-no-naming-key
+  (is (= config/default-facility (site-profile/apply-naming nil config/default-facility)))
+  (is (= config/default-facility (site-profile/apply-naming {} config/default-facility))))
+
+(deftest apply-naming-overrides-every-wards-surge-format-when-present
+  (let [profile {:naming {:surge-format "%s-OVERFLOW-%d"}}
+        result (site-profile/apply-naming profile config/default-facility)]
+    (is (every? #(= "%s-OVERFLOW-%d" (:surge-format %)) (:wards result)))
+    (testing "profile wins over the ward's own facility-level surge-format"
+      (is (not= config/default-facility result)))))
 
 ========== END FILE ==========
 
